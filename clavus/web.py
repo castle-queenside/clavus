@@ -40,19 +40,13 @@ HTML_DIR = HERE / "web"
 HTML_DIR.mkdir(exist_ok=True)
 
 _HTML_CACHE: dict[str, str] = {}
-_ACTIVE_PROJECT: tuple[BlobStore, ClavusProject] | None = None
 
 
 def _get_project() -> tuple[BlobStore, ClavusProject]:
-    """Get or reload the active clavus project."""
-    global _ACTIVE_PROJECT
+    """Get the active clavus project."""
     try:
-        store, proj = get_store_and_project()
-        _ACTIVE_PROJECT = (store, proj)
-        return store, proj
+        return get_store_and_project()
     except SystemExit:
-        if _ACTIVE_PROJECT:
-            return _ACTIVE_PROJECT
         raise HTTPException(status_code=404, detail="No clavus project found. Run 'clavus init' first.")
 
 
@@ -77,7 +71,7 @@ async def ping():
 
 
 @app.get("/api/project")
-async def get_project():
+def get_project_sync():
     """Get current project info + snapshot history."""
     try:
         store, proj = _get_project()
