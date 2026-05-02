@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clavus"
+version = "0.1.0"
+description = "Git for Ableton — snapshot, diff, sync, and comment on Live projects"
+requires-python = ">=3.10"
+
+[project.scripts]
+clavus = "clavus.cli:main"
+
