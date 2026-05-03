@@ -201,6 +201,7 @@ class BlobStore:
         """Set the active tracked project in the index."""
         index = json.loads(self.index_path.read_text()) if self.index_path.exists() else {}
         index[project.name] = asdict(project)
+        index["_last_project"] = project.name
         self._write_json(self.index_path, index)
 
     def get_index(self, name: str) -> Optional[ClavusProject]:
@@ -218,7 +219,8 @@ class BlobStore:
         if not self.index_path.exists():
             return []
         index = json.loads(self.index_path.read_text())
-        return [ClavusProject(**data) for data in index.values()]
+        return [ClavusProject(**data) for data in index.values()
+                if isinstance(data, dict)]
 
     @staticmethod
     def _write_json(path: Path, data: dict) -> None:

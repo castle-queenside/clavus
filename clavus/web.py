@@ -197,6 +197,95 @@ async def list_projects():
     ]}
 
 
+@app.post("/api/projects/init")
+async def init_project(path: str = Query(..., description="Path to .als file or directory containing one")):
+    """Register a new project from a file path.
+
+    Accepts a path to a .als file or a directory containing one.
+    Parses the file, creates an initial snapshot, and registers it.
+    Returns the project info on success, or an error message.
+    """
+    target = Path(path).resolve()
+    if not target.exists():
+        return JSONResponse({"error": f"Path not found: {target}"}, status_code=400)
+
+    als_path = find_als_file(target)
+    if als_path is None:
+        return JSONResponse(
+            {"error": f"No .als file found at {target}. Provide a path to a .als file or a directory containing one."},
+            status_code=400,
+        )
+
+    store = BlobStore()
+    store.init()
+
+    existing = store.get_index(als_path.stem)
+    if existing:
+        return JSONResponse({
+            "info": f"Project '{als_path.stem}' already tracked",
+            "project": {"name": existing.name, "root_als": existing.root_als, "head": existing.head[:8] if existing.head else None},
+        })
+
+    project = _parse_with_timeout(als_path, timeout=5.0)
+    if project is None:
+        return JSONResponse({"error": f"Parse timed out for {als_path}"}, status_code=500)
+
+    clavus_proj = ClavusProject(
+        name=als_path.stem,
+        root_als=str(als_path),
+        created_at=time.time(),
+    )
+
+    snap = store.save_snapshot(project, "Initial import", parent=None)
+    clavus_proj.head = snap.hash
+    store.update_ref("HEAD", snap.hash)
+    store.update_ref(f"refs/tags/initial", snap.hash)
+    store.set_index(clavus_proj)
+
+    return {
+        "success": True,
+        "project": {
+            "name": clavus_proj.name,
+            "root_als": str(als_path),
+            "tracks": project.track_count,
+            "bpm": project.bpm,
+            "head": snap.short_hash(),
+        },
+    }
+
+
+@app.get("/api/projects/browse")
+async def browse_directory(dir: str = Query("", description="Directory to browse")):
+    """Browse a directory for .als files and subdirectories.
+
+    Returns both the directory listing (subdirectories + .als files)
+    and any already-registered projects.
+    """
+    target = Path(dir).resolve() if dir else Path.home()
+    if not target.exists():
+        return JSONResponse({"error": f"Path not found: {target}"}, status_code=400)
+    if not target.is_dir():
+        return JSONResponse({"error": f"Not a directory: {target}"}, status_code=400)
+
+    try:
+        subdirs = sorted([str(p.name) for p in target.iterdir() if p.is_dir() and not p.name.startswith(".")])
+    except PermissionError:
+        subdirs = []
+
+    als_files = sorted([str(p.name) for p in target.glob("*.als")])
+
+    store = BlobStore()
+    registered = store.list_projects()
+    already = {p.root_als for p in registered}
+
+    return {
+        "current_dir": str(target),
+        "parent_dir": str(target.parent) if str(target) != "/" else None,
+        "subdirs": subdirs,
+        "als_files": [{"name": f, "registered": str(target / f) in already} for f in als_files],
+    }
+
+
 @app.get("/api/project")
 def get_project_sync(name: str = Query("", description="Project name to load")):
     """Get current project info + snapshot history."""
@@ -328,6 +417,30 @@ async def create_cue(cue: CueCreate):
     }
 
 
+@app.post("/api/projects/inject")
+async def inject_cues(name: str = Query("", description="Project name to inject cues into")):
+    """Inject unresolved cues as Ableton markers into the project's .als file."""
+    try:
+        store, proj = _get_project(name)
+    except HTTPException:
+        return JSONResponse({"error": "No clavus project found"}, status_code=404)
+
+    als_path = Path(proj.root_als)
+    if not als_path.exists():
+        return JSONResponse({"error": f".als file not found: {als_path}"}, status_code=404)
+
+    cues_store = CueStore(proj.name, store=store)
+    unresolved = cues_store.list_cues(CueFilter(status="pending"))
+    if not unresolved:
+        return {"injected": 0, "message": "No unresolved cues to inject"}
+
+    from clavus.cues import render_cues_as_markers
+    result = render_cues_as_markers(unresolved, "", inject_into_als=str(als_path))
+    if not result:
+        return {"injected": 0, "message": "All cues already present in the project"}
+    return {"injected": len(unresolved), "message": f"Injected {len(unresolved)} cue(s) as markers"}
+
+
 @app.post("/api/cues/{cue_id}/reply")
 async def reply_to_cue(cue_id: str, reply: CueReply,
                        name: str = Query("", description="Project name")):
@@ -412,7 +525,8 @@ async def sync_pull(name: str = Query(..., description="Project name")):
         "id": c.id, "position": c.position, "text": c.text,
         "author": c.author, "status": c.status, "timestamp": c.timestamp,
         "track_name": c.track_name,
-        "replies": [{"author": r.author, "text": r.text, "timestamp": r.timestamp}
+        "replies": [{"id": r.id, "author": r.author, "text": r.text,
+                     "timestamp": r.timestamp, "snapshot_hash": r.snapshot_hash}
                    for r in (c.replies or [])],
     } for c in all_cues]
 

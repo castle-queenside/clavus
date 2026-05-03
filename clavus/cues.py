@@ -311,17 +311,65 @@ def render_cues_as_markers(cues: list[Cue], output_path: str,
             print("❌ Could not find <LiveSet> in the .als file.")
             return ""
         
-        # Find or create CuePoints
-        cue_points = live_set.find("CuePoints")
-        if cue_points is None:
-            cue_points = ET.SubElement(live_set, "CuePoints")
+        live_set_parent = root if root.tag != "Ableton" else root
         
-        # Collect existing marker names to avoid duplicates
-        existing_names = set()
-        for existing in cue_points.findall("CuePoint"):
-            name_elem = existing.find("Name")
-            if name_elem is not None and name_elem.get("Value"):
-                existing_names.add(name_elem.get("Value"))
+        # Detect Live 12+ (uses Locators) vs older (uses CuePoints)
+        locators_container = live_set_parent.find(".//Locators")
+        cue_wrapper = live_set_parent.find(".//CuePointsListWrapper")
+        
+        # Determine which format to use
+        is_live_12 = locators_container is not None
+        
+        if is_live_12:
+            # Live 12+ format: write into <Locators><Locators> as <Locator> elements
+            # Find the inner Locators container (Locators > Locators)
+            inner_locators = None
+            for child in locators_container:
+                if child.tag == "Locators":
+                    inner_locators = child
+                    break
+            if inner_locators is None:
+                inner_locators = ET.SubElement(locators_container, "Locators")
+            
+            target_container = inner_locators
+            elem_tag = "Locator"
+            existing_names = set()
+            next_id = 0
+            for existing in target_container.findall(elem_tag):
+                existing_id = int(existing.get("Id", "0"))
+                if existing_id >= next_id:
+                    next_id = existing_id + 1
+                name_elem = existing.find("Name")
+                if name_elem is not None and name_elem.get("Value"):
+                    existing_names.add(name_elem.get("Value"))
+        else:
+            # Live 10/11 format: use CuePoints
+            cue_points = live_set_parent.find(".//CuePoints")
+            if cue_points is None:
+                cue_points = ET.SubElement(live_set, "CuePoints")
+            
+            target_container = cue_points
+            elem_tag = "CuePoint"
+            existing_names = set()
+            for existing in target_container.findall(elem_tag):
+                name_elem = existing.find("Name")
+                if name_elem is not None and name_elem.get("Value"):
+                    existing_names.add(name_elem.get("Value"))
+        
+        # Helper: convert bar.beat.sixteenth (e.g. "16.1.1") to quarter-note beats
+        def position_to_beats(pos: str) -> int:
+            parts = pos.replace("@", "").strip().split(".")
+            if len(parts) >= 2:
+                try:
+                    bar = int(parts[0])
+                    beat = int(parts[1])
+                    return (bar - 1) * 4 + (beat - 1)
+                except ValueError:
+                    pass
+            try:
+                return int(float(pos.replace("@", "").strip()))
+            except ValueError:
+                return 0
         
         # Insert new markers
         inserted = 0
@@ -330,9 +378,23 @@ def render_cues_as_markers(cues: list[Cue], output_path: str,
             if marker_name in existing_names:
                 continue  # skip duplicates
             
-            cue_elem = ET.SubElement(cue_points, "CuePoint")
-            ET.SubElement(cue_elem, "Time").set("Value", cue.position)
-            ET.SubElement(cue_elem, "Name").set("Value", marker_name)
+            if is_live_12:
+                # Live 12: Locator with Id, Time (quarter-note beats), Name, Annotation, IsSongStart
+                locator = ET.SubElement(target_container, "Locator")
+                locator.set("Id", str(next_id))
+                next_id += 1
+                ET.SubElement(locator, "LomId").set("Value", "0")
+                beats = position_to_beats(cue.position)
+                ET.SubElement(locator, "Time").set("Value", str(beats))
+                ET.SubElement(locator, "Name").set("Value", marker_name)
+                ET.SubElement(locator, "Annotation").set("Value", "")
+                ET.SubElement(locator, "IsSongStart").set("Value", "false")
+            else:
+                # Live 10/11: CuePoint with Time (bar.beat notation) and Name
+                cue_elem = ET.SubElement(target_container, elem_tag)
+                ET.SubElement(cue_elem, "Time").set("Value", cue.position)
+                ET.SubElement(cue_elem, "Name").set("Value", marker_name)
+            
             existing_names.add(marker_name)
             inserted += 1
         
@@ -340,10 +402,31 @@ def render_cues_as_markers(cues: list[Cue], output_path: str,
             print("📍 All cues already present in the project — nothing to inject.")
             return ""
         
-        # Write back the modified .als
-        xml_str = ET.tostring(root, encoding="unicode")
-        with gzip.open(als_path, "wb") as f:
-            f.write(xml_str.encode("utf-8"))
+        # Write back the modified .als preserving original XML declaration format.
+        # Ableton is picky about the XML header format (double quotes vs single quotes).
+        # Extract the original declaration from the raw bytes to preserve it exactly.
+        original_bytes = raw
+        xml_start = original_bytes.find(b"<?xml")
+        decl_end = original_bytes.find(b"?>", xml_start) + 2 if xml_start >= 0 else 0
+        
+        # Serialize modified tree without xml_declaration (we'll use the original)
+        tree_xml = ET.tostring(root, encoding="unicode")
+        
+        if decl_end > 0:
+            # Keep original declaration, discard the tree's auto-generated one (if any)
+            original_header = original_bytes[:decl_end].decode("utf-8", errors="replace")
+            # If tree_xml has its own declaration, skip it
+            if tree_xml.startswith("<?xml"):
+                body_start = tree_xml.find("?>") + 2
+                tree_body = tree_xml[body_start:]
+            else:
+                tree_body = tree_xml
+            new_content = original_header + tree_body
+        else:
+            new_content = tree_xml
+        
+        with gzip.open(als_path, "wt", encoding="utf-8") as f:
+            f.write(new_content)
         
         print(f"📍 Injected {inserted} cue(s) as markers into {als_path.name}")
         if backup.exists():

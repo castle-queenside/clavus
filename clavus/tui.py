@@ -1,20 +1,17 @@
 """
-Clavus TUI — Textual-based terminal UI for cue management, sync, and snapshots.
+Clavus TUI — Minimal, bulletproof terminal UI for cue management.
 
-Layout uses grid rows (no dock: top/bottom to avoid Textual v8 rendering bug).
-┌─────────────────────────────────────────────┐
-│  header: project + status + time             │  row 0
-├─────────────────────────────────────────────┤
-│  ruler: timeline with cue position markers   │  row 1
-├──────────────────────┬──────────────────────┤
-│  cues list           │  snapshot history     │  row 2 (split)
-├─────────────────────────────────────────────┤
-│  footer: keys + stats                       │  row 3
-└─────────────────────────────────────────────┘
+Layout:
+  row 0: header
+  row 1: cues list (left) | history (right)
+  row 2: footer / inline input bar
 """
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import json
 import os
 import time
 from dataclasses import dataclass, field
@@ -22,41 +19,32 @@ from typing import Optional
 
 import httpx
 
-from textual import work, on
+from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container
+from textual.containers import Container, Horizontal
 from textual.widgets import Static, Input, ListView, ListItem, Label
 from textual.message import Message
 from textual.css.query import NoMatches
+from textual.worker import WorkerState
 
 # ─── Color Palette (CRUX dark) ──────────────────────────────────────────────
 
 C = {
-    "bg": "#0b1418",
-    "surface": "#0f1a20",
-    "surface2": "#162a34",
-    "border": "#1a3040",
-    "accent": "#1a9e9e",
-    "fg": "#b8c8c8",
-    "dim": "#6a8a8a",
-    "muted": "#3a5a65",
-    "yellow": "#d4a030",
-    "green": "#44cc44",
-    "red": "#ff4444",
-}
-
-# ─── Themes ──────────────────────────────────────────────────────────────────
-
-THEMES = {
-    "clavus": {
-        "bg": "#0b1418", "surface": "#0f1a20", "surface2": "#162a34",
-        "border": "#1a3040", "accent": "#1a9e9e", "fg": "#b8c8c8",
-        "dim": "#6a8a8a", "muted": "#3a5a65", "hover": "#0f1a20",
-    }
+    "bg": "#0b1418", "surface": "#0f1a20", "surface2": "#162a34",
+    "border": "#1a3040", "accent": "#1a9e9e", "fg": "#b8c8c8",
+    "dim": "#6a8a8a", "muted": "#3a5a65",
+    "yellow": "#d4a030", "green": "#44cc44", "red": "#ff4444",
 }
 
 # ─── Data Models ────────────────────────────────────────────────────────────
+
+@dataclass
+class Reply:
+    id: str = ""
+    author: str = ""
+    text: str = ""
+    timestamp: float = 0.0
 
 @dataclass
 class Cue:
@@ -64,43 +52,31 @@ class Cue:
     position: str = "1.1.1"
     text: str = ""
     author: str = ""
-    status: str = "pending"   # pending, resolved, skipped
+    status: str = "pending"
     timestamp: float = 0.0
     track_name: str = ""
     snapshot_hash: str = ""
-    replies: list[dict] = field(default_factory=list)
+    replies: list = field(default_factory=list)
 
 @dataclass
-class SnapshotInfo:
+class Snap:
     hash: str = ""
     message: str = ""
     timestamp: float = 0.0
     track_count: int = 0
-    bpm: float = 0.0
 
     @classmethod
-    def from_dict(cls, d: dict) -> "SnapshotInfo":
-        """Create from API response, ignoring extra keys."""
+    def from_dict(cls, d: dict) -> "Snap":
         return cls(
-            hash=d.get("hash", d.get("full_hash", "")),
+            hash=d.get("hash", d.get("full_hash", ""))[:8],
             message=d.get("message", ""),
             timestamp=d.get("timestamp", 0.0),
             track_count=d.get("track_count", 0),
-            bpm=d.get("bpm", 0.0),
         )
-
-@dataclass
-class Bundle:
-    project: object = None
-    cues: list[Cue] = field(default_factory=list)
-    snapshots: list[SnapshotInfo] = field(default_factory=list)
-
 
 # ─── ClavusClient ───────────────────────────────────────────────────────────
 
 class ClavusClient:
-    """HTTP client for the Clavus sync server."""
-
     def __init__(self, base_url: str = "http://localhost:7890"):
         self.base_url = base_url.rstrip("/")
         self.client = httpx.AsyncClient(timeout=10.0)
@@ -122,556 +98,701 @@ class ClavusClient:
             pass
         return None
 
-    async def pull(self, project: str) -> Bundle:
-        bundle = Bundle(cues=[], snapshots=[])
+    async def get_project(self) -> Optional[dict]:
         try:
-            resp = await self.client.get(
-                f"{self.base_url}/api/sync/pull",
+            r = await self.client.get(f"{self.base_url}/api/project")
+            if r.status_code == 200:
+                return r.json()
+        except Exception:
+            pass
+        return None
+
+    async def list_projects(self) -> list[dict]:
+        try:
+            r = await self.client.get(f"{self.base_url}/api/projects")
+            if r.status_code == 200:
+                return r.json().get("projects", [])
+        except Exception:
+            pass
+        return []
+
+    async def init_project(self, path: str) -> Optional[dict]:
+        """Register a project from a path. Returns project info or error dict."""
+        try:
+            r = await self.client.post(
+                f"{self.base_url}/api/projects/init",
+                params={"path": path},
+                timeout=15,
+            )
+            return r.json()
+        except Exception:
+            return None
+
+    async def browse_dir(self, directory: str = "") -> Optional[dict]:
+        """Browse a directory for .als files. Empty string = home dir."""
+        try:
+            params = {"dir": directory} if directory else {}
+            r = await self.client.get(
+                f"{self.base_url}/api/projects/browse",
+                params=params,
+                timeout=10,
+            )
+            if r.status_code == 200:
+                return r.json()
+        except Exception:
+            pass
+        return None
+
+    async def inject_cues(self, project: str) -> Optional[dict]:
+        """Inject unresolved cues as Ableton markers into the .als file."""
+        try:
+            r = await self.client.post(
+                f"{self.base_url}/api/projects/inject",
                 params={"name": project},
                 timeout=15,
             )
-            if resp.status_code == 200:
-                data = resp.json()
-                bundle.project = data.get("project")
-                bundle.cues = [Cue(**c) for c in data.get("cues", [])]
-                bundle.snapshots = [SnapshotInfo.from_dict(s) for s in data.get("snapshots", [])]
+            if r.status_code == 200:
+                return r.json()
         except Exception:
             pass
-        return bundle
+        return None
+
+    async def pull(self, project: str) -> tuple[list[Cue], list[Snap]]:
+        try:
+            r = await self.client.get(
+                f"{self.base_url}/api/sync/pull",
+                params={"name": project}, timeout=15,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                cues = []
+                fields = {"id","position","text","author","status",
+                          "timestamp","track_name","snapshot_hash"}
+                for c in data.get("cues", []):
+                    cue = Cue(**{k: v for k, v in c.items() if k in fields})
+                    cue.replies = [
+                        Reply(id=rr.get("id",""), author=rr.get("author",""),
+                              text=rr.get("text",""), timestamp=rr.get("timestamp",0))
+                        for rr in c.get("replies", [])
+                    ]
+                    cues.append(cue)
+                snaps = [Snap.from_dict(s) for s in data.get("snapshots", [])]
+                return cues, snaps
+        except Exception:
+            pass
+        return [], []
 
     async def push(self, project: str, cues: list[Cue]) -> bool:
         try:
+            def to_dict(r):
+                if isinstance(r, dict):
+                    return r
+                return {"id": r.id, "author": r.author, "text": r.text,
+                        "timestamp": r.timestamp}
             payload = [{"id": c.id, "position": c.position, "text": c.text,
                         "author": c.author, "status": c.status,
-                        "timestamp": c.timestamp, "track_name": c.track_name,
-                        "snapshot_hash": c.snapshot_hash, "replies": c.replies}
+                        "timestamp": c.timestamp,
+                        "replies": [to_dict(r) for r in c.replies]}
                        for c in cues]
-            resp = await self.client.post(
+            r = await self.client.post(
                 f"{self.base_url}/api/sync/push",
-                params={"name": project},
-                json=payload,
-                timeout=15,
+                params={"name": project}, json={"cues": payload}, timeout=15,
             )
-            return resp.status_code == 200
+            return r.status_code == 200
         except Exception:
             return False
 
     async def close(self):
         await self.client.aclose()
+        if self._ws:
+            try:
+                await self._ws.close()
+            except Exception:
+                pass
+            self._ws = None
 
+    # ─── WebSocket listener ────────────────────────────────────────────
 
-# ─── App CSS ────────────────────────────────────────────────────────────────
+    _ws = None  # type: ignore
 
-CSS = f"""
-ClavusApp {{
-    background: {C['bg']};
-}}
+    async def _ensure_connected(self) -> bool:
+        """Ensure the HTTP client is ready. Return True if ok."""
+        try:
+            await self.client.get(f"{self.base_url}/api/ping")
+            return True
+        except Exception:
+            return False
 
-Screen {{
-    background: {C['bg']};
-}}
-
-/* ── Main Layout ── */
-#app-grid {{
-    layout: grid;
-    grid-size: 1 5;
-    grid-rows: auto auto 1fr auto auto;
-    height: 100%;
-}}
-
-/* ── Header Row ── */
-#header-row {{
-    height: 2;
-    background: {C['surface']};
-    color: {C['fg']};
-    padding: 0 1;
-    dock: none;
-}}
-#header-title {{
-    color: {C['accent']};
-    text-style: bold;
-    padding: 0 1;
-}}
-#header-status {{
-    color: {C['dim']};
-    padding: 0 1;
-}}
-
-/* ── Ruler Row ── */
-#ruler-row {{
-    height: 1;
-    background: {C['bg']};
-    padding: 0 1;
-}}
-#ruler {{
-    color: {C['muted']};
-    overflow-x: auto;
-}}
-
-/* ── Content Row ── */
-#content-row {{
-    height: 1fr;
-    layout: grid;
-    grid-size: 2 1;
-    grid-columns: 3fr 2fr;
-}}
-
-#cues-panel {{
-    background: {C['bg']};
-    border-right: solid {C['border']};
-    height: 100%;
-}}
-#cues-panel > Static.label {{
-    color: {C['dim']};
-    text-style: bold;
-    padding: 0 1;
-    height: 1;
-}}
-#cues-list {{
-    height: 1fr;
-}}
-#cues-list ListView {{
-    height: 100%;
-    border: none;
-    background: transparent;
-}}
-#cues-list ListItem {{
-    background: transparent;
-    padding: 0 1;
-    height: 3;
-}}
-#cues-list ListItem:hover {{
-    background: {C['surface']};
-}}
-ListView:focus .list-item--focused {{
-    background: {C['surface2']};
-}}
-
-#history-panel {{
-    background: {C['bg']};
-    height: 100%;
-}}
-#history-panel > Static.label {{
-    color: {C['dim']};
-    text-style: bold;
-    padding: 0 1;
-    height: 1;
-}}
-#history-list {{
-    height: 1fr;
-}}
-
-/* ── Footer Row ── */
-#footer-row {{
-    height: 1;
-    background: {C['surface']};
-    color: {C['dim']};
-    padding: 0 1;
-    dock: none;
-}}
-#footer-keys {{
-    color: {C['accent']};
-}}
-#footer-stats {{
-    color: {C['muted']};
-    text-align: right;
-}}
-
-/* ── Scrollbars (CRUX dark) ── */
-Scrollbar {{
-    scrollbar-color: rgba(26,158,158,0.5) {C['border']};
-    scrollbar-color-hover: rgba(26,158,158,0.8) {C['surface2']};
-    scrollbar-color-active: rgba(26,158,158,0.9) {C['surface2']};
-    scrollbar-size-vertical: 2;
-    scrollbar-size-horizontal: 2;
-}}
-Scrollbar > .scrollbar--bar {{
-    background: {C['border']};
-}}
-Scrollbar > .scrollbar--grabber {{
-    background: rgba(26,158,158,0.4);
-}}
-Scrollbar > .scrollbar--grabber:hover {{
-    background: rgba(26,158,158,0.8);
-}}
-Scrollbar.vertical > .scrollbar--grabber {{
-    min-height: 3;
-}}
-
-/* ── Inline Reply Bar ── */
-#reply-bar {{
-    height: 3;
-    background: {C['surface2']};
-    border-top: solid {C['accent']};
-    padding: 0 1;
-    visibility: hidden;
-}}
-#reply-bar.visible {{
-    visibility: visible;
-}}
-#reply-bar Input {{
-    width: 100%;
-    background: {C['bg']};
-    border: solid {C['accent']};
-    color: {C['fg']};
-    padding: 0 1;
-}}
-"""
-
-
-# ─── Messages ───────────────────────────────────────────────────────────────
-
-class StatusMessage(Message):
-    def __init__(self, text: str):
-        self.text = text
-        super().__init__()
-
+    async def ws_listen(self, project: str) -> None:
+        """Connect WebSocket and listen for real-time cue events.
+        Yields (event_type, data) tuples. Returns on disconnect/error."""
+        ws_url = self.base_url.replace("http://", "ws://").replace("https://", "wss://")
+        ws_url = f"{ws_url}/ws?project={project}"
+        try:
+            import websockets
+            async with websockets.client.connect(ws_url) as ws:
+                self._ws = ws
+                while True:
+                    msg = await ws.recv()
+                    try:
+                        import json
+                        data = json.loads(msg)
+                        yield data.get("event", ""), data.get("data", {})
+                    except json.JSONDecodeError:
+                        continue
+        except Exception:
+            pass
+        finally:
+            self._ws = None
 
 # ─── App ────────────────────────────────────────────────────────────────────
 
 class ClavusApp(App):
-    CSS = CSS
+    CSS = f"""
+    ClavusApp {{ background: {C['bg']}; }}
+    Screen {{ background: {C['bg']}; }}
+
+    #main {{ layout: grid; grid-size: 1 3; grid-rows: auto 1fr auto; height: 100%; }}
+
+    #header {{ height: 2; background: {C['surface']}; padding: 0 1; }}
+    #header-title {{ color: {C['accent']}; text-style: bold; }}
+    #header-status {{ color: {C['dim']}; }}
+
+    #content {{ layout: grid; grid-size: 2 1; grid-columns: 3fr 1fr; height: 100%; }}
+
+    #cues-list {{ height: 100%; min-height: 5; border-right: solid {C['border']}; }}
+    #cues-list ListView {{ height: 100%; border: none; background: transparent; }}
+    #cues-list ListItem {{ background: transparent; padding: 0 2; min-height: 1; max-height: 8; }}
+    #cues-list ListItem:hover {{ background: {C['surface']}; }}
+    #clv:focus .list-item--focused {{ background: {C['surface2']}; text-style: bold; }}
+
+    #history {{ height: 100%; background: {C['surface']}; padding: 0 1; }}
+    #history-list {{ height: 100%; }}
+    #history-list ListView {{ height: 100%; border: none; background: transparent; }}
+    #history-list ListItem {{ background: transparent; padding: 0 1; min-height: 1; }}
+
+    #footer {{ height: 1; background: {C['surface']}; padding: 0 1; }}
+    #footer.input-mode {{ height: 3; padding: 0; }}
+    #footer-keys {{ color: {C['accent']}; }}
+    #footer-stats {{ color: {C['muted']}; text-align: right; }}
+    #footer-input {{ display: none; width: 100%; height: 3; background: {C['bg']}; border: solid {C['accent']}; color: {C['fg']}; padding: 0 1; }}
+    #footer.input-mode #footer-input {{ display: block; }}
+    #footer.input-mode #footer-keys {{ display: none; }}
+    #footer.input-mode #footer-stats {{ display: none; }}
+
+    Scrollbar {{ scrollbar-color: rgba(26,158,158,0.5) {C['border']}; }}
+    Scrollbar > .scrollbar--grabber {{ background: rgba(26,158,158,0.4); }}
+    Scrollbar.vertical > .scrollbar--grabber {{ min-height: 3; }}
+    """
+
     BINDINGS = [
         Binding("q", "quit", "Quit"),
-        Binding("r", "reply_cue", "Reply"),
-        Binding("e", "edit_cue", "Edit"),
-        Binding("c", "new_cue", "New cue"),
-        Binding("s", "skip_cue", "Skip"),
-        Binding("R", "resolve_cue", "Resolve"),
+        Binding("r", "reply", "Reply"),
+        Binding("e", "edit", "Edit"),
+        Binding("c", "cue_new", "New cue"),
+        Binding("s", "skip", "Skip"),
+        Binding("R", "resolve", "Resolve"),
         Binding("p", "pull", "Pull"),
         Binding("P", "push", "Push"),
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
-        Binding("up", "cursor_up", "Up", show=False),
         Binding("down", "cursor_down", "Down", show=False),
-        Binding("tab", "focus_next", "Next pane", show=False),
-        Binding("shift+tab", "focus_previous", "Prev pane", show=False),
-        Binding("escape", "hide_reply_bar", "Close", show=False),
+        Binding("up", "cursor_up", "Up", show=False),
+        Binding(":", "command", ":cmd", show=False),
+        Binding("escape", "cancel_input", "Cancel input", show=False),
     ]
 
-    def __init__(self, connect_url: str = ""):
+    def __init__(self, url: str = ""):
         super().__init__()
-        self._connect_url = connect_url or os.environ.get("CLAVUS_SERVER", "http://localhost:7890")
-        self.client = ClavusClient(self._connect_url)
-        self.project_name: str = ""
-        self.connection_status: str = "connecting..."
+        self.api = ClavusClient(url or os.environ.get("CLAVUS_SERVER", "http://localhost:7890"))
+        self.project: str = ""
+        self.connected: bool = False
+        self.ws_connected: bool = False
         self.cues: list[Cue] = []
-        self.snapshots: list[SnapshotInfo] = []
-        self.selected_cue_idx: int = 0
-        self.pushed_ids: set[str] = set()
-        self._error_count: int = 0
-        self._input_mode: str = ""  # "reply", "new_cue", "edit", "command"
-        self._reply_cue_id: str = ""
+        self.snaps: list[Snap] = []
+        self.idx: int = 0
+        self._input_mode: str = ""  # "reply", "edit", "cue", "cue_pos", ""
+        self._pending_cue_text: str = ""
+        self._config_path = os.path.expanduser("~/.config/clavus/config.json")
+        self.author = self._load_config()
 
-    def get_css_variables(self) -> dict[str, str]:
-        base = super().get_css_variables()
-        base.update(THEMES["clavus"])
-        return base
+    def _load_config(self) -> str:
+        try:
+            with open(self._config_path) as f:
+                cfg = json.load(f)
+                return cfg.get("author", "you")
+        except (FileNotFoundError, json.JSONDecodeError):
+            return "you"
 
-    def compose(self) -> ComposeResult:
-        with Container(id="app-grid"):
-            # Header
-            yield Container(
-                Static("~▲~ clavus", id="header-title"),
+    def _save_config(self):
+        os.makedirs(os.path.dirname(self._config_path), exist_ok=True)
+        with open(self._config_path, "w") as f:
+            json.dump({"author": self.author}, f)
+
+    def compose(self):
+        with Container(id="main"):
+            yield Horizontal(
+                Static("~▼~ clavus", id="header-title"),
                 Static("connecting...", id="header-status"),
-                id="header-row",
+                id="header",
             )
-            # Ruler
             yield Container(
-                Static("", id="ruler"),
-                id="ruler-row",
-            )
-            # Content
-            yield Container(
-                Container(
-                    Static(" Cues", classes="label"),
-                    Container(id="cues-list",),
-                    id="cues-panel",
-                ),
+                Container(ListView(id="clv"), id="cues-list"),
                 Container(
                     Static(" History", classes="label"),
-                    Container(id="history-list",),
-                    id="history-panel",
+                    Container(ListView(id="hlv"), id="history-list"),
+                    id="history",
                 ),
-                id="content-row",
+                id="content",
             )
-            # Footer
-            yield Container(
+            yield Horizontal(
                 Static("", id="footer-keys"),
+                Input(placeholder="type here...", id="footer-input"),
                 Static("", id="footer-stats"),
-                id="footer-row",
-            )
-            # Reply bar (inline, hidden by default)
-            yield Container(
-                Input(id="reply-input", placeholder="type your reply..."),
-                id="reply-bar",
+                id="footer",
             )
 
-    def on_mount(self) -> None:
+    def on_mount(self):
         self._update_header()
         self._update_footer()
         self._connect()
 
+    # ─── Input bar ──────────────────────────────────────────────────────
+
+    def _show_input(self, mode: str, prompt: str, prefill: str = ""):
+        self._input_mode = mode
+        footer = self.query_one("#footer")
+        inp = self.query_one("#footer-input", Input)
+        inp.value = prefill
+        self.query_one("#footer-keys", Static).update(f"[{C['accent']}]{prompt}[/]")
+        footer.add_class("input-mode")
+        inp.focus()
+
+    def _hide_input(self):
+        self._input_mode = ""
+        self.query_one("#footer").remove_class("input-mode")
+        self._update_footer()
+
+    def on_input_submitted(self, event: Input.Submitted):
+        event.stop()
+        text = event.value.strip()
+        mode = self._input_mode
+        self._hide_input()
+        if not text:
+            return
+        if mode == "reply":
+            self._do_reply(text)
+        elif mode == "edit":
+            self._do_edit(text)
+        elif mode == "cue":
+            self._pending_cue_text = text
+            self._input_mode = "cue_pos"
+            footer = self.query_one("#footer")
+            inp = self.query_one("#footer-input", Input)
+            inp.value = "1.1.1"
+            self.query_one("#footer-keys", Static).update(
+                f"[{C['accent']}]position @ (or blank for 1.1.1):[/]")
+            footer.add_class("input-mode")
+            inp.focus()
+            return
+        elif mode == "cue_pos":
+            self._do_new_cue(self._pending_cue_text, text)
+        elif mode == "switch_proj":
+            self._run_switch_project(text)
+        elif mode == "browse":
+            self._run_browse(text)
+        elif mode == "command":
+            self._do_command(text)
+
+    def action_cancel_input(self):
+        if self._input_mode:
+            self._hide_input()
+            self._focus_cues()
+
+    # ─── Command mode ──────────────────────────────────────────────────
+
+    def action_command(self):
+        self._show_input("command", ":", prefill="")
+
+    def _do_command(self, text: str):
+        parts = text.strip().split(maxsplit=1)
+        if not parts:
+            return
+        cmd = parts[0].lower()
+        arg = parts[1] if len(parts) > 1 else ""
+
+        if cmd == "project" and arg:
+            self._run_switch_project(arg)
+        elif cmd == "projects":
+            self._run_list_projects()
+        elif cmd == "name" and arg:
+            self.author = arg
+            self._save_config()
+            self._status(f"name set to: {self.author}")
+        elif cmd == "init" and arg:
+            self._run_init_project(arg)
+        elif cmd == "browse":
+            self._show_input("browse", "browse: ", prefill=arg or "~")
+        elif cmd == "inject":
+            self._run_inject()
+        elif cmd in ("help", "h", "?"):
+            self._status("commands: project <name>, projects, init <path>, browse [dir], name <you>, inject, help")
+        else:
+            self._status(f"unknown: {cmd}")
+
+    @work(exclusive=False)
+    async def _run_switch_project(self, name: str):
+        self._status(f"switching to {name}...")
+        info = await self.api.get_project_info(name)
+        if not info:
+            self._status(f"project '{name}' not found")
+            return
+        self.project = name
+        self.connected = True
+        self._update_header()
+        await self._do_pull()
+        # Restart WebSocket listener for new project
+        self._start_ws_listener(name)
+        self._status(f"switched to {name}")
+
+    @work(exclusive=False)
+    async def _run_list_projects(self):
+        projects = await self.api.list_projects()
+        if not projects:
+            self._status("no projects found")
+            return
+        names = ", ".join(p["name"] for p in projects)
+        self._status(f"projects: {names}")
+        self._show_input("switch_proj", "project name to switch:")
+
+    @work(exclusive=False)
+    async def _run_init_project(self, path: str):
+        """Import a project from a filesystem path."""
+        self._status(f"importing {path}...")
+        result = await self.api.init_project(path)
+        if result is None:
+            self._status(f"failed to reach server for init")
+            return
+        if "error" in result:
+            self._status(f"error: {result['error']}")
+            return
+        proj = result.get("project", {})
+        if "info" in result:
+            # Already registered — just switch to it
+            self._status(f"already tracked, switching to {proj.get('name', '?')}")
+        else:
+            self._status(f"imported: {proj.get('name', '?')} ({proj.get('tracks', '?')} tracks @ {proj.get('bpm', '?')}bpm)")
+        # Auto-switch to the new project
+        if proj.get("name"):
+            self.project = proj["name"]
+            self.connected = True
+            self._update_header()
+            await self._do_pull()
+
+    @work(exclusive=False)
+    async def _run_browse(self, directory: str):
+        """Browse a directory for .als files and navigate."""
+        # Normalize relative paths — single directory names navigate into subdir
+        if directory and "/" not in directory and directory not in ("..", ".", ""):
+            if hasattr(self, "_last_browse_dir") and self._last_browse_dir:
+                directory = os.path.join(self._last_browse_dir, directory)
+        self._last_browse_dir = directory
+        result = await self.api.browse_dir(directory)
+        if result is None:
+            self._status(f"failed to browse {directory}")
+            return
+        if "error" in result:
+            self._status(f"error: {result['error']}")
+            return
+        cur = result.get("current_dir", "?")
+        parent = result.get("parent_dir")
+        subdirs = result.get("subdirs", [])
+        als_files = result.get("als_files", [])
+        # Show results in status bar
+        registered = [f for f in als_files if f.get("registered")]
+        unregistered = [f for f in als_files if not f.get("registered")]
+        lines = [f"📁 {cur}"]
+        if subdirs:
+            lines.append(f"  dirs: {' '.join(subdirs[:8])}{'...' if len(subdirs)>8 else ''}")
+        if registered:
+            lines.append(f"  ✅ als: {' '.join(f['name'] for f in registered)}")
+        if unregistered:
+            lines.append(f"  🔵 als: {' '.join(f['name'] for f in unregistered)}")
+        self._status(" | ".join(lines))
+        # Offer subdir navigation or init
+        if unregistered:
+            hint = f" — :init {cur}/<name> to import"
+        else:
+            hint = ""
+        self._show_input("browse", "browse (enter subdir, .. up, or :init): ", prefill="")
+
+    @work(exclusive=False)
+    async def _run_inject(self):
+        """Inject cues as Ableton markers."""
+        if not self.project:
+            self._status("no project selected")
+            return
+        self._status("injecting cues into .als...")
+        result = await self.api.inject_cues(self.project)
+        if result is None:
+            self._status("failed to inject — server unreachable")
+            return
+        if "error" in result:
+            self._status(f"error: {result['error']}")
+            return
+        injected = result.get("injected", 0)
+        self._status(f"injected {injected} cue(s) as Ableton markers")
+        if injected > 0:
+            self._status(f"💾 save + reopen the .als in Ableton to see markers")
+
+    # ─── Cue operations ────────────────────────────────────────────────
+
+    def _do_reply(self, text: str):
+        cue = self._get_cue()
+        if not cue:
+            return
+        cue.replies.append(Reply(
+            id=hashlib.sha256(f"{time.time()}{text}".encode()).hexdigest()[:10],
+            author=self.author, text=text, timestamp=time.time(),
+        ))
+        self._render()
+        self._status("reply added")
+        self._save()
+
+    def _do_new_cue(self, text: str, pos: str = "1.1.1"):
+        if not text:
+            return
+        pos = pos.strip() or "1.1.1"
+        self.cues.append(Cue(
+            id=str(int(time.time() * 1000)),
+            position=pos, text=text, author=self.author,
+            status="pending", timestamp=time.time(),
+        ))
+        self.idx = len(self.cues) - 1
+        self._render()
+        self._status(f"cue added @ {pos}")
+        self._save()
+
+    def _do_edit(self, text: str):
+        cue = self._get_cue()
+        if not cue:
+            return
+        cue.text = text
+        self._render()
+        self._status("edited")
+        self._save()
+
+    def action_reply(self):
+        cue = self._get_cue()
+        if not cue:
+            self._status("select a cue first")
+            return
+        self._show_input("reply", f"Reply to @{cue.position}:")
+
+    def action_cue_new(self):
+        self._show_input("cue", "New cue text:")
+
+    def action_edit(self):
+        cue = self._get_cue()
+        if not cue:
+            self._status("select a cue first")
+            return
+        self._show_input("edit", "Edit:", prefill=cue.text)
+
+    def action_resolve(self):
+        cue = self._get_cue()
+        if not cue:
+            return
+        cue.status = "resolved" if cue.status == "pending" else "pending"
+        self._render()
+        self._status("resolved" if cue.status == "resolved" else "unresolved")
+        self._save()
+
+    def action_skip(self):
+        cue = self._get_cue()
+        if not cue:
+            return
+        cue.status = "skipped" if cue.status != "skipped" else "pending"
+        self._render()
+        self._status("skipped" if cue.status == "skipped" else "unskipped")
+        self._save()
+
+    @work(exclusive=True)
+    async def action_pull(self):
+        self._status("pulling...")
+        await self._do_pull()
+        self._status("pulled")
+
+    @work(exclusive=True)
+    async def action_push(self):
+        self._status("pushing...")
+        await self._do_push()
+
+    # ─── Persistence ────────────────────────────────────────────────────
+
+    def _save(self):
+        """Push changes to server in the background."""
+        self.post_message(SaveRequest())
+
+    @work(exclusive=False, group="save")
+    async def _do_save(self):
+        if not self.project:
+            return
+        ok = await self.api.push(self.project, self.cues)
+        if ok:
+            self._status("saved")
+        else:
+            self._status("save failed")
+
+    def on_save_request(self, event: SaveRequest):
+        self._do_save()
+
     # ─── Connection ─────────────────────────────────────────────────────
 
     @work(exclusive=True)
-    async def _connect(self) -> None:
-        """Connect to server and load initial data."""
-        ok = await self.client.ping()
-        if not ok:
-            self.connection_status = "offline"
-            self._update_header()
-            self._update_footer()
-            self.post_message(StatusMessage("server offline — start clavus serve"))
-            return
-
-        info = await self.client.get_project_info()
-        if info:
-            self.project_name = info.get("name", "unknown")
-            self.connection_status = "connected"
-        else:
-            self.project_name = ""
-            self.connection_status = "no project"
-
-        self._update_header()
-        self._update_footer()
-        await self._do_pull()
-
-    # ─── Pull / Push ────────────────────────────────────────────────────
-
-    async def _do_pull(self) -> None:
-        if not self.project_name:
-            return
-        bundle = await self.client.pull(self.project_name)
-        if bundle.cues:
-            self.cues = bundle.cues
-        self.snapshots = bundle.snapshots
-        self._update_header()
-        self._update_footer()
-        self.render_cues()
-        self.render_history()
-
-    async def _do_push(self) -> None:
-        if not self.project_name:
-            return
-        new = [c for c in self.cues if c.id not in self.pushed_ids]
-        if new:
-            ok = await self.client.push(self.project_name, new)
-            if ok:
-                self.pushed_ids.update(c.id for c in new)
-                self.post_message(StatusMessage(f"⬆ pushed {len(new)} cue(s)"))
+    async def _connect(self):
+        self._status("connecting...")
+        if await self.api.ping():
+            self._status("connected, loading project...")
+            info = await self.api.get_project()
+            if info:
+                self.project = info.get("name", "")
+                self.connected = True
+                self._status(f"project: {self.project}")
             else:
-                self.post_message(StatusMessage("❌ push failed"))
+                self.connected = False
+                self._status("no project — run clavus init")
+        else:
+            self.connected = False
+            self._status("server offline — start clavus serve")
 
-    @work(exclusive=True)
-    async def action_pull(self) -> None:
-        self.post_message(StatusMessage("pulling..."))
-        await self._do_pull()
-        self.post_message(StatusMessage("pulled"))
+        self._update_header()
+        self._update_footer()
+        if self.connected:
+            self._status("pulling...")
+            await self._do_pull()
+            self._status(f"loaded {len(self.cues)} cues")
+            self._start_ws_listener(self.project)
 
-    @work(exclusive=True)
-    async def action_push(self) -> None:
-        self.post_message(StatusMessage("pushing..."))
-        await self._do_push()
-        self.post_message(StatusMessage("done"))
-
-    # ─── Cue Operations ─────────────────────────────────────────────────
-
-    def action_new_cue(self) -> None:
-        self._show_input_bar("new_cue", "")
-
-    def action_edit_cue(self) -> None:
-        cue = self._get_selected_cue()
-        if not cue:
-            self.post_message(StatusMessage("select a cue with j/k first"))
+    @work(exclusive=False, group="ws")
+    async def _ws_listener(self):
+        """Background worker: listen for real-time cue events over WebSocket.
+        Auto-reconnects on disconnect with 3s backoff.
+        Uses self._ws_target_project to know which project to listen for,
+        so switching projects restarts the listener."""
+        target = getattr(self, "_ws_target_project", self.project)
+        if not target:
             return
-        self._reply_cue_id = cue.id
-        self._show_input_bar("edit", cue.text)
+        while True:
+            try:
+                self.ws_connected = True
+                self._update_header()
+                async for event, data in self.api.ws_listen(target):
+                    self._status(f"ws: {event}")
+                    if event == "cue_new":
+                        await self._do_pull()
+                    elif event in ("cue_reply", "cue_update"):
+                        await self._do_pull()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+            self.ws_connected = False
+            self._update_header()
+            self._status("ws disconnected, reconnecting in 3s...")
+            try:
+                await asyncio.sleep(3)
+            except asyncio.CancelledError:
+                raise
 
-    def _show_input_bar(self, mode: str, prefill: str = "") -> None:
-        """Show the inline input bar in a given mode."""
-        self._input_mode = mode
-        bar = self.query_one("#reply-bar", Container)
-        inp = bar.query_one("#reply-input", Input)
-        inp.value = prefill
-        bar.add_class("visible")
-        inp.focus()
+    def _start_ws_listener(self, project: str):
+        """Start WebSocket listener for a specific project.
+        Cancels any existing WS listener first."""
+        self._ws_target_project = project
+        # Cancel previous WS worker if running (workers are stored by name on the app)
+        try:
+            existing = self.get_worker("_ws_listener")
+            if existing and existing.state not in (WorkerState.SUCCESS, WorkerState.CANCELLED):
+                existing.cancel()
+        except Exception:
+            pass
+        self._ws_listener()
 
-    def action_reply_cue(self) -> None:
-        cue = self._get_selected_cue()
-        if not cue:
-            self.post_message(StatusMessage("select a cue with j/k first"))
+    async def _do_pull(self):
+        if not self.project:
             return
-        self._reply_cue_id = cue.id
-        self._show_input_bar("reply")
-        self.post_message(StatusMessage(f"💬 reply to @{cue.position}: type and press Enter"))
+        cues, snaps = await self.api.pull(self.project)
+        if cues:
+            self.cues = cues
+        self.snaps = snaps
+        self.idx = min(self.idx, len(self.cues) - 1) if self.cues else 0
+        self._update_header()
+        self._render()
+        # Restore scroll position after re-render
+        try:
+            lv = self.query_one("#clv", ListView)
+            if self.idx < len(lv.children):
+                lv.index = self.idx
+                target = lv.children[self.idx]
+                lv.scroll_to_widget(target, animate=False)
+        except (NoMatches, IndexError):
+            pass
 
-    def action_resolve_cue(self) -> None:
-        cue = self._get_selected_cue()
-        if cue:
-            cue.status = "resolved"
-            self.render_cues()
-            self.post_message(StatusMessage(f"resolved: {cue.text[:40]}"))
+    async def _do_push(self):
+        if not self.project:
+            return
+        ok = await self.api.push(self.project, self.cues)
+        self._status("pushed" if ok else "push failed")
 
-    def action_skip_cue(self) -> None:
-        cue = self._get_selected_cue()
-        if cue:
-            cue.status = "skipped"
-            self.render_cues()
-            self.post_message(StatusMessage(f"skipped: {cue.text[:40]}"))
-
-    def _get_selected_cue(self) -> Optional[Cue]:
-        idx = self.selected_cue_idx
-        if 0 <= idx < len(self.cues):
-            return self.cues[idx]
+    def _get_cue(self) -> Optional[Cue]:
+        if 0 <= self.idx < len(self.cues):
+            return self.cues[self.idx]
         return None
 
-    # ─── Callbacks ──────────────────────────────────────────────────────
+    # ─── Navigation ─────────────────────────────────────────────────────
 
-    def _handle_new_cue(self, text: str) -> None:
-        text = text.strip()
-        if not text:
-            return
-        pos = "1.1.1"
-        if "@" in text:
-            parts = text.split("@", 1)
-            text = parts[0].strip()
-            pos = parts[1].strip()
-        cue = Cue(
-            id=str(int(time.time() * 1000)),
-            position=pos,
-            text=text,
-            author="you",
-            status="pending",
-            timestamp=time.time(),
-        )
-        self.cues.append(cue)
-        self.selected_cue_idx = len(self.cues) - 1
-        self.render_cues()
-        self.post_message(StatusMessage(f"💬 cue added @ {pos}"))
-
-    def _handle_edit_cue(self, cue_id: str, text: str) -> None:
-        text = text.strip()
-        if not text:
-            return
-        for c in self.cues:
-            if c.id == cue_id or c.id.startswith(cue_id):
-                c.text = text
-                self.render_cues()
-                self.post_message(StatusMessage(f"✏️ cue updated"))
-                return
-        self.post_message(StatusMessage(f"❌ cue not found"))
-
-    def _handle_reply(self, cue_id: str, text: str) -> None:
-        text = text.strip()
-        if not text:
-            return
-        for c in self.cues:
-            if c.id == cue_id or c.id.startswith(cue_id):
-                c.replies.append({
-                    "author": "you",
-                    "text": text,
-                    "timestamp": time.time(),
-                })
-                self.render_cues()
-                self.post_message(StatusMessage(f"💬 reply added"))
-                return
-        self.post_message(StatusMessage(f"❌ cue not found"))
-
-    # ─── Command : (general command bar) ────────────────────────────────
-
-    def action_open_command(self) -> None:
-        self._show_input_bar("command", "")
-
-    def _handle_command(self, cmd: str) -> None:
-        cmd = cmd.strip()
-        if not cmd:
-            return
-
-        if cmd.startswith("cue "):
-            self._handle_new_cue(cmd[4:])
-        elif cmd.startswith("edit "):
-            parts = cmd.split(" ", 2)
-            if len(parts) >= 3:
-                self._handle_edit_cue(parts[1], parts[2])
-        elif cmd.startswith("reply "):
-            text = cmd[6:].strip()
-            cue = self._get_selected_cue()
-            if cue:
-                self._handle_reply(cue.id, text)
-            else:
-                self.post_message(StatusMessage("select a cue with j/k first"))
-        elif cmd in ("resolve", "R"):
-            self.action_resolve_cue()
-        elif cmd == "skip":
-            self.action_skip_cue()
-        elif cmd == "pull":
-            self.action_pull()
-        elif cmd == "push":
-            self.action_push()
-        elif cmd in ("help", "h"):
-            self._show_help()
-
-    def action_hide_reply_bar(self) -> None:
-        """Hide the inline reply bar if visible."""
+    def action_cursor_down(self):
         try:
-            bar = self.query_one("#reply-bar", Container)
-            if "visible" in bar.classes:
-                bar.remove_class("visible")
-                self._input_mode = ""
-                self._focus_cues()
+            self.query_one("#clv", ListView).action_cursor_down()
         except NoMatches:
             pass
 
-    @on(Input.Submitted, "#reply-input")
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Handle Enter in the inline input bar."""
-        text = event.value.strip()
-        if not text:
-            self.action_hide_reply_bar()
-            return
-        if self._input_mode == "reply":
-            self._handle_reply(self._reply_cue_id, text)
-        elif self._input_mode == "new_cue":
-            self._handle_new_cue(text)
-        elif self._input_mode == "edit":
-            self._handle_edit_cue(self._reply_cue_id, text)
-        elif self._input_mode == "command":
-            self._handle_command(text)
-        self.action_hide_reply_bar()
-
-    def action_close_command(self) -> None:
-        pass  # no-op
-
-    # ─── Rendering ──────────────────────────────────────────────────────
-
-    def _update_header(self) -> None:
+    def action_cursor_up(self):
         try:
-            title = self.query_one("#header-title", Static)
-            status = self.query_one("#header-status", Static)
-
-            conn = self.connection_status
-            conn_dot = "⬤" if conn == "connected" else "◌"
-            title_str = f"[bold {C['accent']}]~▲~ clavus[/]"
-            if self.project_name:
-                title_str += f"  [white]{self.project_name}[/]"
-
-            status_str = f"[{C['dim']}]{conn_dot} {conn}[/]  [dim]{len(self.cues)} cues[/]"
-            snap_count = len(self.snapshots)
-            if snap_count:
-                status_str += f"  [dim]{snap_count} snapshot{'s' if snap_count != 1 else ''}[/]"
-
-            title.update(title_str)
-            status.update(status_str)
+            self.query_one("#clv", ListView).action_cursor_up()
         except NoMatches:
             pass
 
-    def _update_footer(self) -> None:
-        try:
-            keys = self.query_one("#footer-keys", Static)
-            stats = self.query_one("#footer-stats", Static)
+    def on_list_view_highlighted(self, event: ListView.Highlighted):
+        if event.list_view.id == "clv":
+            self.idx = event.list_view.index
+            self._update_footer()
 
-            key_str = (
+    # ─── Status / Header / Footer ───────────────────────────────────────
+
+    def _status(self, msg: str):
+        try:
+            safe_msg = msg.replace("[", "\\[").replace("]", "\\]")
+            self.query_one("#footer-stats", Static).update(f"[{C['dim']}]{safe_msg}[/]")
+        except NoMatches:
+            pass
+
+    def _update_header(self):
+        try:
+            ws_dot = "⚡" if self.ws_connected else ""
+            dot = "⬤" if self.connected else "◌"
+            conn = "connected" if self.connected else "offline"
+            proj = f"  [white]{self.project}[/]" if self.project else ""
+            self.query_one("#header-title", Static).update(
+                f"[bold {C['accent']}]~▼~ clavus[/]{proj}")
+            self.query_one("#header-status", Static).update(
+                f"{ws_dot}[{C['dim']}]{dot} {conn}[/]  [dim]{len(self.cues)} cues[/]")
+        except NoMatches:
+            pass
+
+    def _update_footer(self):
+        try:
+            self.query_one("#footer-keys", Static).update(
                 f"[{C['accent']}]r[/] reply  "
                 f"[{C['accent']}]R[/] resolve  "
                 f"[{C['accent']}]e[/] edit  "
@@ -679,135 +800,89 @@ class ClavusApp(App):
                 f"[{C['accent']}]s[/] skip  "
                 f"[{C['accent']}]p[/] pull  "
                 f"[{C['accent']}]P[/] push  "
-                f"[{C['accent']}]q[/] quit"
+                f"[{C['accent']}]q[/] quit  "
+                f"[{C['accent']}]:[/] cmd"
             )
-            stats_str = f"[{C['muted']}]j/k navigate | {len(self.cues)} cues[/]"
-
-            keys.update(key_str)
-            stats.update(stats_str)
-        except NoMatches:
-            pass
-
-    def render_cues(self) -> None:
-        try:
-            container = self.query_one("#cues-list", Container)
-            lv = container.query(ListView).first() if container.query(ListView) else None
-            if not lv:
-                lv = ListView(id="cues-listview")
-                container.mount(lv)
-
-            lv.clear()
-            for i, cue in enumerate(self.cues):
-                color = C["yellow"] if cue.status == "pending" else (
-                    C["green"] if cue.status == "resolved" else C["muted"])
-                status_char = "●" if cue.status == "pending" else (
-                    "✓" if cue.status == "resolved" else "–")
-                reply_count = f" [{C['dim']}]{len(cue.replies)}r[/]" if cue.replies else ""
-                text = f"[{color}]{status_char}[/] [dim]@{cue.position}[/] "
-                text += f"[{C['fg']}]{cue.text[:55]}[/]"
-                text += f" [{C['muted']}]{cue.id[:8]}[/]{reply_count}"
-                if cue.author and cue.author != "you":
-                    text += f" [{C['dim']}]- {cue.author}[/]"
-                lv.append(ListItem(Label(text)))
-        except NoMatches:
-            pass
-
-    def render_history(self) -> None:
-        try:
-            container = self.query_one("#history-list", Container)
-            lv = container.query(ListView).first() if container.query(ListView) else None
-            if not lv:
-                lv = ListView(id="history-listview")
-                container.mount(lv)
-
-            lv.clear()
-            if not self.snapshots:
-                lv.append(ListItem(Label(f"[{C['dim']}]  no snapshots yet[/]")))
-                lv.append(ListItem(Label(f"  [{C['muted']}]clavus snapshot 'your message'[/]")))
-            else:
-                for snap in self.snapshots[:20]:
-                    time_str = time.strftime("%m/%d %H:%M", time.localtime(snap.timestamp)) if snap.timestamp else ""
-                    text = f"[{C['accent']}]{snap.hash[:8]}[/] [{C['dim']}]{time_str}[/]"
-                    if snap.message:
-                        text += f"  [{C['fg']}]{snap.message[:50]}[/]"
-                    if snap.track_count:
-                        text += f"  [{C['muted']}]{snap.track_count}trk[/]"
-                    lv.append(ListItem(Label(text)))
-        except NoMatches:
-            pass
-
-    def _focus_cues(self) -> None:
-        try:
-            container = self.query_one("#cues-list", Container)
-            lv = container.query(ListView).first()
-            if lv:
-                lv.focus()
-        except NoMatches:
-            pass
-
-    # ─── Navigation ─────────────────────────────────────────────────────
-
-    def action_focus_next(self) -> None:
-        try:
-            containers = [
-                self.query_one("#cues-list", Container),
-            ]
-            for c in containers:
-                lv = c.query(ListView).first()
-                if lv and lv.has_focus:
-                    # Move to history
-                    h = self.query_one("#history-list", Container)
-                    hl = h.query(ListView).first()
-                    if hl:
-                        hl.focus()
-                    return
-            # Focus cues
-            self._focus_cues()
-        except NoMatches:
-            pass
-
-    def action_cursor_down(self) -> None:
-        lv = self.focused
-        if lv and hasattr(lv, "action_cursor_down"):
-            lv.action_cursor_down()
-            # Track selection
-            if hasattr(lv, "index") and lv.index is not None:
-                if lv.id and "history" not in lv.id:
-                    self.selected_cue_idx = lv.index
-
-    def action_cursor_up(self) -> None:
-        lv = self.focused
-        if lv and hasattr(lv, "action_cursor_up"):
-            lv.action_cursor_up()
-            if hasattr(lv, "index") and lv.index is not None:
-                if lv.id and "history" not in lv.id:
-                    self.selected_cue_idx = lv.index
-
-    def action_focus_search(self) -> None:
-        self.action_open_command()  # opens : command screen
-
-    # ─── Messages ───────────────────────────────────────────────────────
-
-    def on_status_msg(self, msg: StatusMessage) -> None:
-        # Flash status in footer briefly
-        try:
             self.query_one("#footer-stats", Static).update(
-                f"[{C['dim']}]{msg.text}[/]"
-            )
+                f"[{C['muted']}]j/k navigate | {len(self.cues)} cues[/]")
         except NoMatches:
             pass
 
-    def _show_help(self) -> None:
-        self.post_message(StatusMessage(
-            "c=cue  r=reply  R=resolve  e=edit  s=skip  p=pull  P=push  j/k=navigate  q=quit"
-        ))
+    def _focus_cues(self):
+        try:
+            self.query_one("#clv", ListView).focus()
+        except NoMatches:
+            pass
+
+    # ─── Rendering ──────────────────────────────────────────────────────
+
+    def _render(self):
+        try:
+            self._render_cues()
+            self._render_history()
+            self._update_footer()
+        except Exception as e:
+            self._status(f"render error: {e}")
+
+    def _render_cues(self):
+        lv = self.query_one("#clv", ListView)
+        lv.clear()
+
+        if not self.cues:
+            lv.append(ListItem(Label(f"  [{C['dim']}]no cues yet  (c to create one)[/]")))
+            return
+
+        for i, c in enumerate(self.cues):
+            color = C["yellow"] if c.status == "pending" else (
+                C["green"] if c.status == "resolved" else C["muted"])
+            dot = "●" if c.status == "pending" else ("✓" if c.status == "resolved" else "–")
+            rc = f" [{C['dim']}]{len(c.replies)}r[/]" if c.replies else ""
+            safe_text = c.text[:60].replace("[", "\\[").replace("]", "\\]")
+            lines = [
+                f"  [{color}]{dot}[/] [dim]@{c.position}[/] "
+                f"[{C['fg']}]{safe_text}[/]"
+                f" [{C['muted']}]{c.id[:8]}[/]{rc}"
+            ]
+            if c.replies:
+                for j, r in enumerate(c.replies):
+                    tag = r.author or "anon"
+                    ts = time.strftime("%H:%M", time.localtime(r.timestamp)) if r.timestamp else ""
+                    conn = "╰─" if j == len(c.replies) - 1 else "├─"
+                    safe_reply = r.text[:55].replace("[", "\\[").replace("]", "\\]")
+                    lines.append(
+                        f"  [{C['dim']}]{conn} {tag} [{C['muted']}]{ts}[/]"
+                        f"  [{C['dim']}]{safe_reply}[/]"
+                    )
+            lv.append(ListItem(Label("\n".join(lines))))
+
+        if self.idx < len(lv.children):
+            lv.index = self.idx
+
+    def _render_history(self):
+        lv = self.query_one("#hlv", ListView)
+        lv.clear()
+        if not self.snaps:
+            lv.append(ListItem(Label(f"  [{C['dim']}]no snapshots yet[/]")))
+            return
+        for s in self.snaps[:10]:
+            ts = time.strftime("%m/%d %H:%M", time.localtime(s.timestamp)) if s.timestamp else ""
+            safe_msg = s.message[:50].replace("[", "\\[").replace("]", "\\]")
+            lv.append(ListItem(Label(
+                f"[{C['accent']}]{s.hash}[/] [{C['dim']}]{ts}[/]"
+                f"  [{C['fg']}]{safe_msg}[/]"
+            )))
+
+
+# ─── Messages ───────────────────────────────────────────────────────────────
+
+class SaveRequest(Message):
+    pass
 
 
 # ─── Entry Point ────────────────────────────────────────────────────────────
 
-def run_tui(connect_url: str = "") -> None:
-    app = ClavusApp(connect_url=connect_url)
-    app.run()
+def run_tui(url: str = "") -> None:
+    ClavusApp(url=url).run()
 
 
 if __name__ == "__main__":

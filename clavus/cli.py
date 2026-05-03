@@ -42,10 +42,7 @@ from clavus.watch import watch as cmd_watch_daemon
 from clavus.sync import (
     load_remotes, save_remotes, Remote, push_to_remote, pull_from_remote, SyncDaemon,
 )
-from clavus.git_integration import (
-    git_init, git_commit, git_branch, git_checkout, git_merge,
-    git_push, git_pull, git_log, is_git_repo,
-)
+
 
 # Optional web server
 try:
@@ -92,15 +89,6 @@ def cmd_init(args: argparse.Namespace) -> None:
 
     # Save to index
     store.set_index(clavus_proj)
-
-    # Also init git if not already a repo
-    git_result = git_init(als_path.parent)
-    if git_result == "git repo initialized":
-        # Initial git commit for the .als
-        git_commit(als_path, "Initial import")
-        print(f"   📦 Git: initialized + initial commit")
-    elif git_result == "already a git repo":
-        print(f"   📦 Git: already a repo")
 
     print(f"📁 Initialized Clavus project '{clavus_proj.name}'")
     print(f"   .als: {als_path}")
@@ -163,12 +151,6 @@ def cmd_snapshot(args: argparse.Namespace) -> None:
     else:
         print(f"📸 Snapshot: {snap.short_hash()} — '{snap.message}'")
         print(f"   {project.track_count} tracks @ {project.bpm}bpm (initial state)")
-
-    # Commit .als to git alongside the clavus snapshot
-    if is_git_repo(als_path.parent):
-        git_hash = git_commit(als_path, snap.message, author="clavus")
-        if git_hash and git_hash != "":
-            print(f"   📦 Git: {git_hash}")
 
     print(f"   📋 Run 'clavus log' to see history.")
 
@@ -286,19 +268,6 @@ def cmd_log(args: argparse.Namespace) -> None:
             print()
             print(f"  ... and more. Use --limit to show more.")
 
-    # Show recent git commits alongside
-    try:
-        store_obj, proj_obj = get_store_and_project()
-        als_path = Path(proj_obj.root_als)
-        if is_git_repo(als_path.parent):
-            entries = git_log(count=5, cwd=als_path.parent)
-            if entries:
-                print()
-                print(f"📦 Recent git commits for '{als_path.parent.name}':")
-                for e in entries:
-                    print(f"  {e['hash']}  {e['date']} {e['time']}  {e['message'][:60]}")
-    except Exception:
-        pass
 
 
 def cmd_diff(args: argparse.Namespace) -> None:
@@ -404,7 +373,7 @@ def cmd_tui(args: argparse.Namespace) -> None:
         print("❌ TUI requires textual and httpx.")
         print("   Install with: pip install textual httpx")
         sys.exit(1)
-    run_tui(connect_url=args.connect)
+    run_tui(url=args.connect)
 
 
 def cmd_cue(args: argparse.Namespace) -> None:
@@ -540,11 +509,6 @@ def cmd_branch(args: argparse.Namespace) -> None:
 
     store.update_ref(branch_ref, head)
 
-    # Also create git branch
-    als_path = Path(proj.root_als)
-    if is_git_repo(als_path.parent):
-        git_branch("create", args.name, cwd=als_path.parent)
-
     print(f"🌿 Created branch '{args.name}' at {head[:8]}")
 
 
@@ -572,11 +536,6 @@ def cmd_checkout(args: argparse.Namespace) -> None:
     proj.head = branch_head
     store.update_ref("HEAD", branch_head)
     store.set_index(proj)
-
-    # Also switch git branch
-    als_path = Path(proj.root_als)
-    if is_git_repo(als_path.parent):
-        git_checkout(args.name, cwd=als_path.parent)
 
     snap = store.load_snapshot(branch_head)
     msg = f" — '{snap.message}'" if snap else ""
@@ -645,11 +604,6 @@ def cmd_merge(args: argparse.Namespace) -> None:
             print(f"⏩ Fast-forward merged '{args.branch}' into '{proj.branch}'")
             print(f"   {current_head[:8]}..{merge_head[:8]}")
             return
-
-    # Also merge in git if we're in a repo
-    als_path = Path(proj.root_als)
-    if is_git_repo(als_path.parent):
-        git_merge(args.branch, cwd=als_path.parent)
 
     # Create a merge commit
 
@@ -742,15 +696,6 @@ def cmd_push(args: argparse.Namespace) -> None:
         print(f"   Use 'clavus remote add <name> <url>' first.")
         return
 
-    # Also git push if we have a remote configured
-    als_path = Path(proj.root_als)
-    if is_git_repo(als_path.parent):
-        git_result = git_push(cwd=als_path.parent)
-        if git_result == "ok":
-            print(f"   📦 Git: pushed")
-        elif "fatal" not in git_result.lower():
-            print(f"   📦 Git: {git_result}")
-
     for remote in remotes:
         print(f"📤 Pushing to '{remote.name}' ({remote.url})...")
         result = push_to_remote(store, proj, remote)
@@ -769,15 +714,6 @@ def cmd_pull(args: argparse.Namespace) -> None:
     if not remotes:
         print(f"❌ No remotes configured.")
         return
-
-    # Also git pull if we have a remote
-    als_path = Path(proj.root_als)
-    if is_git_repo(als_path.parent):
-        git_result = git_pull(cwd=als_path.parent)
-        if git_result == "ok":
-            print(f"   📦 Git: pulled")
-        elif "fatal" not in git_result.lower():
-            print(f"   📦 Git: {git_result}")
 
     for remote in remotes:
         print(f"📥 Pulling from '{remote.name}' ({remote.url})...")

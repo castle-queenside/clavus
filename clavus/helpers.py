@@ -5,6 +5,7 @@ Avoids circular imports between cli.py and watch.py.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -33,6 +34,18 @@ def get_store_and_project(clavus_dir: str = "") -> tuple[BlobStore, ClavusProjec
     if not projects:
         print("❌ No Clavus projects found. Run 'clavus init' first.")
         sys.exit(1)
+
+    # Prefer the last-used project
+    if store.index_path.exists():
+        try:
+            index = json.loads(store.index_path.read_text())
+            last_name = index.get("_last_project")
+            if last_name:
+                for p in projects:
+                    if p.name == last_name:
+                        return store, p
+        except (json.JSONDecodeError, OSError):
+            pass
 
     cwd = os.getcwd()
     for p in projects:
