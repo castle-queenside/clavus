@@ -1,25 +1,30 @@
 -- Clavus Hotkeys
+-- Using AppleScript for curl (io.popen is blocked by sandbox)
 -- Ctrl+Shift+letter — works inside Ableton
--- No hs.menubar (crashes on this system)
 
 local function notify(title, msg)
     hs.notify.new({title="Clavus", subTitle=title, informativeText=msg}):send()
 end
 
+-- Run curl via AppleScript's do shell script
 local function api(method, path, body)
     local url = "http://127.0.0.1:7890" .. path
-    local cmd
+    local script
     if body then
-        local f = io.open("/tmp/clavus_body.json", "w")
-        if f then f:write(body) f:close() end
-        cmd = 'curl -s -X ' .. method .. ' --max-time 3 -H "Content-Type: application/json" -d @/tmp/clavus_body.json "' .. url .. '"'
+        -- Write body to temp file, then curl
+        script = [[
+            do shell script "echo ']] .. body .. [[' > /tmp/clavus_body.json && curl -s -X ]] .. method .. [[ --max-time 3 -H 'Content-Type: application/json' -d @/tmp/clavus_body.json ']] .. url .. [['"
+        ]]
     else
-        cmd = 'curl -s -X ' .. method .. ' --max-time 3 "' .. url .. '"'
+        script = [[
+            do shell script "curl -s -X ]] .. method .. [[ --max-time 3 ']] .. url .. [['"
+        ]]
     end
-    local handle = io.popen(cmd)
-    local result = handle:read("*a")
-    handle:close()
-    return result
+    local ok, result = hs.osascript.applescript(script)
+    if ok then
+        return result
+    end
+    return nil
 end
 
 -- ─── Quick Cue (Ctrl+Shift+N) ─────────────────────────
@@ -117,5 +122,5 @@ hs.hotkey.bind({"ctrl", "shift"}, "W", function()
     notify("Position", "Playhead tracking coming soon.")
 end)
 
--- ─── Ready! ───────────────────────────────────────────
-hs.alert.show("♮ Clavus: 6 hotkeys (Ctrl+Shift+N/L/I/T/P/W)")
+-- ─── Ready! ──────────────────────────────────────────
+hs.alert.show("♮ Clavus: 6 hotkeys (AppleScript curl)")
