@@ -211,7 +211,7 @@ function actions.inject()
     end
 end
 
-function actions.list_cids(params)
+function actions.list_cues(params)
     local limit = (params and params.limit) or 5
     local project = get_current_project()
     if not project then
@@ -250,9 +250,12 @@ function actions.toggle_tui()
     -- Try to focus an existing terminal running the TUI, or launch one
     local script = [[
         tell application "Terminal"
-            if exists (window 1 whose name contains "clavus tui") then
+            if exists (window 1 whose name contains "clavus") then
                 activate
             else
+                tell application "System Events"
+                    set terminalWindows to windows of process "Terminal"
+                end tell
                 do script "cd ~/Developer/clavus && python3 -m clavus.tui"
                 activate
             end if
@@ -308,10 +311,11 @@ local function register_hotkeys()
     end
 
     local count = 0
+    local errors = {}
     for _, binding in ipairs(bindings) do
         local action_fn = actions[binding.action]
         if not action_fn then
-            hs.alert.show(string.format("⚠️ Clavus: unknown action '%s'", binding.action))
+            table.insert(errors, string.format("⚠️ unknown action '%s' (binding '%s')", binding.action, binding.id))
         else
             -- Convert mod strings to hs.keycodes.modifier values
             local mods = {}
@@ -335,8 +339,16 @@ local function register_hotkeys()
     end
 
     -- Show menu bar icon
-    hs.menubar.new():setTitle("♮"):setToolTip(string.format("Clavus active — %d hotkeys", count))
-    hs.alert.show(string.format("Clavus: %d hotkeys registered", count))
+    local tooltip = string.format("Clavus active — %d hotkeys", count)
+    if #errors > 0 then
+        tooltip = tooltip .. "\n" .. table.concat(errors, "\n")
+    end
+    hs.menubar.new():setTitle("♮"):setToolTip(tooltip)
+    if #errors > 0 then
+        hs.alert.show("⚠️ Clavus: " .. #errors .. " binding error(s) — hover ♮ icon for details")
+    else
+        hs.alert.show(string.format("Clavus: %d hotkeys registered", count))
+    end
 end
 
 -- ─── Ready ──────────────────────────────────────────────────────────
