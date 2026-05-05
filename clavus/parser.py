@@ -318,14 +318,39 @@ def _parse_track_common(track_elem: ET.Element, track: Track) -> None:
             except ValueError:
                 track.sends[send_name] = 0.0
 
-    # Arranger clips (ClipTimeable > ArrangerAutomation > Events)
+    # Arranger clips (ClipTimeable > ArrangerAutomation > Events) — Live 11 path
     if chain is not None:
         for ct in chain.iter("ClipTimeable"):
             _parse_arranger_clips(ct, track)
 
+    # Arranger clips (Live 12+) — clips are direct children of the track element
+    if not track.clips:
+        for clip_elem in track_elem:
+            if clip_elem.tag in ("MidiClip", "AudioClip"):
+                _parse_clip_element(clip_elem, track)
+
+
+def _parse_clip_element(clip_elem: ET.Element, track: Track) -> None:
+    """Extract clip data from a MidiClip or AudioClip element — shared for Live 11 and Live 12."""
+    cs = clip_elem.find("CurrentStart")
+    ce = clip_elem.find("CurrentEnd")
+    cn = clip_elem.find("Name")
+    cc = clip_elem.find("Color")
+    start_val = float(cs.get("Value", "0")) if cs is not None else float(clip_elem.get("Time", "0"))
+    end_val = float(ce.get("Value", "0")) if ce is not None else start_val + 4.0
+    name_val = cn.get("Value", "") if cn is not None else ""
+    color_val = int(cc.get("Value", "16777215")) if cc is not None else 16777215
+    track.clips.append(Clip(
+        start_beats=start_val,
+        end_beats=end_val,
+        name=name_val,
+        color=color_val,
+        clip_type=clip_elem.tag,
+    ))
+
 
 def _parse_arranger_clips(ct: ET.Element, track: Track) -> None:
-    """Extract arranger clips from a ClipTimeable element."""
+    """Extract arranger clips from a ClipTimeable element (Live 11 compatibility)."""
     arr_auto = ct.find("ArrangerAutomation")
     if arr_auto is None:
         return
@@ -335,21 +360,7 @@ def _parse_arranger_clips(ct: ET.Element, track: Track) -> None:
     for clip_elem in events:
         if clip_elem.tag not in ("MidiClip", "AudioClip"):
             continue
-        cs = clip_elem.find("CurrentStart")
-        ce = clip_elem.find("CurrentEnd")
-        cn = clip_elem.find("Name")
-        cc = clip_elem.find("Color")
-        start_val = float(cs.get("Value", "0")) if cs is not None else float(clip_elem.get("Time", "0"))
-        end_val = float(ce.get("Value", "0")) if ce is not None else start_val + 4.0
-        name_val = cn.get("Value", "") if cn is not None else ""
-        color_val = int(cc.get("Value", "16777215")) if cc is not None else 16777215
-        track.clips.append(Clip(
-            start_beats=start_val,
-            end_beats=end_val,
-            name=name_val,
-            color=color_val,
-            clip_type=clip_elem.tag,
-        ))
+        _parse_clip_element(clip_elem, track)
 
 
 def _parse_audio_tracks(root: ET.Element, project: Project) -> None:

@@ -80,7 +80,7 @@ ABLE_COLOR_BG = {
 }
 
 TIMELINE_WIDTH = 60  # Characters wide for each timeline
-TRACK_LABEL_WIDTH = 20  # Characters for track name column
+TRACK_LABEL_WIDTH = 36  # Characters for track name column
 CLIP_BLOCK = "█"  # Filled block for a clip
 CLIP_EMPTY = "·"  # Dot for empty space
 
