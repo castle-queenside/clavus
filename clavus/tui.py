@@ -70,7 +70,7 @@ class Snap:
     @classmethod
     def from_dict(cls, d: dict) -> "Snap":
         return cls(
-            hash=d.get("hash", d.get("full_hash", ""))[:8],
+            hash=d.get("hash", d.get("full_hash", ""))[:10],
             message=d.get("message", ""),
             timestamp=d.get("timestamp", 0.0),
             track_count=d.get("track_count", 0),
@@ -355,7 +355,7 @@ class ClavusApp(App):
     #header-title {{ color: {C['accent']}; text-style: bold; }}
     #header-status {{ color: {C['dim']}; }}
 
-    #content {{ layout: grid; grid-size: 2 1; grid-columns: 3fr 1fr; height: 100%; }}
+    #content {{ layout: grid; grid-size: 2 1; grid-columns: 3fr 2fr; height: 100%; }}
 
     #cues-list {{ height: 100%; min-height: 5; border-right: solid {C['border']}; }}
     #cues-list:focus-within {{ border-right: solid {C['accent']}; }}
