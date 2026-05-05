@@ -199,6 +199,22 @@ class ClavusClient:
         except Exception as e:
             return {"error": str(e)}
 
+    async def get_visual_diff(self, project: str, hash: str = "") -> Optional[str]:
+        """Get visual diff HTML for a snapshot vs its parent."""
+        try:
+            params = {"name": project}
+            if hash:
+                params["before"] = hash
+            r = await self.client.get(
+                f"{self.base_url}/api/projects/compare",
+                params=params, timeout=15,
+            )
+            if r.status_code == 200:
+                return r.text
+        except Exception:
+            pass
+        return None
+
     async def pull(self, project: str) -> tuple[list[Cue], list[Snap]]:
         try:
             r = await self.client.get(
@@ -367,6 +383,7 @@ class ClavusApp(App):
         Binding("S", "start", "Start/Stop"),
         Binding("x", "archive", "Archive"),
         Binding("C", "snapshot", "Snapshot"),
+        Binding("d", "diff", "Diff"),
         Binding("p", "pull", "Pull"),
         Binding("P", "push", "Push"),
         Binding("tab", "focus_next_pane", "Pane"),
@@ -803,21 +820,30 @@ class ClavusApp(App):
 
     def action_restore_snapshot(self):
         """Restore the most recently selected snapshot from the history pane."""
-        # Find the focused snapshot — works regardless of which pane has focus
         if not self.snaps:
             self._status("no snapshots to restore from")
             return
-        # Use the history list view's index, or default to the most recent
-        try:
-            hlv = self.query_one("#hlv", ListView)
-            idx = hlv.index
-        except (NoMatches, AttributeError):
-            idx = 0
-        if idx >= len(self.snaps):
-            idx = 0
+        idx = self._get_history_idx()
         snap = self.snaps[idx]
         self._status(f"restoring to {snap.hash} ('{snap.message[:40]}')...")
         self._run_restore(snap.hash)
+
+    def action_diff(self):
+        """Show visual diff of the selected snapshot vs its parent, printed to terminal."""
+        if not self.snaps:
+            self._status("no snapshots to diff")
+            return
+        idx = self._get_history_idx()
+        snap = self.snaps[idx]
+        import subprocess
+        self._status(f"diff of {snap.hash}...")
+        self._refresh()  # flush UI
+        result = subprocess.run(
+            ["python3", "-m", "clavus", "diff", snap.hash, "--visual"],
+            capture_output=True, text=True, timeout=15,
+        )
+        output = result.stdout or result.stderr
+        print(f"\n{output}\n")
 
     def action_snapshot(self):
         """Prompt for a snapshot message then create one."""
@@ -1004,6 +1030,17 @@ class ClavusApp(App):
         if 0 <= self.idx < len(self.cues):
             return self.cues[self.idx]
         return None
+
+    def _get_history_idx(self) -> int:
+        """Get the selected index from the history list view, or default to 0."""
+        try:
+            hlv = self.query_one("#hlv", ListView)
+            idx = hlv.index
+        except (NoMatches, AttributeError):
+            idx = 0
+        if idx >= len(self.snaps):
+            idx = 0
+        return idx
 
     # ─── Navigation ─────────────────────────────────────────────────────
 

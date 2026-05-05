@@ -69,6 +69,6 @@ def resolve_snapshot(store: BlobStore, ref: str) -> Optional[str]:
         for obj_dir in store.objects_dir.iterdir():
             if obj_dir.is_dir():
                 for f in obj_dir.iterdir():
-                    if f.name.startswith(ref):
-                        return f.name
+                    if f.is_file() and f.suffix == ".meta" and f.stem.startswith(ref):
+                        return f.stem
     return None

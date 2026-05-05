@@ -337,7 +337,7 @@ def cmd_diff(args: argparse.Namespace) -> None:
 
     snap = store.load_snapshot(hash_str)
     if not snap:
-        print(f"❌ Snapshot not found: {hash_str}")
+        print(f"❌ Snapshot not found (resolved: '{hash_str}', meta: {store.objects_dir / hash_str[:2] / (hash_str + '.meta')})")
         return
 
     current_project = store.load_project(hash_str)
