@@ -402,7 +402,6 @@ class ClavusApp(App):
         Binding("d", "diff", "Diff"),
         Binding("p", "pull", "Pull"),
         Binding("P", "push", "Push"),
-        Binding("ctrl+d", "delete_cue", "Delete", show=False),
         Binding("U", "stem_push", "Stem↑", show=False),
         Binding("tab", "focus_next_pane", "Pane"),
         Binding("j", "cursor_down", "Down", show=False),
