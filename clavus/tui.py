@@ -403,6 +403,7 @@ class ClavusApp(App):
         Binding("p", "pull", "Pull"),
         Binding("P", "push", "Push"),
         Binding("D", "delete_cue", "Delete"),
+        Binding("U", "stem_push", "Stem↑", show=False),
         Binding("tab", "focus_next_pane", "Pane"),
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
@@ -551,6 +552,13 @@ class ClavusApp(App):
             self._run_restore(arg)
         elif cmd == "snapshot":
             self._run_snapshot(arg)
+        elif cmd == "stem":
+            if arg == "push":
+                self.action_stem_push()
+            elif arg == "pull":
+                self.action_pull()
+            else:
+                self._status("stem push  |  stem pull")
         elif cmd == "archive":
             self.action_archive()
         elif cmd in ("help", "h", "?"):
@@ -1023,6 +1031,21 @@ class ClavusApp(App):
         self._status("pushing...")
         await self._do_push()
 
+    @work(exclusive=True)
+    async def action_stem_push(self):
+        self._status("pushing stems...")
+        import asyncio
+        proc = await asyncio.create_subprocess_shell(
+            "clavus stem push",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+        out = stdout.decode().strip()
+        err = stderr.decode().strip()
+        msg = out.split("\n")[-1][:60] if out else (err.split("\n")[-1][:60] if err else "done")
+        self._status(f"stems: {msg}")
+
     # ─── Persistence ────────────────────────────────────────────────────
 
     def _save(self):
@@ -1252,9 +1275,11 @@ class ClavusApp(App):
                 f"[{C['accent']}]R[/] resolve  "
                 f"[{C['accent']}]e[/] edit  "
                 f"[{C['accent']}]c[/] cue  "
+                f"[{C['accent']}]C[/] snap  "
                 f"[{C['accent']}]a[/] assign  "
                 f"[{C['accent']}]D[/] delete  "
                 f"[{C['accent']}]x[/] archive  "
+                f"[{C['accent']}]U[/] stems  "
                 f"[{C['accent']}]q[/] quit  "
                 f"[{C['accent']}]:[/] cmd"
             )
