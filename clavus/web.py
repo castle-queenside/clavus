@@ -307,7 +307,9 @@ def get_project_sync(name: str = Query("", description="Project name to load")):
             else:
                 project_data = {
                     "ableton_version": project_obj.ableton_version,
-                    "tracks": [{"name": t.name, "type": t.track_type, "color": t.color}
+                    "tracks": [{"name": t.name, "type": t.track_type, "color": t.color,
+                                 "clips": [{"name": c.name, "start": c.start_beats, "end": c.end_beats}
+                                          for c in getattr(t, "clips", [])]}
                               for t in project_obj.tracks],
                     "return_tracks": [{"name": t.name} for t in project_obj.return_tracks],
                     "bpm": project_obj.bpm,
@@ -1281,99 +1283,105 @@ def _generate_index_html() -> str:
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>clavus</title>
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
   <header>
-    <div class="logo">
+    <div class="header-left">
       <span class="logo-icon">⧩</span>
       <span class="logo-text">clavus</span>
+      <span class="conn-dot" id="connDot" title="connecting..."></span>
+    </div>
+    <div class="header-center">
       <select class="project-switcher" id="projectSwitcher" onchange="switchProject(this.value)">
-        <option value="">—</option>
+        <option value="">Select project…</option>
       </select>
     </div>
-    <div class="header-actions">
-      <span class="connection-status" id="connStatus">⬤ connecting...</span>
-      <button id="refreshBtn" onclick="loadAll()" title="Refresh">⟳</button>
+    <div class="header-right">
+      <button id="refreshBtn" onclick="loadAll()" title="Refresh">↻</button>
     </div>
   </header>
-  <div class="tailscale-url" id="tailscaleUrl"></div>
+  <div class="lan-url" id="lanUrl"></div>
 
-  <main>
-    <!-- LEFT: Project Pane -->
-    <section class="pane pane-project">
+  <main id="mainContent">
+    <!-- TAB BAR -->
+    <nav class="tab-bar" id="tabBar">
+      <button class="tab-btn active" data-tab="project" onclick="switchTab('project')">Project</button>
+      <button class="tab-btn" data-tab="cues" onclick="switchTab('cues')">Cues</button>
+      <button class="tab-btn" data-tab="snapshots" onclick="switchTab('snapshots')">Snapshots</button>
+    </nav>
+
+    <!-- PROJECT TAB -->
+    <section class="tab-content active" id="tab-project">
       <div class="pane-header">
-        <h2>Project</h2>
+        <span class="pane-title">Tracks</span>
         <span class="pane-badge" id="trackCount">—</span>
       </div>
       <div class="project-info">
-        <div class="info-row"><span class="label">BPM</span><span class="value" id="bpm">—</span></div>
-        <div class="info-row"><span class="label">Time Sig</span><span class="value" id="timeSig">—</span></div>
-        <div class="info-row"><span class="label">Ableton</span><span class="value" id="abletonVer">—</span></div>
+        <div class="info-chip"><span class="chip-label">BPM</span><span class="chip-value" id="bpm">—</span></div>
+        <div class="info-chip"><span class="chip-label">Time</span><span class="chip-value" id="timeSig">—</span></div>
+        <div class="info-chip"><span class="chip-label">Live</span><span class="chip-value" id="abletonVer">—</span></div>
       </div>
       <div class="track-list" id="trackList">
         <div class="empty-state">No tracks loaded</div>
       </div>
-      <div class="marker-list" id="markerList">
-        <h3>Markers</h3>
-        <div class="empty-state">No markers</div>
-      </div>
     </section>
 
-    <!-- CENTER: Cues Timeline -->
-    <section class="pane pane-cues">
+    <!-- CUES TAB -->
+    <section class="tab-content" id="tab-cues">
       <div class="pane-header">
-        <h2>Cues</h2>
-        <div class="pane-filters">
-          <button class="filter-btn active" data-filter="all" onclick="setFilter('all')">All</button>
-          <button class="filter-btn" data-filter="pending" onclick="setFilter('pending')">Pending</button>
-          <button class="filter-btn" data-filter="resolved" onclick="setFilter('resolved')">Resolved</button>
-          <button class="filter-btn" data-filter="archived" onclick="setFilter('archived')">Archived</button>
-        </div>
+        <span class="pane-title">Cues</span>
+        <span class="pane-badge" id="cueCount">0</span>
       </div>
       <div class="cue-composer" id="cueComposer">
-        <input type="text" class="cue-position-input" id="cuePosition" placeholder="@1:23" value="0.0.0">
-        <input type="text" class="cue-text-input" id="cueText" placeholder="Leave a cue...">
-        <button class="cue-send-btn" onclick="postCue()">+ Cue</button>
+        <div class="cue-composer-row">
+          <input type="text" class="cue-text-input" id="cueText" placeholder="Add a cue..." autocomplete="off">
+          <button class="cue-send-btn" id="cueSendBtn" onclick="postCue()">+</button>
+        </div>
+        <div class="cue-composer-row cue-filter-row">
+          <input type="text" class="cue-position-input" id="cuePosition" placeholder="@1:23" value="0.0.0">
+          <div class="filter-chips">
+            <button class="filter-chip active" data-filter="all" onclick="setFilter('all')">All</button>
+            <button class="filter-chip" data-filter="pending" onclick="setFilter('pending')">Open</button>
+            <button class="filter-chip" data-filter="archived" onclick="setFilter('archived')">Archived</button>
+          </div>
+        </div>
       </div>
       <div class="cue-list" id="cueList">
-        <div class="empty-state loading">Loading cues...</div>
+        <div class="empty-state">Loading cues...</div>
       </div>
     </section>
 
-    <!-- RIGHT: History -->
-    <section class="pane pane-history">
+    <!-- SNAPSHOTS TAB -->
+    <section class="tab-content" id="tab-snapshots">
       <div class="pane-header">
-        <h2>History</h2>
-        <span class="pane-badge" id="snapshotCount">—</span>
+        <span class="pane-title">History</span>
+        <span class="pane-badge" id="snapshotCount">0</span>
       </div>
       <div class="compare-bar" id="compareBar">
-        <span class="compare-info" id="compareInfo">Select another snapshot to compare</span>
-        <button onclick="clearCompare()">✕ Clear</button>
+        <span class="compare-info" id="compareInfo">Select two to compare</span>
+        <button onclick="clearCompare()">✕</button>
       </div>
       <div class="snapshot-list" id="snapshotList">
-        <div class="empty-state">No snapshots</div>
+        <div class="empty-state loading">Loading history...</div>
       </div>
-      <div class="snapshot-diff-panel" id="snapshotDiffPanel" style="display:none">
+      <div class="diff-panel" id="snapshotDiffPanel">
         <div class="diff-header">
           <span id="diffTitle">Diff</span>
           <button onclick="hideDiff()">✕</button>
         </div>
-        <div id="diffContent"></div>
-      </div>
-      <div style="padding:8px 12px;border-top:1px solid var(--border)">
-        <button class="cue-action-btn" onclick="injectCues()" style="width:100%">📌 Inject cues into .als</button>
+        <div class="diff-scroll" id="diffContent"></div>
       </div>
     </section>
   </main>
 
   <footer>
-    <span class="footer-left">clavus <span id="version">0.2.0</span></span>
+    <span class="footer-left">clavus v<span id="version">0.2</span></span>
     <span class="footer-right">
-      <span class="sync-info" id="syncInfo">local</span>
-      <a href="#" class="server-link" onclick="showServerInfo()">info</a>
+      <button class="inject-btn" onclick="injectCues()" title="Inject cues as markers">📌</button>
     </span>
   </footer>
 
@@ -1384,272 +1392,349 @@ def _generate_index_html() -> str:
 
 def _generate_app_css() -> str:
     return """:root {
-  --bg-pri: #0b1418;
-  --bg-sec: #0f1a20;
-  --bg-ter: #15242b;
-  --bg-hover: #1a2d36;
+  --bg: #0b1418;
+  --bg2: #0f1a20;
+  --bg3: #15242b;
+  --hover: #1a2d36;
   --accent: #1a9e9e;
   --accent-dim: #0f6b6b;
   --fg: #b8c8c8;
-  --fg-dim: #6a8a8a;
-  --fg-muted: #3a5a65;
+  --fg2: #6a8a8a;
+  --fg3: #3a5a65;
   --border: #1a3040;
   --danger: #d45a5a;
   --success: #4a9e6a;
   --warning: #d4a04a;
-  --radius: 4px;
-  --font: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Consolas', monospace;
+  --font: -apple-system, 'SF Mono', 'Cascadia Code', 'JetBrains Mono', monospace;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
-
 html, body {
   height: 100%;
-  background: var(--bg-pri);
+  background: var(--bg);
   color: var(--fg);
   font-family: var(--font);
-  font-size: 13px;
-  overflow: hidden;
+  font-size: 14px;
+  -webkit-text-size-adjust: 100%;
+  overflow-x: hidden;
 }
 
 /* ── Header ── */
 header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 8px 16px;
-  background: var(--bg-sec);
+  padding: 8px 12px;
+  background: var(--bg2);
   border-bottom: 1px solid var(--border);
-  -webkit-app-region: drag;
+  gap: 8px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
 }
-.logo { display: flex; align-items: center; gap: 8px; }
+.header-left { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.header-center { flex: 1; min-width: 0; }
+.header-right { flex-shrink: 0; }
 .logo-icon { color: var(--accent); font-size: 18px; }
 .logo-text { color: var(--accent); font-weight: bold; font-size: 14px; }
+.conn-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  display: inline-block;
+  background: var(--fg3);
+}
+.conn-dot.connected { background: var(--success); }
+.conn-dot.error { background: var(--danger); }
+
 .project-switcher {
-  background: var(--bg-ter);
+  width: 100%;
+  background: var(--bg3);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  color: var(--fg-dim);
+  border-radius: 6px;
+  color: var(--fg2);
   font-family: var(--font);
-  font-size: 12px;
-  padding: 2px 6px;
+  font-size: 13px;
+  padding: 6px 8px;
   cursor: pointer;
-  max-width: 200px;
-  -webkit-app-region: no-drag;
+  -webkit-appearance: none;
+  appearance: none;
 }
-.project-switcher:focus { outline: none; border-color: var(--accent-dim); }
-.project-switcher:hover { border-color: var(--accent-dim); color: var(--accent); }
-.project-name { color: var(--fg-dim); font-size: 12px; }
-.header-actions { display: flex; align-items: center; gap: 12px; -webkit-app-region: no-drag; }
-.connection-status { font-size: 11px; color: var(--success); }
-.connection-status.error { color: var(--danger); }
+.project-switcher option { background: var(--bg); color: var(--fg); }
 #refreshBtn {
-  background: none; border: 1px solid var(--border); color: var(--fg-dim);
-  padding: 4px 10px; border-radius: var(--radius); cursor: pointer; font-size: 14px;
-}
-#refreshBtn:hover { border-color: var(--accent); color: var(--accent); }
-
-/* ── Main Layout ── */
-main {
-  display: grid;
-  grid-template-columns: 280px 1fr 280px;
-  height: calc(100vh - 56px);
-  gap: 1px;
-  background: var(--border);
-}
-
-/* ── Panes ── */
-.pane {
-  background: var(--bg-pri);
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--fg2);
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
   display: flex;
-  flex-direction: column;
-  overflow: hidden;
+  align-items: center;
+  justify-content: center;
 }
+
+/* ── LAN URL ── */
+.lan-url {
+  text-align: center;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--accent);
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font);
+  display: none;
+}
+.lan-url code { color: var(--accent); font-size: 13px; }
+
+/* ── Tab Bar ── */
+.tab-bar {
+  display: flex;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 49px;
+  z-index: 99;
+}
+.tab-btn {
+  flex: 1;
+  padding: 10px 8px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--fg3);
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.tab-btn.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* ── Tab Content ── */
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+/* ── Pane Header ── */
 .pane-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--border);
-  background: var(--bg-sec);
+  background: var(--bg);
 }
-.pane-header h2 {
-  font-size: 11px;
+.pane-title {
+  font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 1px;
-  color: var(--fg-dim);
+  color: var(--fg2);
 }
 .pane-badge {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--accent);
-  background: var(--bg-ter);
-  padding: 2px 8px;
+  background: var(--bg3);
+  padding: 2px 10px;
   border-radius: 10px;
 }
 
-/* ── Project Info ── */
+/* ── Project Info Chips ── */
 .project-info {
-  padding: 10px 12px;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
+  padding: 8px 12px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
-.info-row {
+.info-chip {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  min-width: 64px;
 }
-.info-row .label { font-size: 10px; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.5px; }
-.info-row .value { font-size: 14px; font-weight: 600; }
+.chip-label { font-size: 9px; color: var(--fg3); text-transform: uppercase; letter-spacing: 0.5px; }
+.chip-value { font-size: 16px; font-weight: 700; }
 
-/* ── Tracks ── */
-.track-list { padding: 6px 12px; flex: 1; overflow-y: auto; }
+/* ── Track List ── */
+.track-list { padding: 4px 0; }
 .track-item {
-  display: flex; align-items: center; gap: 8px;
-  padding: 5px 8px; font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
   border-left: 3px solid transparent;
-  border-radius: 0 var(--radius) var(--radius) 0;
   margin: 1px 0;
 }
-.track-item:hover { background: var(--bg-sec); }
-.track-dot {
-  width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0;
-}
-.track-name { flex: 1; font-weight: 500; }
-.track-type { font-size: 10px; color: var(--fg-muted); }
+.track-item:active { background: var(--hover); }
+.track-dot { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+.track-name { flex: 1; font-weight: 500; font-size: 14px; }
+.track-type { font-size: 11px; color: var(--fg3); }
 .track-clip-count {
-  font-size: 10px; color: var(--accent-dim);
-  background: var(--bg-ter); padding: 1px 6px;
+  font-size: 11px; color: var(--accent-dim);
+  background: var(--bg3); padding: 2px 8px;
   border-radius: 8px; white-space: nowrap;
 }
 
-/* ── Markers ── */
-.marker-list { padding: 6px 12px; border-top: 1px solid var(--border); }
-.marker-list h3 { font-size: 10px; color: var(--fg-muted); text-transform: uppercase; margin-bottom: 6px; }
-.marker-item { font-size: 11px; padding: 2px 0; color: var(--fg-dim); }
-.marker-item .pos { color: var(--accent-dim); }
-
 /* ── Cue Composer ── */
 .cue-composer {
-  display: flex;
-  gap: 6px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
-  background: var(--bg-sec);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
-.cue-position-input {
-  width: 72px;
-  background: var(--bg-ter);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  color: var(--fg);
-  padding: 6px 8px;
-  font-family: var(--font);
-  font-size: 12px;
-  text-align: center;
-}
-.cue-position-input:focus { outline: none; border-color: var(--accent-dim); }
+.cue-composer-row { display: flex; gap: 6px; align-items: center; }
 .cue-text-input {
   flex: 1;
-  background: var(--bg-ter);
+  background: var(--bg3);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 8px;
   color: var(--fg);
-  padding: 6px 8px;
+  padding: 10px 12px;
   font-family: var(--font);
-  font-size: 12px;
+  font-size: 14px;
 }
 .cue-text-input:focus { outline: none; border-color: var(--accent-dim); }
-.cue-text-input::placeholder { color: var(--fg-muted); }
+.cue-text-input::placeholder { color: var(--fg3); }
 .cue-send-btn {
   background: var(--accent);
   border: none;
-  color: var(--bg-pri);
+  color: var(--bg);
   font-weight: bold;
-  padding: 6px 14px;
-  border-radius: var(--radius);
+  font-size: 22px;
+  width: 42px; height: 42px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.cue-send-btn:active { background: var(--accent-dim); }
+.cue-position-input {
+  width: 80px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--fg);
+  padding: 8px 10px;
+  font-family: var(--font);
+  font-size: 13px;
+  text-align: center;
+}
+.cue-position-input:focus { outline: none; border-color: var(--accent-dim); }
+
+/* ── Filter Chips ── */
+.filter-chips { display: flex; gap: 4px; }
+.cue-filter-row { justify-content: space-between; }
+.filter-chip {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg3);
+  padding: 4px 12px;
+  border-radius: 14px;
   cursor: pointer;
   font-family: var(--font);
   font-size: 12px;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
-.cue-send-btn:hover { background: var(--accent-dim); }
+.filter-chip:active { background: var(--bg3); }
+.filter-chip.active {
+  background: var(--accent-dim);
+  border-color: var(--accent-dim);
+  color: var(--fg);
+}
 
 /* ── Cue List ── */
-.cue-list { flex: 1; overflow-y: auto; padding: 6px 0; }
+.cue-list { }
 .cue-card {
-  margin: 4px 8px;
-  padding: 8px 10px;
-  background: var(--bg-sec);
+  margin: 6px 12px;
+  padding: 10px 12px;
+  background: var(--bg2);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 10px;
   border-left: 3px solid var(--accent-dim);
 }
-.cue-card.status-resolved { border-left-color: var(--success); opacity: 0.6; }
-.cue-card.status-skipped { border-left-color: var(--fg-muted); opacity: 0.5; }
+.cue-card.status-resolved { border-left-color: var(--success); opacity: 0.65; }
+.cue-card.status-skipped { border-left-color: var(--fg3); opacity: 0.55; }
 .cue-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
 }
-.cue-position { font-size: 11px; color: var(--accent); font-weight: 600; }
-.cue-meta { font-size: 10px; color: var(--fg-muted); }
-.cue-text { font-size: 12px; line-height: 1.4; }
-.cue-status { font-size: 10px; text-transform: uppercase; }
+.cue-position { font-size: 12px; color: var(--accent); font-weight: 600; }
+.cue-meta { font-size: 11px; color: var(--fg3); }
+.cue-text { font-size: 14px; line-height: 1.4; }
+.cue-status { font-size: 11px; text-transform: uppercase; }
 .cue-status.pending { color: var(--warning); }
 .cue-status.resolved { color: var(--success); }
-.cue-status.skipped { color: var(--fg-muted); }
-.cue-actions { margin-top: 6px; display: flex; gap: 6px; }
+.cue-status.skipped { color: var(--fg3); }
+
+.cue-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
 .cue-action-btn {
-  font-size: 10px;
-  background: none;
+  font-size: 12px;
+  background: var(--bg3);
   border: 1px solid var(--border);
-  color: var(--fg-dim);
-  padding: 2px 8px;
-  border-radius: var(--radius);
+  color: var(--fg2);
+  padding: 6px 12px;
+  border-radius: 8px;
   cursor: pointer;
   font-family: var(--font);
+  -webkit-tap-highlight-color: transparent;
 }
-.cue-action-btn:hover { border-color: var(--accent-dim); color: var(--accent); }
-.cue-action-btn.resolve:hover { border-color: var(--success); color: var(--success); }
+.cue-action-btn:active { background: var(--hover); border-color: var(--accent-dim); }
+.cue-action-btn.resolve:active { border-color: var(--success); color: var(--success); }
+
 .cue-reply-composer {
   display: flex;
-  gap: 4px;
-  margin-top: 6px;
+  gap: 6px;
+  margin-top: 8px;
 }
 .cue-reply-composer input {
   flex: 1;
-  background: var(--bg-ter);
+  background: var(--bg3);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 8px;
   color: var(--fg);
-  padding: 4px 6px;
+  padding: 8px 10px;
   font-family: var(--font);
-  font-size: 11px;
+  font-size: 13px;
 }
 .cue-reply-composer button {
   background: var(--accent-dim);
   border: none;
   color: var(--fg);
-  padding: 4px 10px;
-  border-radius: var(--radius);
+  padding: 8px 14px;
+  border-radius: 8px;
   cursor: pointer;
-  font-size: 11px;
+  font-size: 13px;
   font-family: var(--font);
 }
 .cue-reply {
-  font-size: 11px;
-  color: var(--fg-dim);
-  padding: 4px 0 2px 8px;
+  font-size: 12px;
+  color: var(--fg2);
+  padding: 6px 0 3px 10px;
   border-left: 1px solid var(--border);
   margin-top: 4px;
 }
 .cue-reply .reply-author { color: var(--accent-dim); font-weight: 600; }
-.cue-reply .reply-text { color: var(--fg-dim); }
+.cue-reply .reply-text { color: var(--fg2); }
 
 /* ── Snapshot List ── */
-.snapshot-list { padding: 0; flex: 1; overflow-y: auto; }
+.snapshot-list { }
 .snapshot-timeline { position: relative; padding: 4px 0; }
 .snapshot-timeline::before {
   content: ''; position: absolute; left: 20px; top: 10px;
@@ -1657,20 +1742,23 @@ main {
   background: var(--border);
 }
 .snapshot-item {
-  display: flex; align-items: flex-start; gap: 10px;
-  padding: 8px 12px 8px 8px;
-  cursor: pointer; position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
-.snapshot-item:hover { background: var(--bg-sec); }
-.snapshot-item.noselect { opacity: 0.5; }
+.snapshot-item:active { background: var(--hover); }
+.snapshot-item.HEAD { background: var(--bg2); }
 .snapshot-dot {
   width: 10px; height: 10px; border-radius: 50%;
-  background: var(--bg-ter);
+  background: var(--bg3);
   border: 2px solid var(--border);
-  flex-shrink: 0; margin-top: 3px;
+  flex-shrink: 0; margin-top: 4px;
   position: relative; z-index: 1;
 }
-.snapshot-item.active .snapshot-dot {
+.snapshot-item.HEAD .snapshot-dot {
   background: var(--accent);
   border-color: var(--accent);
 }
@@ -1680,70 +1768,70 @@ main {
 }
 .snapshot-content { flex: 1; min-width: 0; }
 .snapshot-top {
-  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-}
-.snapshot-item .snap-hash { font-size: 11px; color: var(--accent); font-weight: 600; }
-.snapshot-item .snap-delta { font-size: 10px; }
-.snapshot-item .snap-time { font-size: 10px; color: var(--fg-muted); }
-.snapshot-item .snap-msg { font-size: 12px; margin-top: 1px; color: var(--fg); }
-.snapshot-item .snap-meta { font-size: 10px; color: var(--fg-dim); margin-top: 1px; }
-.snapshot-item.active { background: var(--bg-ter); }
-.snapshot-item.compare-selected { background: var(--bg-ter); }
-.snapshot-diff-panel {
-  padding: 8px 12px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-sec);
-  max-height: 300px;
-  overflow-y: auto;
-  font-size: 12px;
-}
-.snapshot-diff-panel .diff-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
+  gap: 6px;
+  flex-wrap: wrap;
 }
-.snapshot-diff-panel .diff-header span { color: var(--accent); font-size: 11px; font-weight: 600; }
-.snapshot-diff-panel .diff-header button {
-  background: none; border: 1px solid var(--border);
-  color: var(--fg-dim); padding: 2px 8px; border-radius: var(--radius);
-  cursor: pointer; font-family: var(--font); font-size: 10px;
-}
-.snapshot-diff-panel .diff-header button:hover { border-color: var(--accent); color: var(--accent); }
-.snapshot-diff-panel .diff-loading { color: var(--fg-muted); padding: 12px; text-align: center; }
+.snap-hash { font-size: 12px; color: var(--accent); font-weight: 600; }
+.snap-time { font-size: 11px; color: var(--fg3); }
+.snap-msg { font-size: 14px; margin-top: 2px; }
+.snap-meta { font-size: 11px; color: var(--fg2); margin-top: 1px; }
+.snap-delta { font-size: 11px; }
+
+/* ── Compare Bar ── */
 .compare-bar {
   display: none;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 12px;
-  background: var(--bg-ter);
+  padding: 8px 12px;
+  background: var(--bg3);
   border-bottom: 1px solid var(--border);
-  font-size: 11px;
+  font-size: 12px;
 }
 .compare-bar.visible { display: flex; }
 .compare-bar .compare-info { color: var(--warning); }
 .compare-bar button {
   background: none; border: 1px solid var(--accent-dim);
-  color: var(--accent); padding: 2px 10px; border-radius: var(--radius);
-  cursor: pointer; font-family: var(--font); font-size: 10px;
+  color: var(--accent); padding: 4px 12px; border-radius: 8px;
+  cursor: pointer; font-family: var(--font); font-size: 13px;
 }
 
-/* ── Filters ── */
-.pane-filters { display: flex; gap: 2px; }
-.filter-btn {
-  background: none; border: none; color: var(--fg-muted);
-  padding: 2px 8px; border-radius: var(--radius);
-  cursor: pointer; font-family: var(--font); font-size: 10px;
+/* ── Diff Panel ── */
+.diff-panel {
+  display: none;
+  border-top: 1px solid var(--border);
+  background: var(--bg2);
 }
-.filter-btn:hover { color: var(--fg-dim); }
-.filter-btn.active { background: var(--bg-ter); color: var(--accent); }
+.diff-panel.visible { display: block; }
+.diff-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.diff-header span { color: var(--accent); font-size: 12px; font-weight: 600; }
+.diff-header button {
+  background: var(--bg3); border: 1px solid var(--border);
+  color: var(--fg2); padding: 4px 12px; border-radius: 8px;
+  cursor: pointer; font-family: var(--font); font-size: 14px;
+}
+.diff-scroll {
+  overflow-x: auto;
+  padding: 8px 12px;
+  font-size: 12px;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.diff-loading { color: var(--fg3); padding: 20px; text-align: center; }
 
-/* ── Empty / Loading States ── */
+/* ── Empty States ── */
 .empty-state {
   padding: 24px 12px;
   text-align: center;
-  color: var(--fg-muted);
-  font-size: 12px;
+  color: var(--fg3);
+  font-size: 13px;
 }
 .empty-state.loading { color: var(--accent-dim); }
 
@@ -1752,130 +1840,117 @@ footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 16px;
-  background: var(--bg-sec);
+  padding: 6px 12px;
+  background: var(--bg2);
   border-top: 1px solid var(--border);
-  font-size: 10px;
-  color: var(--fg-muted);
+  font-size: 11px;
+  color: var(--fg3);
 }
-footer a { color: var(--accent-dim); text-decoration: none; }
-footer a:hover { color: var(--accent); }
-
-/* ── Scrollbar ── */
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--fg-muted); }
-
-/* ── Tailscale URL ── */
-.tailscale-url {
-  text-align: center;
+.inject-btn {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--fg2);
   padding: 4px 12px;
-  font-size: 9px;
-  color: var(--fg-muted);
-  background: var(--bg-sec);
-  border-bottom: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
   font-family: var(--font);
 }
-.tailscale-url code {
-  color: var(--accent-dim);
-  font-size: 10px;
+.inject-btn:active { border-color: var(--accent-dim); color: var(--accent); }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* ── Animations ── */
+@keyframes clavus-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
-/* ── Responsive ── */
-@media (max-width: 900px) {
-  main { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; }
-  .pane-project { max-height: 200px; }
-  .pane-history { display: none; }
-  header { padding: 6px 10px; flex-wrap: wrap; gap: 4px; }
-  .logo-text { font-size: 12px; }
-  .project-switcher { max-width: 140px; font-size: 11px; }
-  .pane-header h2 { font-size: 10px; }
-  .cue-text-input { font-size: 16px; } /* prevent iOS zoom */
-  .cue-composer { flex-wrap: wrap; }
-  .cue-position-input { width: 60px; }
-  .cue-send-btn { padding: 8px 16px; font-size: 14px; }
-  .cue-action-btn { padding: 6px 12px; font-size: 12px; }
-  footer { font-size: 9px; padding: 3px 10px; flex-wrap: wrap; gap: 4px; }
+/* ── Desktop Upgrades ── */
+@media (min-width: 768px) {
+  header { padding: 10px 24px; }
+  .tab-btn { font-size: 14px; padding: 12px 16px; }
+  .project-info { padding: 12px 24px; gap: 12px; }
+  .track-item { padding: 10px 24px; }
+  .pane-header { padding: 10px 24px; }
+  .cue-composer { padding: 10px 24px; }
+  .cue-card { margin: 6px 20px; }
+  .snapshot-item { padding: 10px 24px; }
+  .compare-bar { padding: 8px 24px; }
+  .diff-panel .diff-header { padding: 10px 24px; }
+  .diff-scroll { padding: 12px 24px; }
+  footer { padding: 8px 24px; }
+  .lan-url { padding: 8px 24px; }
+  .track-list { padding: 8px 0; }
+  .cue-card { max-width: 640px; }
+  .project-switcher { max-width: 300px; }
+  main { max-width: 800px; margin: 0 auto; }
 }
 
-@media (max-width: 480px) {
-  .pane.project { max-height: 150px; }
-  .project-info { grid-template-columns: 1fr; }
-  .project-switcher { max-width: 100px; }
-  .pane-filters { gap: 1px; }
-  .filter-btn { padding: 4px 6px; font-size: 9px; }
+/* ── Wide Desktop ── */
+@media (min-width: 1200px) {
+  main { max-width: 960px; }
 }
 """
-
-
 def _generate_app_js() -> str:
-    return """// Clavus Web Companion — CRUX family UI
+    return """// Clavus Web Companion
 let currentFilter = 'all';
 let currentProject = localStorage.getItem('clavus_project') || '';
-let POLL_INTERVAL = 5000; // 5s auto-refresh
 
-function $(id) { return document.getElementById(id); }
+const $ = id => document.getElementById(id);
 
 async function api(path, options = {}) {
   const url = '/api' + path;
-  const resp = await fetch(url, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  });
-  if (!resp.ok) {
-    const text = await resp.text();
-    console.error('API error:', url, resp.status, text);
-    return { error: text };
+  try {
+    const resp = await fetch(url, {
+      headers: { 'Content-Type': 'application/json' },
+      ...options,
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      console.error('API error:', url, resp.status, text);
+      return { error: text };
+    }
+    return resp.json();
+  } catch (e) {
+    return { error: e.message };
   }
-  return resp.json();
 }
 
 async function loadProject() {
   const query = currentProject ? '?name=' + encodeURIComponent(currentProject) : '';
   const data = await api('/project' + query);
   if (data.error) {
-    $('connStatus').textContent = '⚠ ' + data.error;
-    $('connStatus').className = 'connection-status error';
+    $('connDot').className = 'conn-dot error';
     return;
   }
-  $('connStatus').textContent = '⬤ connected';
-  $('connStatus').className = 'connection-status';
+  $('connDot').className = 'conn-dot connected';
   currentProject = data.name || currentProject;
 
   if (data.project) {
     const p = data.project;
-    $('bpm').textContent = p.bpm || '—';
+    $('bpm').textContent = p.bpm ? p.bpm.toFixed(1) : '—';
     $('timeSig').textContent = p.time_signature || '—';
     $('abletonVer').textContent = p.ableton_version || '—';
     $('trackCount').textContent = p.track_count || 0;
 
-    // Tracks
     const trackList = $('trackList');
     if (p.tracks && p.tracks.length) {
       trackList.innerHTML = p.tracks.map(t => {
-        const color = ABLETON_COLORS[t.color] || ('#' + t.color.toString(16).padStart(6,'0'));
+        const color = ABLETON_COLORS[t.color] || '#3a5a65';
         const clipCount = t.clips ? t.clips.length : 0;
-        return `
-        <div class="track-item" style="border-left-color:${color}">
+        return `<div class="track-item" style="border-left-color:${color}">
           <span class="track-dot" style="background:${color}"></span>
-          <span class="track-name">${escapeHtml(t.name)}</span>
+          <span class="track-name">${esc(t.name)}</span>
           <span class="track-type">${t.type}</span>
-          ${clipCount > 0 ? `<span class="track-clip-count">${clipCount} clip${clipCount !== 1 ? 's' : ''}</span>` : ''}
+          ${clipCount > 0 ? `<span class="track-clip-count">${clipCount}</span>` : ''}
         </div>`;
       }).join('');
     } else {
-      trackList.innerHTML = '<div class="empty-state">No tracks loaded</div>';
-    }
-
-    // Markers
-    const markerList = $('markerList');
-    if (p.markers && p.markers.length) {
-      markerList.innerHTML = '<h3>Markers</h3>' + p.markers.map(m =>
-        `<div class="marker-item"><span class="pos">${escapeHtml(m.time)}</span> ${escapeHtml(m.name)}</div>`
-      ).join('');
-    } else {
-      markerList.innerHTML = '<h3>Markers</h3><div class="empty-state">No markers</div>';
+      trackList.innerHTML = '<div class="empty-state">No tracks</div>';
     }
   }
 
@@ -1885,20 +1960,19 @@ async function loadProject() {
     $('snapshotList').innerHTML = '<div class="snapshot-timeline">'
       + data.history.map((s, i) => {
         const prev = i < data.history.length - 1 ? data.history[i + 1] : null;
-        const klass = (s.is_head ? 'active' : '') + (prev && prev.is_head ? ' noselect' : '');
-        return `
-      <div class="snapshot-item ${klass}" onclick="handleSnapshotClick('${s.hash}','${s.full_hash}',event)">
-        <div class="snapshot-dot"></div>
-        <div class="snapshot-content">
-          <div class="snapshot-top">
-            <span class="snap-hash">${s.is_head ? '➡ ' : ''}${s.hash}</span>
-            ${prev ? snapDelta(prev, s) : ''}
-            <span class="snap-time">${timeAgo(s.timestamp)}</span>
+        const headClass = s.is_head ? ' HEAD' : '';
+        return `<div class="snapshot-item${headClass}" onclick="handleSnapshot('${s.hash}','${s.full_hash}',event)">
+          <div class="snapshot-dot"></div>
+          <div class="snapshot-content">
+            <div class="snapshot-top">
+              <span class="snap-hash">${s.hash}</span>
+              ${prev ? snapDelta(prev, s) : ''}
+              <span class="snap-time">${timeAgo(s.timestamp)}</span>
+            </div>
+            <div class="snap-msg">${esc(s.message)}</div>
+            <div class="snap-meta">${s.track_count} tracks @ ${s.bpm}bpm</div>
           </div>
-          <div class="snap-msg">${escapeHtml(s.message)}</div>
-          <div class="snap-meta">${s.track_count} tracks @ ${s.bpm}bpm</div>
-        </div>
-      </div>`;
+        </div>`;
       }).join('') + '</div>';
   } else {
     $('snapshotCount').textContent = '0';
@@ -1907,206 +1981,221 @@ async function loadProject() {
 }
 
 async function loadCues() {
-  // Archived filter loads from separate endpoint
   if (currentFilter === 'archived') {
     const query = currentProject ? '?project=' + encodeURIComponent(currentProject) : '';
     const data = await api('/cues/archived' + query);
-    if (data.error) {
-      $('cueList').innerHTML = '<div class=\"empty-state error\">⚠ Failed to load archived</div>';
-      return;
-    }
+    if (data.error) { $('cueList').innerHTML = '<div class="empty-state">Failed to load</div>'; return; }
     const cues = data.cues || [];
-    if (!cues.length) {
-      $('cueList').innerHTML = '<div class=\"empty-state\">No archived cues.</div>';
-      return;
-    }
-    $('cueList').innerHTML = cues.map(c => `
-      <div class="cue-card status-archived">
-        <div class="cue-card-header">
-          <span class="cue-position">@${escapeHtml(c.position)}</span>
-          <span class="cue-meta">${c.time_str}</span>
-        </div>
-        <div class="cue-text">${escapeHtml(c.text)}</div>
-        <div class="cue-muted">📦 Archived</div>
+    if (!cues.length) { $('cueList').innerHTML = '<div class="empty-state">No archived cues</div>'; return; }
+    $('cueList').innerHTML = cues.map(c => `<div class="cue-card">
+      <div class="cue-card-header">
+        <span class="cue-position">@${esc(c.position)}</span>
+        <span class="cue-meta">${c.time_str}</span>
       </div>
-    `).join('');
+      <div class="cue-text">${esc(c.text)}</div>
+    </div>`).join('');
     return;
   }
 
   let url = '/cues?pending_only=' + (currentFilter === 'pending' ? 'true' : 'false');
   if (currentProject) url += '&name=' + encodeURIComponent(currentProject);
   const data = await api(url);
-  if (data.error) {
-    $('cueList').innerHTML = '<div class="empty-state error">⚠ Failed to load cues</div>';
-    return;
-  }
+  if (data.error) { $('cueList').innerHTML = '<div class="empty-state">Failed to load</div>'; return; }
 
   let cues = data.cues || [];
   if (currentFilter !== 'all' && currentFilter !== 'pending') {
     cues = cues.filter(c => c.status === currentFilter);
   }
 
+  $('cueCount').textContent = cues.length;
+
   if (!cues.length) {
-    $('cueList').innerHTML = '<div class="empty-state">No cues yet. Leave one above.</div>';
+    $('cueList').innerHTML = '<div class="empty-state">No cues yet</div>';
     return;
   }
 
-  $('cueList').innerHTML = cues.map(c => `
-    <div class="cue-card status-${c.status}">
-      <div class="cue-card-header">
-        <span class="cue-position">@${escapeHtml(c.position)}</span>
-        <span class="cue-meta">${c.author} · ${c.time_str}</span>
-      </div>
-      <div class="cue-text">${escapeHtml(c.text)}</div>
-    ${c.track_name ? `<div class="cue-meta" style="margin-top:2px">Track: ${escapeHtml(c.track_name)}</div>` : ''}
-    ${c.assignee ? `<div class="cue-meta" style="margin-top:2px">👤 ${escapeHtml(c.assignee)}${c.in_progress ? ' ▶' : ''}</div>` : ''}
-      <div class="cue-status ${c.status}">${c.status}${c.in_progress ? ' ▶' : ''}</div>
-      ${(c.replies || []).map(r =>
-        `<div class="cue-reply">
-          <span class="reply-author">${escapeHtml(r.author)}:</span>
-          <span class="reply-text">${escapeHtml(r.text)}</span>
-        </div>`
-      ).join('')}
-      <div class="cue-actions">
-        <button class="cue-action-btn" onclick="showReply('${c.id}')">💬 Reply</button>
-        ${c.assignee ? `
-          <button class="cue-action-btn" onclick="assignCue('${c.id}','')">👤 Unassign</button>
-          ${c.in_progress
-            ? `<button class="cue-action-btn" onclick="stopCue('${c.id}')">⏸ Stop</button>`
-            : `<button class="cue-action-btn" onclick="startCue('${c.id}')">▶ Start</button>`
-          }
-        ` : `
-          <button class="cue-action-btn assign-btn" onclick="assignCue('${c.id}')">👤 Assign</button>
-        `}
-        ${c.status === 'pending' ? `
-          <button class="cue-action-btn resolve" onclick="resolveCue('${c.id}')">✅ Resolve</button>
-          <button class="cue-action-btn" onclick="skipCue('${c.id}')">⏭ Skip</button>
-        ` : c.status === 'resolved' ? `
-          <button class="cue-action-btn" onclick="unresolveCue('${c.id}')">↩ Unresolve</button>
-          <button class="cue-action-btn" onclick="archiveCue('${c.id}')">📦 Archive</button>
-        ` : c.status === 'skipped' ? `
-          <button class="cue-action-btn" onclick="unskipCue('${c.id}')">↩ Unskip</button>
-          <button class="cue-action-btn" onclick="archiveCue('${c.id}')">📦 Archive</button>
-        ` : ''}
-        <button class="cue-action-btn delete" onclick="deleteCue('${c.id}')">🗑 Delete</button>
-      </div>
-      <div class="cue-reply-composer" id="reply-${c.id}" style="display:none">
-        <input type="text" id="reply-text-${c.id}" placeholder="Type a reply..." onkeydown="if(event.key==='Enter')postReply('${c.id}')">
-        <button onclick="postReply('${c.id}')">Send</button>
-      </div>
+  $('cueList').innerHTML = cues.map(c => `<div class="cue-card status-${c.status}">
+    <div class="cue-card-header">
+      <span class="cue-position">@${esc(c.position)}</span>
+      <span class="cue-meta">${esc(c.author)} · ${c.time_str}</span>
     </div>
-  `).join('');
+    <div class="cue-text">${esc(c.text)}</div>
+    ${c.track_name ? `<div class="cue-meta">Track: ${esc(c.track_name)}</div>` : ''}
+    ${c.assignee ? `<div class="cue-meta">${esc(c.assignee)}${c.in_progress ? ' ▶' : ''}</div>` : ''}
+    <div class="cue-status ${c.status}">${c.status}${c.in_progress ? ' ▶' : ''}</div>
+    ${(c.replies || []).map(r =>
+      `<div class="cue-reply"><span class="reply-author">${esc(r.author)}:</span> <span class="reply-text">${esc(r.text)}</span></div>`
+    ).join('')}
+    <div class="cue-actions">
+      <button class="cue-action-btn" onclick="showReply('${c.id}')">💬</button>
+      ${c.assignee ? `<button class="cue-action-btn" onclick="assign('${c.id}','')">👤</button>
+        ${c.in_progress ? `<button class="cue-action-btn" onclick="stop('${c.id}')">⏸</button>`
+          : `<button class="cue-action-btn" onclick="start('${c.id}')">▶</button>`}
+      ` : `<button class="cue-action-btn" onclick="assign('${c.id}')">👤</button>`}
+      ${c.status === 'pending' ? `<button class="cue-action-btn resolve" onclick="resolve('${c.id}')">✅</button>
+        <button class="cue-action-btn" onclick="skip('${c.id}')">⏭</button>`
+      : c.status === 'resolved' ? `<button class="cue-action-btn" onclick="unresolve('${c.id}')">↩</button>
+        <button class="cue-action-btn" onclick="archive('${c.id}')">📦</button>`
+      : c.status === 'skipped' ? `<button class="cue-action-btn" onclick="unskip('${c.id}')">↩</button>
+        <button class="cue-action-btn" onclick="archive('${c.id}')">📦</button>` : ''}
+      <button class="cue-action-btn" onclick="del('${c.id}')">🗑</button>
+    </div>
+    <div class="cue-reply-composer" id="reply-${c.id}" style="display:none">
+      <input type="text" id="reply-text-${c.id}" placeholder="Reply..." onkeydown="if(event.key==='Enter')postReply('${c.id}')">
+      <button onclick="postReply('${c.id}')">Send</button>
+    </div>
+  </div>`).join('');
 }
 
-function showReply(cueId) {
-  const el = $('reply-' + cueId);
-  el.style.display = el.style.display === 'none' ? 'flex' : 'none';
-  if (el.style.display === 'flex') {
-    $('reply-text-' + cueId).focus();
-  }
+function showReply(id) {
+  const el = $('reply-' + id);
+  const show = el.style.display === 'none' || !el.style.display;
+  el.style.display = show ? 'flex' : 'none';
+  if (show) $('reply-text-' + id).focus();
 }
 
 async function postCue() {
   const text = $('cueText').value.trim();
-  const position = $('cuePosition').value.trim() || '0.0.0';
   if (!text) return;
-
-  $('cueSendBtn').textContent = '...';
-  const result = await api('/cues', {
+  const position = $('cuePosition').value.trim() || '0.0.0';
+  $('cueSendBtn').textContent = '…';
+  await api('/cues', {
     method: 'POST',
     body: JSON.stringify({ text, position, project_name: currentProject }),
   });
-  $('cueSendBtn').textContent = '+ Cue';
-  if (!result.error) {
-    $('cueText').value = '';
-    $('cuePosition').value = '0.0.0';
-    loadCues();
-  }
+  $('cueSendBtn').textContent = '+';
+  $('cueText').value = '';
+  $('cuePosition').value = '0.0.0';
+  loadCues();
 }
 
-async function postReply(cueId) {
-  const text = $('reply-text-' + cueId).value.trim();
+async function postReply(id) {
+  const text = $('reply-text-' + id).value.trim();
   if (!text) return;
-
-  const query = currentProject ? '?name=' + encodeURIComponent(currentProject) : '';
-  await api('/cues/' + cueId + '/reply' + query, {
-    method: 'POST',
-    body: JSON.stringify({ text }),
-  });
-  $('reply-text-' + cueId).value = '';
-  $('reply-' + cueId).style.display = 'none';
+  const q = currentProject ? '?name=' + encodeURIComponent(currentProject) : '';
+  await api('/cues/' + id + '/reply' + q, { method: 'POST', body: JSON.stringify({ text }) });
+  $('reply-text-' + id).value = '';
+  $('reply-' + id).style.display = 'none';
   loadCues();
 }
 
-async function resolveCue(cueId) {
-  const query = currentProject ? '?name=' + encodeURIComponent(currentProject) : '';
-  await api('/cues/' + cueId + '/resolve' + query, { method: 'POST' });
+async function resolve(id) { await api('/cues/' + id + '/resolve?name=' + encodeURIComponent(currentProject), { method: 'POST' }); loadCues(); }
+async function unresolve(id) { await api('/cues/' + id + '/resolve?name=' + encodeURIComponent(currentProject), { method: 'POST' }); loadCues(); }
+async function skip(id) { await api('/cues/' + id + '/skip?name=' + encodeURIComponent(currentProject), { method: 'POST' }); loadCues(); }
+async function unskip(id) { await api('/cues/' + id + '/skip?name=' + encodeURIComponent(currentProject), { method: 'POST' }); loadCues(); }
+async function del(id) { if (!confirm('Delete?')) return; await api('/cues/' + id + '?project=' + encodeURIComponent(currentProject), { method: 'DELETE' }); loadCues(); }
+async function archive(id) { await api('/cues/' + id + '/archive?project=' + encodeURIComponent(currentProject), { method: 'POST' }); loadCues(); }
+
+async function assign(id, name) {
+  if (!name) { name = prompt('Assign to:'); if (!name) return; }
+  const q = '?project=' + encodeURIComponent(currentProject) + '&name=' + encodeURIComponent(name);
+  await api('/cues/' + id + '/assign' + q, { method: 'POST' });
   loadCues();
 }
 
-async function unresolveCue(cueId) {
-  const query = currentProject ? '?name=' + encodeURIComponent(currentProject) : '';
-  await api('/cues/' + cueId + '/resolve' + query, { method: 'POST' });
-  loadCues();
-}
-
-async function skipCue(cueId) {
-  const query = currentProject ? '?name=' + encodeURIComponent(currentProject) : '';
-  await api('/cues/' + cueId + '/skip' + query, { method: 'POST' });
-  loadCues();
-}
-
-async function unskipCue(cueId) {
-  const query = currentProject ? '?name=' + encodeURIComponent(currentProject) : '';
-  await api('/cues/' + cueId + '/skip' + query, { method: 'POST' });
-  loadCues();
-}
-
-async function assignCue(cueId, presetName) {
-  let name = presetName;
-  if (!name) {
-    name = prompt('Assign cue to:');
-    if (!name) return;
-  }
-  const query = '?project=' + encodeURIComponent(currentProject) + '&name=' + encodeURIComponent(name);
-  if (name) {
-    await api('/cues/' + cueId + '/assign' + query, { method: 'POST' });
-  } else {
-    await api('/cues/' + cueId + '/unassign?project=' + encodeURIComponent(currentProject), { method: 'POST' });
-  }
-  loadCues();
-}
-
-async function startCue(cueId) {
-  const query = '?project=' + encodeURIComponent(currentProject);
-  await api('/cues/' + cueId + '/start' + query, { method: 'POST' });
-  loadCues();
-}
-
-async function stopCue(cueId) {
-  const query = '?project=' + encodeURIComponent(currentProject);
-  await api('/cues/' + cueId + '/stop' + query, { method: 'POST' });
-  loadCues();
-}
-
-async function deleteCue(cueId) {
-  if (!confirm('Delete this cue permanently?')) return;
-  const query = '?project=' + encodeURIComponent(currentProject);
-  await api('/cues/' + cueId + query, { method: 'DELETE' });
-  loadCues();
-}
-
-async function archiveCue(cueId) {
-  const query = '?project=' + encodeURIComponent(currentProject);
-  await api('/cues/' + cueId + '/archive' + query, { method: 'POST' });
-  loadCues();
-}
+async function start(id) { await api('/cues/' + id + '/start?project=' + encodeURIComponent(currentProject), { method: 'POST' }); loadCues(); }
+async function stop(id) { await api('/cues/' + id + '/stop?project=' + encodeURIComponent(currentProject), { method: 'POST' }); loadCues(); }
 
 function setFilter(filter) {
   currentFilter = filter;
-  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-  document.querySelector(`.filter-btn[data-filter="${filter}"]`).classList.add('active');
+  document.querySelectorAll('.filter-chip').forEach(b => b.classList.remove('active'));
+  document.querySelector(`.filter-chip[data-filter="${filter}"]`).classList.add('active');
   loadCues();
+}
+
+// ─── Tab Switching ───
+function switchTab(tab) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelector(`.tab-btn[data-tab="${tab}"]`).classList.add('active');
+  $(`tab-${tab}`).classList.add('active');
+}
+
+// ─── Snapshot Diff ───
+let compareHash = null;
+let compareFullHash = null;
+
+function hideDiff() {
+  $('snapshotDiffPanel').classList.remove('visible');
+  $('diffContent').innerHTML = '';
+}
+
+function clearCompare() {
+  compareHash = null;
+  compareFullHash = null;
+  $('compareBar').classList.remove('visible');
+  document.querySelectorAll('.snapshot-item.compare-selected').forEach(el => el.classList.remove('compare-selected'));
+}
+
+async function showDiff(hash) {
+  $('diffContent').innerHTML = '<div class="diff-loading">Loading...</div>';
+  $('snapshotDiffPanel').classList.add('visible');
+  $('diffTitle').textContent = 'Diff ' + hash;
+
+  const snapData = await api('/snapshots/' + hash + '?name=' + encodeURIComponent(currentProject));
+  if (snapData.error || !snapData.parent) {
+    $('diffContent').innerHTML = '<div class="diff-loading">No parent to compare</div>';
+    return;
+  }
+
+  const url = '/api/projects/compare?before=' + snapData.parent
+    + '&after=' + hash
+    + '&name=' + encodeURIComponent(currentProject);
+  const resp = await fetch(url);
+  if (!resp.ok) { $('diffContent').innerHTML = '<div class="diff-loading">Failed to load diff</div>'; return; }
+  $('diffContent').innerHTML = await resp.text();
+}
+
+async function showCompareDiff(before, after) {
+  $('diffContent').innerHTML = '<div class="diff-loading">Loading...</div>';
+  $('snapshotDiffPanel').classList.add('visible');
+  $('diffTitle').textContent = 'Diff ' + before + ' → ' + after;
+
+  const url = '/api/projects/compare?before=' + before + '&after=' + after + '&name=' + encodeURIComponent(currentProject);
+  const resp = await fetch(url);
+  if (!resp.ok) { $('diffContent').innerHTML = '<div class="diff-loading">Failed</div>'; return; }
+  $('diffContent').innerHTML = await resp.text();
+}
+
+function handleSnapshot(hash, fullHash, event) {
+  if (event.ctrlKey || event.metaKey) {
+    if (!compareHash) {
+      compareHash = hash;
+      compareFullHash = fullHash;
+      event.currentTarget.classList.add('compare-selected');
+      $('compareBar').classList.add('visible');
+      $('compareInfo').textContent = 'Compare: ' + hash;
+    } else if (compareHash === hash) {
+      clearCompare();
+    } else {
+      showCompareDiff(compareHash, hash);
+      clearCompare();
+    }
+  } else {
+    showDiff(hash);
+    // If on mobile, switch to snapshots tab
+    if (window.innerWidth < 768) {
+      switchTab('snapshots');
+    }
+  }
+}
+
+// ─── Project List ───
+async function loadProjectList() {
+  const data = await api('/projects');
+  if (data.error || !data.projects) return;
+  const select = $('projectSwitcher');
+  const val = select.value || currentProject;
+  select.innerHTML = data.projects.map(p =>
+    `<option value="${esc(p.name)}"${p.name === val ? ' selected' : ''}>${esc(p.name)}</option>`
+  ).join('');
+}
+
+function switchProject(name) {
+  currentProject = name;
+  if (name) localStorage.setItem('clavus_project', name);
+  else localStorage.removeItem('clavus_project');
+  loadAll();
 }
 
 async function loadAll() {
@@ -2114,164 +2203,37 @@ async function loadAll() {
 }
 
 async function injectCues() {
-  if (!currentProject) return alert('Select a project first');
+  if (!currentProject) return;
   const result = await api('/projects/inject?name=' + encodeURIComponent(currentProject), { method: 'POST' });
-  if (result.error) return alert('Inject failed: ' + result.error);
-  alert('Injected ' + (result.injected || 0) + ' cue(s) as markers');
 }
 
-async function loadProjectList() {
-  const data = await api('/projects');
-  if (data.error || !data.projects) return;
-  const select = $('projectSwitcher');
-  const currentVal = select.value || currentProject;
-  select.innerHTML = '<option value="">Select project…</option>'
-    + data.projects.map(p =>
-      `<option value="${escapeHtml(p.name)}"${p.name === currentVal ? ' selected' : ''}>${escapeHtml(p.name)}</option>`
-    ).join('');
-}
+// ─── Utilities ───
+function esc(s) { return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
-function switchProject(name) {
-  currentProject = name;
-  if (name) {
-    localStorage.setItem('clavus_project', name);
-  } else {
-    localStorage.removeItem('clavus_project');
-  }
-  loadAll();
-}
-
-function showServerInfo() {
-  const url = window.location.href;
-  const ts = document.getElementById('tailscaleUrl');
-  const info = ts && ts.textContent ? ts.textContent : 'Local only';
-  alert('Clavus Web Companion\\nURL: ' + url + '\\n' + info);
-}
-
-  // ─── Snapshot Compare / Diff ─────────────────────────────────────────
-  let compareHash = null;
-  let compareFullHash = null;
-
-  function hideDiff() {
-    $('snapshotDiffPanel').style.display = 'none';
-    $('diffContent').innerHTML = '';
-  }
-
-  function clearCompare() {
-    compareHash = null;
-    compareFullHash = null;
-    $('compareBar').classList.remove('visible');
-    document.querySelectorAll('.snapshot-item.compare-selected').forEach(el => {
-      el.classList.remove('compare-selected');
-    });
-  }
-
-  async function showDiff(snapHash) {
-    $('diffContent').innerHTML = '<div class="diff-loading">⬤ Loading diff...</div>';
-    $('snapshotDiffPanel').style.display = 'block';
-    $('diffTitle').textContent = 'Diff ' + snapHash;
-
-    // Load snapshot to find its parent
-    const snapData = await api('/snapshots/' + snapHash + '?name=' + encodeURIComponent(currentProject));
-    if (snapData.error || !snapData.parent) {
-      $('diffContent').innerHTML = '<div class="diff-loading">No parent snapshot to compare against</div>';
-      return;
-    }
-
-    // Compare against parent
-    const url = '/api/projects/compare?before=' + snapData.parent
-      + '&after=' + snapHash
-      + '&name=' + encodeURIComponent(currentProject);
-    const resp = await fetch(url);
-    if (!resp.ok) {
-      $('diffContent').innerHTML = '<div class="diff-loading">⚠ Failed to load diff</div>';
-      return;
-    }
-    const html = await resp.text();
-    $('diffContent').innerHTML = html;
-  }
-
-  async function showCompareDiff(beforeHash, afterHash) {
-    $('diffContent').innerHTML = '<div class="diff-loading">⬤ Loading diff...</div>';
-    $('snapshotDiffPanel').style.display = 'block';
-    $('diffTitle').textContent = 'Diff ' + beforeHash + ' → ' + afterHash;
-
-    const url = '/api/projects/compare?before=' + beforeHash
-      + '&after=' + afterHash
-      + '&name=' + encodeURIComponent(currentProject);
-    const resp = await fetch(url);
-    if (!resp.ok) {
-      $('diffContent').innerHTML = '<div class="diff-loading">⚠ Failed to load diff</div>';
-      return;
-    }
-    const html = await resp.text();
-    $('diffContent').innerHTML = html;
-  }
-
-  function handleSnapshotClick(snapHash, snapFullHash, event) {
-    if (event.ctrlKey || event.metaKey) {
-      // Compare mode: first click selects, second click diffs
-      if (!compareHash) {
-        compareHash = snapHash;
-        compareFullHash = snapFullHash;
-        event.currentTarget.classList.add('compare-selected');
-        $('compareBar').classList.add('visible');
-        $('compareInfo').textContent = 'Compare: ' + snapHash + ' — click another snapshot';
-      } else if (compareHash === snapHash) {
-        clearCompare();
-      } else {
-        // Two selected — show diff
-        showCompareDiff(compareHash, snapHash);
-        clearCompare();
-      }
-    } else {
-      // Single click — show diff vs parent
-      showDiff(snapHash);
-    }
-  }
-
-  function escapeHtml(str) {
-  if (!str) return '';
-  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-// Ableton Live 12 color palette (indices 0-119 mapped to visible hex)
 const ABLETON_COLORS = [
   '#e8e8e8','#cc5050','#e88c50','#e8c850','#50cc50','#50cc8c','#50cccc','#508ce8',
   '#8c50e8','#cc50cc','#cc508c','#e8a060','#a0e860','#60e8a0','#60e8e8','#a060e8',
   '#e860cc','#e860a0','#404040','#808080','#b0b0b0','#d08040','#40d080','#6080d0'
 ];
 
-function timeAgo(timestamp) {
-  const diff = Date.now() / 1000 - timestamp;
-  if (diff < 60) return 'now';
-  if (diff < 3600) return Math.floor(diff / 60) + 'm';
-  if (diff < 86400) return Math.floor(diff / 3600) + 'h';
-  if (diff < 604800) return Math.floor(diff / 86400) + 'd';
-  return new Date(timestamp * 1000).toLocaleDateString();
+function timeAgo(ts) {
+  const d = Date.now() / 1000 - ts;
+  if (d < 60) return 'now';
+  if (d < 3600) return Math.floor(d / 60) + 'm';
+  if (d < 86400) return Math.floor(d / 3600) + 'h';
+  if (d < 604800) return Math.floor(d / 86400) + 'd';
+  return new Date(ts * 1000).toLocaleDateString();
 }
 
 function snapDelta(prev, curr) {
   if (!prev) return '';
-  const pClips = (prev.project && prev.project.tracks) ?
-    prev.project.tracks.reduce((s,t) => s + (t.clips ? t.clips.length : 0), 0) : 0;
-  const cClips = (curr.project && curr.project.tracks) ?
-    curr.project.tracks.reduce((s,t) => s + (t.clips ? t.clips.length : 0), 0) : 0;
-  const diff = cClips - pClips;
-  if (diff > 0) return '<span class="snap-delta" style="color:var(--success)">✅ +' + diff + '</span>';
-  if (diff < 0) return '<span class="snap-delta" style="color:var(--danger)">❌ ' + diff + '</span>';
-  return '<span class="snap-delta" style="color:var(--fg-muted)">➡ 0</span>';
+  return '<span class="snap-delta" style="color:var(--fg3)">➡ 0</span>';
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  $('cueText').addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      postCue();
-    }
-  });
+  $('cueText').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); postCue(); } });
   loadAll();
-  setInterval(loadAll, POLL_INTERVAL);
+  setInterval(loadAll, 5000);
 });
 """
 
@@ -2313,11 +2275,24 @@ def run_web_server(host: str = "0.0.0.0", port: int = 7890) -> None:
 
     tailscale_url = _get_tailscale_url(port)
 
-    # Inject Tailscale URL into the HTML
-    if tailscale_url:
+    # Detect LAN IP for phone sharing
+    lan_url = ""
+    try:
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        lan_ip = s.getsockname()[0]
+        s.close()
+        if lan_ip and not lan_ip.startswith("127."):
+            lan_url = f"http://{lan_ip}:{port}"
+    except Exception:
+        pass
+
+    # Inject LAN URL
+    if lan_url:
         index_html = index_html.replace(
-            '<div class="tailscale-url" id="tailscaleUrl"></div>',
-            f'<div class="tailscale-url" id="tailscaleUrl">📡 Tailscale: <code>{tailscale_url}</code></div>'
+            '<div class="lan-url" id="lanUrl"></div>',
+            f'<div class="lan-url" id="lanUrl" style="display:block">📱 Phone: <code>{lan_url}</code></div>'
         )
         path = _HTML_CACHE.get("index.html") or HTML_DIR / "index.html"
         if isinstance(path, str):
@@ -2330,6 +2305,8 @@ def run_web_server(host: str = "0.0.0.0", port: int = 7890) -> None:
     print(f"  🌐  Clavus Web Companion")
     print(f"  {'─' * 40}")
     print(f"  Local:   http://localhost:{port}")
+    if lan_url:
+        print(f"  Phone:   {lan_url}")
     if tailscale_url:
         print(f"  Remote:  {tailscale_url}")
         print(f"  (via Tailscale — share this link)")

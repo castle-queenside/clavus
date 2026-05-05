@@ -54,6 +54,21 @@ ANSI = {
 
 # ─── Clip Color Palette (Ableton-like) ────────────────────────────────
 # Maps Ableton color indices to ANSI colors for clip rendering
+# HTML hex color palette (same as web companion)
+ABLE_COLOR_HEX = [
+    "#e8e8e8", "#cc5050", "#e88c50", "#e8c850", "#50cc50",
+    "#50cc8c", "#50cccc", "#508ce8", "#8c50e8", "#cc50cc",
+    "#cc508c", "#e8a060", "#a0e860", "#60e8a0", "#60e8e8",
+    "#a060e8", "#e860cc", "#e860a0", "#404040", "#808080",
+    "#b0b0b0", "#d08040", "#40d080", "#6080d0",
+]
+
+def _ableton_hex(color_idx: int) -> str:
+    """Map Ableton color index (0-23) to a visible hex color."""
+    if 0 <= color_idx < len(ABLE_COLOR_HEX):
+        return ABLE_COLOR_HEX[color_idx]
+    return "#e8a060"  # Fallback orange
+
 ABLE_COLORS = {
     1: ANSI["blue"],
     2: ANSI["cyan"],
@@ -417,75 +432,176 @@ def render_diff_html(diff: ProjectDiff, before_proj: Project | None = None, afte
     added = [t for t in diff.tracks if t.status == "added"]
     removed = [t for t in diff.tracks if t.status == "removed"]
     modified = [t for t in diff.tracks if t.status == "modified"]
+    unchanged = [t for t in diff.tracks if t.status == "unchanged"]
 
+    # ── Summary stats bar ──
+    total_clips_before = sum(t.clips_before for t in diff.tracks) if before_proj else 0
+    total_clips_after = sum(t.clips_after for t in diff.tracks) if after_proj else 0
+    clip_diff = total_clips_after - total_clips_before
+
+    stats = []
+    if added:
+        stats.append(f'<span style="color:#44cc44;font-weight:bold">+{len(added)}</span>')
+        stats.append(f'<span style="color:#6a8a8a;font-size:0.85em">track{"s" if len(added)!=1 else ""}</span>')
+    if removed:
+        stats.append(f'<span style="color:#ff4444;font-weight:bold">-{len(removed)}</span>')
+        stats.append(f'<span style="color:#6a8a8a;font-size:0.85em">track{"s" if len(removed)!=1 else ""}</span>')
+    if modified:
+        stats.append(f'<span style="color:#d4a030;font-weight:bold">~{len(modified)}</span>')
+        stats.append(f'<span style="color:#6a8a8a;font-size:0.85em">modified</span>')
+    if clip_diff != 0:
+        c = "#44cc44" if clip_diff > 0 else "#ff4444"
+        s = "△+" if clip_diff > 0 else "▽"
+        stats.append(f'<span style="color:{c};font-weight:bold">{s}{abs(clip_diff)}</span>')
+        stats.append(f'<span style="color:#6a8a8a;font-size:0.85em">clips</span>')
+    if diff.bpm_changed:
+        b, a = diff.bpm_changed
+        d = a - b
+        c = "#44cc44" if d > 0 else "#ff4444"
+        s = "▲" if d > 0 else "▼"
+        stats.append(f'<span style="color:{c}">{s}{abs(d):.0f}</span>')
+        stats.append(f'<span style="color:#6a8a8a;font-size:0.85em">bpm</span>')
+    if diff.markers_added or diff.markers_removed:
+        ms = []
+        if diff.markers_added:
+            ms.append(f'<span style="color:#44cc44">+{len(diff.markers_added)} marker{"s" if len(diff.markers_added)!=1 else ""}</span>')
+        if diff.markers_removed:
+            ms.append(f'<span style="color:#ff4444">-{len(diff.markers_removed)} marker{"s" if len(diff.markers_removed)!=1 else ""}</span>')
+        stats.append(f'<span style="color:#6a8a8a;font-size:0.85em">{", ".join(ms)}</span>')
+
+    summary_bar = ""
+    if stats:
+        summary_bar = '<div style="display:flex;gap:4px;align-items:baseline;flex-wrap:wrap;margin-bottom:10px">' + \
+            ' '.join(stats) + '</div>'
+
+    # Build a lookup for track colors from the "after" project
+    track_colors: dict[str, int] = {}
+    if after_proj:
+        for t in after_proj.tracks:
+            track_colors[t.name] = t.color
+
+    # ── Track rows ──
     rows = []
     for td in diff.tracks:
-        color = "#6a8a8a"
-        symbol = " "
-        if td.status == "added":
-            color = "#44cc44"
-            symbol = "+"
-        elif td.status == "removed":
-            color = "#ff4444"
-            symbol = "-"
-        elif td.status == "modified":
-            color = "#d4a030"
-            symbol = "~"
+        if td.status == "unchanged":
+            continue  # Skip unchanged tracks in the compact view
 
+        status_color = "#6a8a8a"
+        status_symbol = " "
+        if td.status == "added":
+            status_color = "#44cc44"
+            status_symbol = "+"
+        elif td.status == "removed":
+            status_color = "#ff4444"
+            status_symbol = "-"
+        elif td.status == "modified":
+            status_color = "#d4a030"
+            status_symbol = "~"
+
+        # Track color bar
+        tc = track_colors.get(td.name, 11)
+        bar_color = _ableton_hex(tc)
+
+        # Status dot
+        dot = f'<span style="color:{status_color};font-size:16px;line-height:1">●</span>'
+
+        # Change details (compact)
         details = ""
         if td.status == "modified":
             parts = []
             if td.devices_added:
-                parts.append(f"+{','.join(td.devices_added[:3])}")
+                short_devices = [d[:20] for d in td.devices_added[:3]]
+                parts.append(f"+{','.join(short_devices)}")
             if td.devices_removed:
-                parts.append(f"-{','.join(td.devices_removed[:3])}")
+                short_devices = [d[:20] for d in td.devices_removed[:3]]
+                parts.append(f"-{','.join(short_devices)}")
             if td.frozen_changed is not None:
                 parts.append("frozen" if td.frozen_changed else "unfrozen")
             if td.mute_changed is not None:
                 parts.append("muted" if td.mute_changed else "unmuted")
             if parts:
-                details = f'<span style="color:{color};font-size:0.8em"> {", ".join(parts)}</span>'
+                details = f'<span style="color:{status_color};font-size:0.8em;opacity:0.8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;max-width:100%"> {", ".join(parts)}</span>'
+
+        # Clip diff badge
+        clip_badge = ""
+        if td.clips_changed and (td.clips_before != td.clips_after):
+            cd = td.clips_after - td.clips_before
+            if cd > 0:
+                clip_badge = f'<span style="color:#44cc44;font-size:0.75em;margin-left:6px">△+{cd}</span>'
+            else:
+                clip_badge = f'<span style="color:#ff4444;font-size:0.75em;margin-left:6px">▽{cd}</span>'
 
         rows.append(
             f'<tr>'
-            f'<td style="color:{color};width:20px">{symbol}</td>'
-            f'<td style="color:#b8c8c8">{td.name}</td>'
-            f'<td style="color:{color}">{td.status}{details}</td>'
+            f'<td style="width:16px;padding:4px 0 4px 4px;vertical-align:middle">{dot}</td>'
+            f'<td style="padding:4px 4px;vertical-align:middle;border-left:3px solid {bar_color}">'
+            f'<span style="color:#b8c8c8">{td.name}</span>{clip_badge}'
+            f'</td>'
+            f'<td style="padding:4px 8px;vertical-align:middle;text-align:right;overflow:hidden">'
+            f'<span style="color:{status_color};font-size:0.8em;text-transform:uppercase;letter-spacing:0.5px">{td.status}</span>'
+            f'{details}'
+            f'</td>'
             f'</tr>'
         )
 
-    marker_html = ""
-    if diff.markers_added or diff.markers_removed:
-        markers = []
-        for m in diff.markers_added:
-            markers.append(f'<span style="color:#1a9e9e">+{m}</span>')
-        for m in diff.markers_removed:
-            markers.append(f'<span style="color:#ff4444">-{m}</span>')
-        marker_html = f'<p style="color:#6a8a8a">Markers: {", ".join(markers)}</p>'
-
-    bpm_html = ""
+    # ── BPM change inline ──
+    bpm_inline = ""
     if diff.bpm_changed:
         b, a = diff.bpm_changed
-        arrow = "→"
-        bpm_html = f'<p style="color:#d4a030">Tempo: {b} {arrow} {a} bpm</p>'
+        if b != a:
+            d = a - b
+            arrow = "→"
+            c = "#44cc44" if d > 0 else "#ff4444"
+            bpm_inline = (
+                f'<div style="margin-top:8px;padding-top:6px;border-top:1px solid #1a3040;'
+                f'display:flex;gap:6px;align-items:center">'
+                f'<span style="color:#6a8a8a;font-size:0.85em">⏱ Tempo</span>'
+                f'<span style="color:#b8c8c8">{b:.0f}</span>'
+                f'<span style="color:#6a8a8a">{arrow}</span>'
+                f'<span style="color:#b8c8c8">{a:.0f} bpm</span>'
+                f'<span style="color:{c};font-size:0.8em">({"▲" if d>0 else "▼"}{abs(d):.0f})</span>'
+                f'</div>'
+            )
+
+    # ── Markers inline ──
+    markers_inline = ""
+    if diff.markers_added or diff.markers_removed:
+        ms = []
+        for m in diff.markers_added:
+            ms.append(f'<span style="color:#44cc44;font-size:0.85em">+{m}</span>')
+        for m in diff.markers_removed:
+            ms.append(f'<span style="color:#ff4444;font-size:0.85em">-{m}</span>')
+        markers_inline = (
+            f'<div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap;align-items:center">'
+            f'<span style="color:#6a8a8a;font-size:0.85em">📍 Markers</span>'
+            f'{", ".join(ms)}'
+            f'</div>'
+        )
+
+    # ── Unchanged count footnote ──
+    unchanged_note = ""
+    if unchanged:
+        unchanged_note = (
+            f'<div style="margin-top:8px;color:#3a5a65;font-size:0.8em;border-top:1px solid #152028;padding-top:6px">'
+            f'… {len(unchanged)} track{"s" if len(unchanged)!=1 else ""} unchanged'
+            f'</div>'
+        )
 
     return f"""
-    <div style="background:#0f1a20;border:1px solid #1a3040;border-radius:4px;padding:12px;font-family:monospace;font-size:13px">
-      <p style="color:#1a9e9e;margin:0 0 8px 0;font-weight:bold">{diff.summary}</p>
-      {bpm_html}
-      <table style="border-collapse:collapse;width:100%">
-        <thead>
-          <tr style="border-bottom:1px solid #1a3040">
-            <th style="width:20px"></th>
-            <th style="text-align:left;color:#6a8a8a;padding:4px 8px">Track</th>
-            <th style="text-align:left;color:#6a8a8a;padding:4px 8px">Change</th>
-          </tr>
-        </thead>
+    <div style="background:#0b1418;border:1px solid #1a3040;border-radius:6px;padding:10px 12px;font-family:monospace;font-size:13px;animation:clavus-fade-in 150ms ease-out;overflow-x:auto;max-width:100%">
+      {summary_bar}
+      <table style="border-collapse:collapse;width:100%;table-layout:fixed">
+        <colgroup>
+          <col style="width:16px">
+          <col style="width:auto;min-width:80px">
+          <col style="width:auto;max-width:50%">
+        </colgroup>
         <tbody>
           {''.join(rows)}
         </tbody>
       </table>
-      {marker_html}
-      {bpm_html}
+      {bpm_inline}
+      {markers_inline}
+      {unchanged_note}
     </div>
     """

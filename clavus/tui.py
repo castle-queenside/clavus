@@ -1135,13 +1135,19 @@ class ClavusApp(App):
 
     def action_cursor_down(self):
         try:
-            self.query_one("#clv", ListView).action_cursor_down()
+            if self.focused and getattr(self.focused, "id", None) == "hlv":
+                self.query_one("#hlv", ListView).action_cursor_down()
+            else:
+                self.query_one("#clv", ListView).action_cursor_down()
         except NoMatches:
             pass
 
     def action_cursor_up(self):
         try:
-            self.query_one("#clv", ListView).action_cursor_up()
+            if self.focused and getattr(self.focused, "id", None) == "hlv":
+                self.query_one("#hlv", ListView).action_cursor_up()
+            else:
+                self.query_one("#clv", ListView).action_cursor_up()
         except NoMatches:
             pass
 
