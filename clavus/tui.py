@@ -531,10 +531,25 @@ class ClavusApp(App):
         self.project = name
         self.connected = True
         self._update_header()
-        await self._do_pull()
+        cues, snaps = await self.api.pull(self.project) if self.project else (None, None)
+        if cues:
+            self.cues = cues
+        if snaps:
+            self.snaps = snaps
+        self.idx = 0
+        self._update_header()
+        self._render()
+        self._update_footer()
         # Restart WebSocket listener for new project
         self._start_ws_listener(name)
-        self._status(f"switched to {name}")
+        # Show result as a temporary label at top of cue list
+        msg = f"  switched to project [bold]{name}[/]  —  {len(self.cues)} cues, {len(self.snaps)} snapshots"
+        try:
+            lv = self.query_one("#clv", ListView)
+            lv.mount(Label(msg, classes="project-list"), before=0)
+            self.set_timer(3.0, lambda: self._clear_project_list())
+        except NoMatches:
+            pass
 
     @work(exclusive=False)
     async def _run_list_projects(self):
@@ -548,9 +563,26 @@ class ClavusApp(App):
             head = p.get("head", "")
             branch = p.get("branch", "main")
             active = " ◀" if name == self.project else ""
-            lines.append(f"{name:30s} @ {head or '(no snaps)':12s} [{branch}]{active}")
-        self._status("projects:\n" + "\n".join(lines))
+            lines.append(f"  {name}  @ {head or '(no snaps)':12s}  [{branch}]{active}")
+        msg = "\n".join(lines)
+        # Show as a temporary log entry so it's visible above the footer
+        try:
+            lv = self.query_one("#clv", ListView)
+            lv.mount(Label(msg, classes="project-list"), before=0)
+            self._status("")
+            self.set_timer(3.0, lambda: self._clear_project_list())
+        except NoMatches:
+            self._status(msg)
         self._show_input("switch_proj", "project name to switch:")
+
+    def _clear_project_list(self):
+        try:
+            lv = self.query_one("#clv", ListView)
+            for c in list(lv.children):
+                if hasattr(c, "classes") and "project-list" in c.classes:
+                    c.remove()
+        except NoMatches:
+            pass
 
     @work(exclusive=False)
     async def _run_init_project(self, path: str):
