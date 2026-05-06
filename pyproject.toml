@@ -12,7 +12,7 @@ requires-python = ">=3.10"
 authors = [
     {name = "castle-queenside", email = "slow_hands@icloud.com"},
 ]
-urls = {Homepage = "https://github.com/slowhands/clavus"}
+urls = {Homepage = "https://github.com/castle-queenside/clavus"}
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: End Users/Desktop",

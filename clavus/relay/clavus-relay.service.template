@@ -13,7 +13,7 @@
 
 [Unit]
 Description=Clavus Relay — Git for Ableton Live
-Documentation=https://github.com/slowhands/clavus
+Documentation=https://github.com/castle-queenside/clavus
 After=network-online.target
 Wants=network-online.target
 

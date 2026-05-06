@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.slowhands.clavus-relay</string>
+    <string>com.castle-queenside.clavus-relay</string>
 
     <key>ProgramArguments</key>
     <array>
