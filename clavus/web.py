@@ -247,6 +247,26 @@ async def init_project(path: str = Query(..., description="Path to .als file or 
     }
 
 
+@app.post("/api/projects/switch")
+async def switch_project(name: str = Query("", description="Project name to activate")):
+    """Switch the active project. Updates _last_project in the index.
+
+    The TUI calls this when the user runs :project <name> so the next
+    TUI launch automatically opens the same project.
+    """
+    import json
+    from clavus.store import BlobStore
+    store = BlobStore()
+    if not name:
+        return JSONResponse({"error": "Missing project name"}, status_code=400)
+    index = json.loads(store.index_path.read_text()) if store.index_path.exists() else {}
+    if name not in index:
+        return JSONResponse({"error": f"Project '{name}' not found"}, status_code=404)
+    index["_last_project"] = name
+    store._write_json(store.index_path, index)
+    return {"status": "ok", "project": name}
+
+
 @app.get("/api/projects/browse")
 async def browse_directory(dir: str = Query("", description="Directory to browse")):
     """Browse a directory for .als files and subdirectories.

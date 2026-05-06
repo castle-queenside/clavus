@@ -121,6 +121,18 @@ class ClavusClient:
             pass
         return []
 
+    async def switch_project(self, name: str) -> bool:
+        """Tell server to switch active project. Returns True on success."""
+        try:
+            r = await self.client.post(
+                f"{self.base_url}/api/projects/switch",
+                params={"name": name},
+                timeout=5,
+            )
+            return r.status_code == 200
+        except Exception:
+            return False
+
     async def init_project(self, path: str) -> Optional[dict]:
         """Register a project from a path. Returns project info or error dict."""
         try:
@@ -611,12 +623,15 @@ class ClavusApp(App):
     @work(exclusive=False)
     async def _run_switch_project(self, name: str):
         self._status(f"switching to {name}...")
+        # Update server's _last_project so TUI auto-launches here next time
+        await self.api.switch_project(name)
         info = await self.api.get_project_info(name)
         if not info:
             self._status(f"project '{name}' not found")
             return
         self.project = name
         self.connected = True
+        self._log_event(f"switched to project '{name}'")
         self._update_header()
         cues, snaps = await self.api.pull(self.project) if self.project else (None, None)
         if cues:
