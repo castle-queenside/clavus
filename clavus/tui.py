@@ -1222,9 +1222,22 @@ class ClavusApp(App):
         self._ws_listener()
 
     def _sort_cues(self, cues: list[Cue]) -> list[Cue]:
-        """Sort cues by timeline position, then by creation timestamp."""
+        """Sort cues by timeline position, then by creation timestamp.
+
+        Handles both position formats:
+          bars.beats.sixteenths (e.g. "5.1.1")
+          bars:beats           (e.g. "3:45")
+        """
         def sort_key(c: Cue) -> tuple:
-            parts = c.position.split(".")
+            pos = c.position or ""
+            if ":" in pos:
+                # bars:beats format
+                parts = pos.split(":")
+                bars = int(parts[0]) if parts[0] else 0
+                beats = int(parts[1]) if len(parts) > 1 and parts[1] else 0
+                return (bars, beats, 0, c.timestamp)
+            # bars.beats.sixteenths format
+            parts = pos.split(".")
             bars = int(parts[0]) if len(parts) > 0 and parts[0] else 0
             beats = int(parts[1]) if len(parts) > 1 and parts[1] else 0
             sixteenths = int(parts[2]) if len(parts) > 2 and parts[2] else 0

@@ -32,11 +32,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-web = [
-    "fastapi",
-    "uvicorn",
-    "websockets",
-]
 sync = [
     "websockets",
 ]
@@ -46,6 +41,3 @@ include = ["clavus*"]
 
 [project.scripts]
 clavus = "clavus.cli:main"
-
-[tool.setuptools.package-data]
-clavus = ["web/*"]

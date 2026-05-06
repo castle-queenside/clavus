@@ -51,13 +51,6 @@ from clavus.sync import (
 )
 
 
-# Optional web server
-try:
-    from clavus.web import run_web_server
-    _HAS_WEB = True
-except ImportError:
-    _HAS_WEB = False
-
 # ─── Commands ──────────────────────────────────────────────────────────
 
 def cmd_repair(args: argparse.Namespace) -> None:
@@ -612,33 +605,17 @@ def cmd_watch(args: argparse.Namespace) -> None:
     )
 
 
-def cmd_serve(args: argparse.Namespace) -> None:
-    """Start the web companion server."""
-    try:
-        from clavus.web import run_web_server
-    except ImportError:
-        print("❌ Web companion requires fastapi and uvicorn.")
-        print("   Install with: pip install fastapi uvicorn")
-        sys.exit(1)
-    cfg = ClavusConfig.load()
-    host = args.host or cfg.host
-    port = args.port or cfg.port
-    run_web_server(host=host, port=port)
-
-
 def cmd_relay(args: argparse.Namespace) -> None:
-    """Start stripped-down relay server for always-on collaboration.
+    """Start the Clavus relay server for collaboration.
 
-    The relay server provides the same HTTP API and WebSocket hub
-    as 'clavus serve', but without HTML template generation, LAN
-    advertising, or TUI support. Designed to run on a VPS, Raspberry
-    Pi, or always-on laptop connected via Tailscale.
+    Provides the HTTP API and WebSocket hub that peers (TUI or CLI)
+    connect to for sync, cues, snapshots, and stem transfer.
+    Designed to run on a VPS, Raspberry Pi, or always-on machine.
 
-    Other Clavus clients connect to the relay using:
-      clavus remote add glassjaw http://<relay-ip>:7890
+    Other Clavus clients connect using:
+      clavus remote add <name> http://<relay-ip>:7890
 
-    The relay auto-discovers and prints its Tailscale IP and LAN IP
-    on startup for easy sharing."""
+    The relay prints its LAN and Tailscale IPs on startup."""
     try:
         from clavus.web import run_relay_server
     except ImportError:
@@ -2081,13 +2058,6 @@ def main():
     p_watch.add_argument("--once", action="store_true",
                         help="Take one snapshot and exit (useful for cron jobs)")
 
-    # Serve (web companion)
-    p_serve = subparsers.add_parser("serve", help="Start the web companion UI")
-    p_serve.add_argument("--host", default=None,
-                        help="Host to bind to (default: from config or 0.0.0.0)")
-    p_serve.add_argument("--port", "-p", type=int, default=None,
-                        help="Port to listen on (default: from config or 7890)")
-
     # Relay (stripped-down always-on server)
     p_relay = subparsers.add_parser("relay", help="Start stripped-down relay server for always-on collaboration")
     p_relay.add_argument("--host", default=None,
@@ -2180,7 +2150,6 @@ def main():
         "diff": cmd_diff,
         "status": cmd_status,
         "watch": cmd_watch,
-        "serve": cmd_serve,
         "relay": cmd_relay,
         "share": cmd_share,
         "join": cmd_join,
