@@ -1,6 +1,6 @@
 # Clavus — Ableton Live Project Collaboration
 
-**Version:** 0.6.0
+**Version:** 0.6.0  **Platforms:** macOS · Windows · Linux
 
 Clavus is a Git-for-Ableton collaboration tool. It parses `.als` files, snapshots project state, tracks threaded comments (cues) pinned to timeline positions, computes visual diffs between versions, and syncs everything over Tailscale or LAN — no cloud, no plugins, no hassle.
 
@@ -105,6 +105,23 @@ clavus/
 ├── SETUP_STEVEN.md       # Windows collaborator guide
 └── pyproject.toml
 ```
+
+## Platform Compatibility
+
+| Platform | Status | Notes |
+|----------|--------|-------|
+| macOS    | ✅ Primary | Tested on Sequoia 15.x, Apple Silicon + Intel |
+| Windows  | ✅ Supported | Windows 10/11, Python 3.10+, Windows Terminal recommended |
+| Linux    | ✅ Supported | For relay server & CLI (Ableton not available natively) |
+
+All core features work on all platforms:
+- TUI (Textual framework)
+- CLI commands
+- Relay server
+- mDNS discovery (zeroconf)
+- Tailscale discovery
+- File polling watcher
+- Git integration
 
 ## What's Stable (May 2026)
 
