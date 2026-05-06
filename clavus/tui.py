@@ -1083,7 +1083,7 @@ class ClavusApp(App):
             static = self.query_one("#share-banner", Static)
             static.update(
                 f"[bold {C['accent']}]🔗 Share code: {code}[/]  "
-                f"[{C['fg2']}]|  Tell your friend to run: clavus join  "
+                f"[{C['dim']}]|  Tell your friend to run: clavus join  "
                 f"|  Or share this URL: http://{self._lan_ip()}:7890[/]"
             )
             static.styles.display = "block"
