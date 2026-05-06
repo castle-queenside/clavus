@@ -13,6 +13,7 @@ import asyncio
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
@@ -418,7 +419,8 @@ class ClavusApp(App):
 
     def __init__(self, url: str = ""):
         super().__init__()
-        self.api = ClavusClient(url or os.environ.get("CLAVUS_SERVER", "http://localhost:7890"))
+        self.server_url = url or os.environ.get("CLAVUS_SERVER", "http://localhost:7890")
+        self.api = ClavusClient(self.server_url)
         self.project: str = ""
         self.connected: bool = False
         self.ws_connected: bool = False
@@ -427,6 +429,7 @@ class ClavusApp(App):
         self.idx: int = 0
         self._input_mode: str = ""  # "reply", "edit", "cue", "cue_pos", ""
         self._pending_cue_text: str = ""
+        self._relay_proc = None  # Subprocess ref for auto-started relay
         from clavus.config import ClavusConfig
         _cfg = ClavusConfig.load()
         self.author = _cfg.author
@@ -1164,6 +1167,31 @@ class ClavusApp(App):
         except Exception:
             return "your-lan-ip"
 
+    def _start_relay(self) -> subprocess.Popen | None:
+        """Start a relay server in the background."""
+        import subprocess
+        port = self._clavus_cfg.port
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, "-m", "clavus", "relay", "--port", str(port)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return proc
+        except Exception as e:
+            self._status(f"failed to start relay: {e}")
+            return None
+
+    def on_exit(self):
+        """Cleanup: kill auto-started relay."""
+        if self._relay_proc and self._relay_proc.poll() is None:
+            self._relay_proc.terminate()
+            try:
+                self._relay_proc.wait(timeout=3)
+            except Exception:
+                self._relay_proc.kill()
+            self._relay_proc = None
+
     @work(exclusive=True)
     async def action_pull(self):
         self._status("pulling...")
@@ -1232,9 +1260,25 @@ class ClavusApp(App):
                 else:
                     self.connected = False
                     self._status("no project — run clavus init or :projects to switch")
-        else:
+        elif os.environ.get("CLAVUS_NO_AUTO_RELAY"):
             self.connected = False
-            self._status("server offline — start clavus serve")
+            self._status("server offline — start clavus relay")
+        else:
+            self._status("server offline — starting relay...")
+            self._relay_proc = self._start_relay()
+            if self._relay_proc:
+                import asyncio
+                for attempt in range(10):
+                    await asyncio.sleep(0.5)
+                    if await self.api.ping():
+                        self._status("relay started, connecting...")
+                        # Re-run connect logic
+                        await self._connect()
+                        return
+                self._status("relay failed to start — run 'clavus relay' manually")
+            else:
+                self.connected = False
+                self._status("server offline — run 'clavus relay'")
 
         self._update_header()
         self._update_footer()
