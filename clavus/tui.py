@@ -377,6 +377,7 @@ class ClavusApp(App):
     #footer.input-mode {{ height: 3; padding: 0; }}
     #footer-keys {{ color: {C['accent']}; }}
     #footer-stats {{ color: {C['muted']}; text-align: right; }}
+    #share-banner {{ display: none; padding: 0 1; background: {C['surface']}; color: {C['muted']}; height: 1; text-style: bold; }}
     #footer-input {{ display: none; width: 100%; height: 3; background: {C['bg']}; border: solid {C['accent']}; color: {C['fg']}; padding: 0 1; }}
     #footer.input-mode #footer-input {{ display: block; }}
     #footer.input-mode #footer-keys {{ display: none; }}
@@ -445,6 +446,7 @@ class ClavusApp(App):
                 id="header",
             )
             yield Container(
+                Static("", id="share-banner"),
                 Container(ListView(id="clv"), id="cues-list"),
                 Container(
                     Static(" History", classes="label"),
@@ -573,8 +575,12 @@ class ClavusApp(App):
             self.action_archive()
         elif cmd in ("delete", "del"):
             self.action_delete_cue()
+        elif cmd == "share":
+            self._run_share()
+        elif cmd == "join":
+            self._run_join(arg)
         elif cmd in ("help", "h", "?"):
-            self._status("commands: project <name>, projects, init <path>, browse [dir], name <you>, inject, restore [hash], snapshot <msg>, archive, delete, help | C=snapshot")
+            self._status("commands: project <name>, projects, init <path>, browse [dir], name <you>, inject, restore [hash], snapshot <msg>, archive, delete, share, join [code], help | C=snapshot")
         else:
             self._status(f"unknown: {cmd}")
 
@@ -1055,6 +1061,141 @@ class ClavusApp(App):
             await self._do_pull()
         else:
             self._status("delete failed")
+
+    def _run_share(self):
+        """Start a share session — prints instructions in the TUI."""
+        from clavus.discovery import generate_share_code
+        from clavus.config import ClavusConfig
+
+        cfg = ClavusConfig.load()
+        code = generate_share_code()
+        hostname = socket.gethostname()
+
+        msg = (
+            f"🔗 Share code: [bold {C['accent']}]{code}[/]  "
+            f"|  Tell a friend: [dim]clavus join[/]  "
+            f"|  Relay info: [dim]clavus relay[/] in another terminal"
+        )
+        self._status(msg)
+        # Also print to cue list as a persistent banner
+        try:
+            static = self.query_one("#share-banner", Static)
+            static.update(
+                f"[bold {C['accent']}]🔗 Share code: {code}[/]  "
+                f"[{C['fg2']}]|  Tell your friend to run: clavus join  "
+                f"|  Or share this URL: http://{self._lan_ip()}:7890[/]"
+            )
+            static.styles.display = "block"
+        except NoMatches:
+            pass
+
+    @staticmethod
+    def _lan_ip() -> str:
+        """Get LAN IP for displaying in share banner."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "your-lan-ip"
+
+    def _run_join(self, code: str = ""):
+        """Scan for share sessions and auto-connect."""
+        self._status("scanning for Clavus share sessions...")
+        try:
+            from clavus.discovery import scan_for_share_codes
+            from clavus.sync import SyncClient
+            from clavus.store import BlobStore, Remote
+            from clavus.sync import save_remotes, load_remotes, pull_from_remote
+            import concurrent.futures
+        except ImportError as e:
+            self._status(f"join failed: missing dependency — {e}")
+            return
+
+        peers = scan_for_share_codes(timeout=3)
+        if not peers:
+            self._status("no Clavus share sessions found — try 'clavus join' in terminal")
+            return
+
+        # Fetch share info from each peer
+        def _get_info(peer):
+            try:
+                client = SyncClient(f"http://{peer.host}:{peer.port}")
+                r = client.client.get(f"http://{peer.host}:{peer.port}/api/share", timeout=5)
+                if r.status_code == 200:
+                    return r.json()
+            except Exception:
+                pass
+            return None
+
+        relay_info = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+            fut_map = {pool.submit(_get_info, p): p for p in peers}
+            for fut in concurrent.futures.as_completed(fut_map, timeout=5):
+                peer = fut_map[fut]
+                try:
+                    info = fut.result()
+                    if info and info.get("share_code"):
+                        relay_info.append((peer, info))
+                except Exception:
+                    continue
+
+        if not relay_info:
+            self._status(f"found {len(peers)} Clavus server(s), none in share mode")
+            return
+
+        # Filter by code if provided
+        if code:
+            code_upper = code.upper()
+            relay_info = [(p, i) for p, i in relay_info if i.get("share_code", "").upper() == code_upper]
+            if not relay_info:
+                self._status(f"no relay found with code '{code}'")
+                return
+
+        # Display results
+        lines = []
+        for peer, info in relay_info:
+            sc = info.get("share_code", "???")
+            author = info.get("author", "?")
+            proj = (info.get("project") or {}).get("name", "?")
+            lines.append(f"[{C['accent']}]#{relay_info.index((peer, info)) + 1}[/]  "
+                         f"[bold]{sc}[/]  {author} — {proj}  "
+                         f"[dim]http://{peer.host}:{peer.port}[/]")
+
+        # Auto-connect if only one
+        if len(relay_info) == 1 or code:
+            peer, info = relay_info[0]
+            sc = info.get("share_code", "???")
+            author = info.get("author", "?")
+            host = peer.host
+            port = peer.port
+            name = info.get("hostname", author).lower().replace(" ", "-")
+
+            store = BlobStore()
+            remotes = load_remotes(store)
+            remotes = [r for r in remotes if r.name != name]
+            remotes.append(Remote(name=name, url=f"http://{host}:{port}"))
+            save_remotes(store, remotes)
+
+            self._status(f"✅ paired with {author} ({sc}) — added remote '{name}'")
+
+            # Try to pull
+            projects = store.list_projects()
+            proj_name = info.get("project", {}).get("name", "")
+            matched = next((p for p in projects if p.name == proj_name), None)
+            if matched:
+                self._status(f"pulling from '{name}'...")
+                result = pull_from_remote(store, matched, Remote(name=name, url=f"http://{host}:{port}"))
+                cues = result.get("cues", 0)
+                snaps = result.get("snapshots", 0)
+                self._status(f"pulled {cues} cues, {snaps} snapshots from {author}")
+            return
+
+        # Multiple — show list and prompt user
+        msg = " | ".join(lines)
+        self._status(msg + "  |  :join <code> to connect")
 
     @work(exclusive=True)
     async def action_pull(self):
