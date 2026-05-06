@@ -10,7 +10,7 @@ readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
 authors = [
-    {name = "Chris Carr", email = "slow_hands@icloud.com"},
+    {name = "castle_queenside", email = "slow_hands@icloud.com"},
 ]
 urls = {Homepage = "https://github.com/slowhands/clavus"}
 classifiers = [
