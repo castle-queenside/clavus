@@ -523,6 +523,246 @@ def cmd_relay(args: argparse.Namespace) -> None:
     run_relay_server(host=host, port=port)
 
 
+def cmd_share(args: argparse.Namespace) -> None:
+    """Start a share session — relay + auto-discovery.
+
+    Starts the relay server with a share code, advertises via mDNS
+    (LAN) and Tailscale API, and waits for someone to connect.
+
+    Your friend runs 'clavus join' and they'll find your relay
+    automatically — they just need to verify the share code matches.
+
+    Works over LAN (same WiFi) or Tailscale (anywhere).
+    """
+    try:
+        from clavus.web import run_relay_server, set_share_code
+    except ImportError:
+        print("❌ Relay server requires fastapi and uvicorn.")
+        print("   Install with: pip install fastapi uvicorn")
+        sys.exit(1)
+
+    from clavus.discovery import generate_share_code
+
+    cfg = ClavusConfig.load()
+    host = args.host or cfg.host
+    port = args.port or cfg.port
+    share_code = generate_share_code()
+
+    print(f"  🎹 Clavus Share")
+    print(f"  {'─' * 40}")
+    print(f"  🔗 Share code: {share_code}")
+    print()
+    print(f"  Tell a friend to run:")
+    print(f"    clavus join")
+    print()
+    print(f"  They'll find you automatically if:")
+    print(f"    • Same WiFi (LAN broadcast)")
+    print(f"    • Connected to the same Tailscale network")
+    print(f"  {'─' * 40}")
+    print()
+
+    # Start mDNS advertising with share code
+    try:
+        from clavus.discovery import ClavusAdvertiser
+        from clavus.store import BlobStore
+
+        store = BlobStore()
+        projects = store.list_projects()
+        proj_name = projects[0].name if projects else ""
+
+        advertiser = ClavusAdvertiser()
+        advertiser.start(
+            port=port,
+            project=proj_name,
+            user=cfg.author,
+            version="0.6.0",
+            share_code=share_code,
+        )
+    except ImportError:
+        advertiser = None
+        print("  ⚠️  LAN advertising unavailable (install zeroconf)")
+    except Exception as e:
+        advertiser = None
+        print(f"  ⚠️  LAN advertising failed: {e}")
+
+    # Start relay (this blocks)
+    try:
+        run_relay_server(host=host, port=port, share_code=share_code)
+    finally:
+        if advertiser:
+            advertiser.stop()
+
+
+def cmd_join(args: argparse.Namespace) -> None:
+    """Discover and connect to a Clavus share session.
+
+    Scans the LAN (mDNS) and Tailscale tailnet for active Clavus
+    relays in share mode. Displays their share codes so you can
+    verify with the sharer, then auto-configures the remote and
+    pulls down their project.
+
+    If a share code is provided, auto-connects to the first
+    matching relay.
+    """
+    from clavus.discovery import scan_for_share_codes
+
+    timeout = args.timeout
+
+    # Determine scan modes
+    scan_tailscale = not args.lan  # Default: on. Off if --lan is set.
+    scan_lan = not args.tailscale  # Default: on. Off if --tailscale is set.
+
+    if not scan_tailscale and not scan_lan:
+        print("❌ Can't use both --lan and --tailscale (that's the default)")
+        return
+
+    scan_label = []
+    if scan_lan: scan_label.append("LAN")
+    if scan_tailscale: scan_label.append("Tailscale")
+
+    if args.code:
+        print(f"🔍 Looking for relay with code '{args.code}'...")
+    else:
+        print(f"🔍 Scanning for Clavus share sessions...")
+
+    peers = scan_for_share_codes(
+        timeout=timeout,
+        scan_tailscale=scan_tailscale,
+        scan_lan=scan_lan,
+    )
+
+    if not peers:
+        print()
+        print("  No Clavus relays found.")
+        print()
+        print("  Make sure:")
+        print("    • The other person is running 'clavus share'")
+        print("    • You're on the same WiFi (LAN)")
+        print("    • Or you're both connected to Tailscale")
+        print()
+        print("  To scan only one method:")
+        print("    clavus join --lan       (scan LAN only)")
+        print("    clavus join --tailscale (scan Tailscale only)")
+        return
+
+    # Try to get share codes by hitting their /api/share endpoint
+    from clavus.sync import SyncClient
+    import concurrent.futures
+
+    def _get_share_info(peer):
+        try:
+            client = SyncClient(f"http://{peer.host}:{peer.port}")
+            r = client.client.get(
+                f"http://{peer.host}:{peer.port}/api/share",
+                timeout=5,
+            )
+            if r.status_code == 200:
+                return r.json()
+        except Exception:
+            pass
+        return None
+
+    relay_info = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+        fut_map = {pool.submit(_get_share_info, p): p for p in peers}
+        for fut in concurrent.futures.as_completed(fut_map, timeout=timeout + 2):
+            peer = fut_map[fut]
+            try:
+                info = fut.result()
+                if info and info.get("share_code"):
+                    relay_info.append((peer, info))
+            except Exception:
+                continue
+
+    if not relay_info:
+        print()
+        print(f"  Found {len(peers)} Clavus server(s), but none in share mode.")
+        print()
+        print("  The other person needs to run 'clavus share' instead")
+        print("  of 'clavus relay' or 'clavus serve'.")
+        return
+
+    # Filter by code if specified
+    if args.code:
+        code_upper = args.code.upper()
+        relay_info = [
+            (p, info) for p, info in relay_info
+            if info.get("share_code", "").upper() == code_upper
+        ]
+        if not relay_info:
+            print(f"  ❌ No relay found with code '{args.code}'")
+            return
+
+    print()
+    print(f"  Found {len(relay_info)} share session(s):")
+    print()
+
+    for peer, info in relay_info:
+        code = info.get("share_code", "???")
+        author = info.get("author", "?")
+        project = info.get("project", {})
+        proj_name = project.get("name", "?") if project else "?"
+        host = peer.host
+        port = peer.port
+        print(f"  #{relay_info.index((peer, info)) + 1}")
+        print(f"    Code:    {code}")
+        print(f"    Host:    {author} — {proj_name}")
+        print(f"    URL:     http://{host}:{port}")
+        print()
+
+    # Auto-connect if only one found, or if code was specified
+    if len(relay_info) == 1 or args.code:
+        peer, info = relay_info[0]
+        code = info.get("share_code", "???")
+        author = info.get("author", "?")
+        host = peer.host
+        port = peer.port
+
+        print(f"  Connecting to '{author}' ({code})...")
+
+        # Add remote and pull
+        from clavus.store import BlobStore
+        from clavus.sync import save_remotes, Remote, load_remotes, pull_from_remote, pull_snapshot_blobs
+
+        store = BlobStore()
+        name = info.get("hostname", author).lower().replace(" ", "-")
+
+        remotes = load_remotes(store)
+        # Remove existing remote with same name
+        remotes = [r for r in remotes if r.name != name]
+        remotes.append(Remote(name=name, url=f"http://{host}:{port}"))
+        save_remotes(store, remotes)
+        print(f"  ✅ Remote added: '{name}' (http://{host}:{port})")
+
+        # Try to find and pull into matching project
+        projects = store.list_projects()
+        proj_name = info.get("project", {}).get("name", "")
+        matched_proj = next((p for p in projects if p.name == proj_name), None)
+
+        if matched_proj:
+            print(f"  📥 Pulling from '{name}'...")
+            result = pull_from_remote(store, matched_proj, Remote(name=name, url=f"http://{host}:{port}"))
+            if result.get("cues") or result.get("snapshots"):
+                print(f"     Got {result['cues']} cues, {result['snapshots']} snapshots")
+            # Pull blobs too
+            blob_count = pull_snapshot_blobs(store, matched_proj, Remote(name=name, url=f"http://{host}:{port}"))
+            if blob_count:
+                print(f"     Downloaded {blob_count} blob(s)")
+            print(f"  ✅ Synced with '{author}'")
+        else:
+            print(f"  💡 No matching local project '{proj_name}' found.")
+            print(f"     Run 'clavus pull' after setting up the project.")
+
+        print()
+        print(f"  To sync again: clavus push")
+        print(f"  For live sync: clavus sync")
+    else:
+        # Multiple found — ask which one
+        print(f"  Multiple sessions found. Connect to one:")
+        print(f"    clavus join --code <SHARE-CODE>")
+        print(f"  Or ask your friend for their code.")
+
+
 def cmd_tui(args: argparse.Namespace) -> None:
     """Launch the Textual TUI."""
     try:
@@ -1571,6 +1811,24 @@ def main():
     p_relay.add_argument("--log-file", default="",
                         help="Write logs to file instead of stdout")
 
+    # Share (relay + auto-discovery)
+    p_share = subparsers.add_parser("share", help="Start a share session — relay + auto-discovery")
+    p_share.add_argument("--host", default=None,
+                        help="Host to bind to (default: from config or 0.0.0.0)")
+    p_share.add_argument("--port", "-p", type=int, default=None,
+                        help="Port to listen on (default: from config or 7890)")
+
+    # Join (discover and connect)
+    p_join = subparsers.add_parser("join", help="Discover and connect to a Clavus share session")
+    p_join.add_argument("--code", "-c", default="",
+                       help="Share code to connect to (optional — scans all if omitted)")
+    p_join.add_argument("--timeout", "-t", type=int, default=5,
+                       help="Seconds to scan for (default: 5)")
+    p_join.add_argument("--lan", action="store_true",
+                       help="Scan LAN only (default: LAN + Tailscale)")
+    p_join.add_argument("--tailscale", action="store_true",
+                       help="Scan Tailscale only (default: LAN + Tailscale)")
+
     # TUI (terminal dashboard)
     p_tui = subparsers.add_parser("tui", help="Launch the TUI dashboard")
     p_tui.add_argument("--connect", "-c", default="",
@@ -1629,6 +1887,8 @@ def main():
         "watch": cmd_watch,
         "serve": cmd_serve,
         "relay": cmd_relay,
+        "share": cmd_share,
+        "join": cmd_join,
         "tui": cmd_tui,
         "branch": cmd_branch,
         "checkout": cmd_checkout,

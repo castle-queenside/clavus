@@ -15,6 +15,7 @@ TXT records:
 from __future__ import annotations
 
 import json
+import random
 import socket
 import time
 from dataclasses import dataclass, field
@@ -66,7 +67,7 @@ class ClavusAdvertiser:
         self._zc: Optional[zeroconf.Zeroconf] = None
         self._service: Optional[zeroconf.ServiceInfo] = None
 
-    def start(self, port: int, project: str = "", user: str = "", version: str = ""):
+    def start(self, port: int, project: str = "", user: str = "", version: str = "", share_code: str = ""):
         """Start advertising this Clavus server on the network.
 
         Args:
@@ -74,6 +75,7 @@ class ClavusAdvertiser:
             project: Name of the active project
             user: Author name from config
             version: Clavus version string
+            share_code: Optional share code for clavus share/join flow
         """
         if self._zc:
             return  # Already advertising
@@ -84,6 +86,8 @@ class ClavusAdvertiser:
             "user": user or "anonymous",
             "version": version or "0.5.0",
         }
+        if share_code:
+            txt["share"] = share_code
         txt_bytes = {k: v.encode("utf-8") for k, v in txt.items()}
 
         # Get hostname
@@ -112,7 +116,7 @@ class ClavusAdvertiser:
         self._zc.register_service(self._service)
         print(f"📡 Advertising clavus on LAN: {hostname}:{port} ({project or 'no project'})")
 
-    def update(self, project: str = "", user: str = "", version: str = ""):
+    def update(self, project: str = "", user: str = "", version: str = "", share_code: str = ""):
         """Update TXT records (e.g., when project changes)."""
         if not self._zc or not self._service:
             return
@@ -122,6 +126,8 @@ class ClavusAdvertiser:
             "user": user or "anonymous",
             "version": version or "0.5.0",
         }
+        if share_code:
+            txt["share"] = share_code
         self._service.properties = {k: v.encode("utf-8") for k, v in txt.items()}
         try:
             self._zc.unregister_service(self._service)
@@ -217,6 +223,88 @@ def discover_peers(timeout: float = 3.0) -> list[ClavusPeer]:
         zc.close()
 
     return list(listener.peers.values())
+
+
+# ─── Share Codes ───────────────────────────────────────────────────────
+
+
+SHARE_ADJECTIVES = [
+    "BRIGHT", "RAPID", "DEEP", "WILD", "COOL", "FAST", "SOFT", "HOT",
+    "CALM", "DARK", "LIGHT", "FRESH", "BOLD", "WARM", "COLD", "PURE",
+    "GLOW", "ZEN", "RICH", "LOUD", "FLAT", "JAZZ", "FUNK", "GROOVE",
+]
+
+SHARE_NOUNS = [
+    "DUCK", "FISH", "WOLF", "BEAR", "OWL", "FOX", "ELK", "HARE",
+    "MOON", "STAR", "WAVE", "TREE", "ROCK", "FIRE", "MIST", "SUN",
+    "NOTE", "BEAT", "RIFT", "LOOP", "BASS", "DRUM", "HORN", "KEY",
+]
+
+SHARE_COLORS = [
+    "RED", "BLUE", "TEA", "GOLD", "LIME", "ROSE", "ICE", "TEAL",
+]
+
+
+def generate_share_code() -> str:
+    """Generate a human-friendly 3-word share code.
+
+    Format: ADJ-NOUN-NUM (e.g., BRIGHT-DUCK-7, WARM-LOOP-3)
+    The words are chosen so they're easy to say over voice/chat.
+    The number adds enough entropy to avoid collisions in small groups.
+    """
+    adj = random.choice(SHARE_ADJECTIVES)
+    noun = random.choice(SHARE_NOUNS)
+    num = random.randint(1, 9)
+    return f"{adj}-{noun}-{num}"
+
+
+def scan_for_share_codes(
+    timeout: float = 5.0,
+    scan_tailscale: bool = True,
+    scan_lan: bool = True,
+) -> list[ClavusPeer]:
+    """Scan LAN and/or Tailscale for Clavus relays with share codes.
+
+    Each peer's project field may contain a share code in the format
+    ADJ-NOUN-NUM if it's in share mode. The user can match visually.
+
+    Args:
+        timeout: Max seconds for the full scan
+        scan_tailscale: Whether to scan Tailscale tailnet
+        scan_lan: Whether to scan LAN via mDNS
+
+    Returns:
+        List of discovered ClavusPeer objects
+    """
+    import concurrent.futures
+    all_peers: list[ClavusPeer] = []
+
+    def _scan_lan():
+        try:
+            return discover_peers(timeout=timeout)
+        except Exception:
+            return []
+
+    def _scan_tailscale():
+        try:
+            return discover_tailscale_peers(timeout=timeout)
+        except Exception:
+            return []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        futures = []
+        if scan_lan:
+            futures.append(pool.submit(_scan_lan))
+        if scan_tailscale:
+            futures.append(pool.submit(_scan_tailscale))
+
+        for fut in concurrent.futures.as_completed(futures, timeout=timeout + 2):
+            try:
+                all_peers.extend(fut.result())
+            except Exception:
+                pass
+
+    return all_peers
 
 
 # ─── Tailscale Discovery ───────────────────────────────────────────────

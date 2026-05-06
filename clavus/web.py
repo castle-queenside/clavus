@@ -1238,6 +1238,39 @@ async def get_blob(blob_hash: str):
 
 # ─── Web UI: Main page ──────────────────────────────────────────────────
 
+# In-memory share state (set by relay on startup)
+_SHARE_CODE: str = ""
+
+def set_share_code(code: str) -> None:
+    global _SHARE_CODE
+    _SHARE_CODE = code
+
+
+@app.get("/api/share")
+async def get_share_info():
+    """Return share info for clavus join discovery.
+
+    Returns the current share code, project info, and author.
+    """
+    import socket
+    store = BlobStore()
+    projects = store.list_projects()
+    proj_info = None
+    if projects:
+        p = projects[0]
+        proj_info = {"name": p.name, "head": p.head[:8] if p.head else None}
+
+    from clavus.config import ClavusConfig
+    cfg = ClavusConfig.load()
+
+    return {
+        "share_code": _SHARE_CODE,
+        "author": cfg.author or "",
+        "project": proj_info,
+        "version": "0.6.0",
+        "hostname": socket.gethostname(),
+    }
+
 @app.get("/api/m4l/status")
 async def m4l_status(name: str = Query("", description="Project name")):
     """Lightweight status endpoint for M4L device.
@@ -2433,14 +2466,19 @@ def run_web_server(host: str = "0.0.0.0", port: int = 7890) -> None:
         pass
 
 
-def run_relay_server(host: str = "0.0.0.0", port: int = 7890) -> None:
+def run_relay_server(host: str = "0.0.0.0", port: int = 7890, share_code: str = "") -> None:
     """Run stripped-down relay server — no HTML, no mDNS, just API + WebSocket.
 
     The relay is an always-on version of the web companion designed to run
     on a VPS, Raspberry Pi, or old laptop. It serves the same API routes
     and WebSocket hub, without the TUI, HTML template generation, or LAN
     advertising. Perfect for Tailscale deployment.
+
+    If share_code is provided, it's exposed via /api/share for the
+    clavus share/join discovery flow.
     """
+    if share_code:
+        set_share_code(share_code)
     tailscale_url = _get_tailscale_url(port)
 
     # Detect LAN IP
@@ -2468,6 +2506,10 @@ def run_relay_server(host: str = "0.0.0.0", port: int = 7890) -> None:
         print(f"  (via Tailscale — share this URL with collaborators)")
     else:
         print(f"  No Tailscale detected — install for remote access.")
+    if share_code:
+        print(f"  {'─' * 40}")
+        print(f"  🔗 Share code: {share_code}")
+        print(f"  Tell a friend to run: clavus join")
     print(f"  {'─' * 40}")
     print()
     print(f"  Press Ctrl+C to stop.")
