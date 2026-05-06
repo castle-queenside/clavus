@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
-"""Test the threaded cue system end-to-end."""
-import sys, os, shutil
+"""Test the threaded cue system end-to-end. Self-contained, uses temp dirs."""
+import sys, os, shutil, tempfile, time
+from pathlib import Path
+
+# Use isolated temp dir — never touch real ~/.clavus
+_TEST_CLAVUS_DIR = Path(tempfile.mkdtemp(suffix="_clavus_test"))
+
 sys.path.insert(0, os.path.expanduser("~/Developer/clavus"))
 
-# Clean state
-shutil.rmtree(os.path.expanduser("~/.clavus"), ignore_errors=True)
-
 from clavus.cues import CueStore, CueFilter, format_cue, format_cue_list
-from clavus.store import BlobStore
+from clavus.store import BlobStore, ClavusProject
 
 # Init store with a project name
-store = BlobStore()
+store = BlobStore(_TEST_CLAVUS_DIR)
 store.init()
 
-# Create a project entry
-from clavus.store import ClavusProject
-import time
 proj = ClavusProject(
     name="Space Race Test",
     root_als="/tmp/test.als",
@@ -89,8 +88,9 @@ old_cue = {
     "snapshot_hash": "", "track_name": "",
     "replies": [],
 }
-old_path = os.path.expanduser("~/.clavus/cues/Space Race Test/oldformat001.json")
-os.makedirs(os.path.dirname(old_path), exist_ok=True)
+cues_dir = _TEST_CLAVUS_DIR / "cues" / "Space Race Test"
+cues_dir.mkdir(parents=True, exist_ok=True)
+old_path = cues_dir / "oldformat001.json"
 with open(old_path, "w") as f:
     json.dump(old_cue, f)
 loaded = cues.get_cue("oldformat001")
@@ -121,7 +121,7 @@ print("\n═══ 10. Render cues to Ableton markers ═══")
 from clavus.cues import render_cues_as_markers
 # Re-add a pending cue so there's something to render
 c7 = cues.add_cue("marker test cue", "4.1.1")
-output = render_cues_as_markers(cues.list_cues(CueFilter(status="pending")), "/tmp/cue_export.xml")
+output = render_cues_as_markers(cues.list_cues(CueFilter(status="pending")), f"{_TEST_CLAVUS_DIR}/cue_export.xml")
 print(f"  Exported to {output}")
 if output:
     with open(output) as f:
@@ -130,4 +130,6 @@ if output:
 print("\n═══ 11. Count unresolved ═══")
 print(f"  Unresolved: {cues.count_unresolved()}")
 
-print("\n✅ All cue system tests passed!")
+# Cleanup
+shutil.rmtree(str(_TEST_CLAVUS_DIR), ignore_errors=True)
+print(f"\n✅ All cue system tests passed! (cleaned up {_TEST_CLAVUS_DIR})")
