@@ -530,6 +530,15 @@ class ClavusApp(App):
         if self._input_mode:
             self._hide_input()
             self._focus_cues()
+        else:
+            # Dismiss the share banner if visible
+            try:
+                banner = self.query_one("#share-banner", Static)
+                if banner.styles.display != "none":
+                    banner.styles.display = "none"
+                    self._status("share banner dismissed")
+            except NoMatches:
+                pass
 
     # ─── Command mode ──────────────────────────────────────────────────
 
