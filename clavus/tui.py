@@ -1302,24 +1302,30 @@ class ClavusApp(App):
         self._update_footer()
 
     async def _do_connect(self):
-        """Core connection logic: load project, pull cues, start WS listener."""
+        """Core connection logic: load project, pull cues, start WS listener.
+
+        Auto-selects the last edited project if available, or the first
+        project in the store. Falls back gracefully if no projects exist.
+        """
         self._status("connected, loading project...")
+        projects = await self.api.list_projects()
+        if not projects:
+            self.connected = False
+            self._status("no project — run clavus init or :projects to switch")
+            self._update_header()
+            self._update_footer()
+            return
+
+        # Try _last_project from server, fall back to first available
         info = await self.api.get_project()
-        if info:
-            self.project = info.get("name", "")
-            self.connected = True
-            self._status(f"project: {self.project}")
+        target = info.get("name", "") if info else ""
+        if target and any(p.get("name") == target for p in projects):
+            self.project = target
         else:
-            # Fallback: list all projects and auto-select the first one
-            projects = await self.api.list_projects()
-            if projects:
-                first = projects[0]
-                self.project = first.get("name", "")
-                self.connected = True
-                self._status(f"project: {self.project}")
-            else:
-                self.connected = False
-                self._status("no project — run clavus init or :projects to switch")
+            self.project = projects[0].get("name", "")
+
+        self.connected = True
+        self._status(f"project: {self.project}")
 
         self._update_header()
         self._update_footer()
