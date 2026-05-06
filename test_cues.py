@@ -107,9 +107,9 @@ print(f"  🗑 Deleted {c4.id[:10]}")
 # Re-add for archive test
 c5 = cues.add_cue("test archive", "1:23", author="chris")
 cues.resolve(c5.id, note="done")
-dst = cues.archive(c5.id)
-assert dst is not None, "Archive should succeed"
-print(f"  📦 Archived {c5.id[:10]} to {dst.parent.name}/{dst.name}")
+ok = cues.archive(c5.id)
+assert ok, "Archive should succeed"
+print(f"  📦 Archived {c5.id[:10]} (status→archived)")
 
 # Test archive_resolved
 c6 = cues.add_cue("another test", "6:00", author="chris")

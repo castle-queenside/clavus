@@ -1466,6 +1466,8 @@ def run_relay_server(host: str = "0.0.0.0", port: int = 7890, share_code: str = 
     """
     if share_code:
         set_share_code(share_code)
+    elif os.environ.get("CLAVUS_SHARE_CODE"):
+        set_share_code(os.environ["CLAVUS_SHARE_CODE"])
     tailscale_url = _get_tailscale_url(port)
 
     # Detect LAN IP

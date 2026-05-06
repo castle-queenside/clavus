@@ -13,6 +13,7 @@ import asyncio
 import hashlib
 import json
 import os
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -1075,15 +1076,35 @@ class ClavusApp(App):
             self._status("delete failed")
 
     def _run_share(self):
-        """Start a share session — shows share code in modal."""
-        import socket
+        """Start a share session — spawn relay + show share code modal."""
         from clavus.discovery import generate_share_code
         from clavus.config import ClavusConfig
+        import subprocess, os, signal
 
         cfg = ClavusConfig.load()
         code = generate_share_code()
         lan_ip = self._lan_ip()
-        self.push_screen(ShareModal(code, lan_ip))
+        port = cfg.port
+
+        # Spawn the relay server as a subprocess with the share code
+        env = os.environ.copy()
+        env["CLAVUS_SHARE_CODE"] = code
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "clavus", "relay", "--port", str(port)],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        def stop_relay():
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+
+        self.push_screen(ShareModal(code, lan_ip, port, stop_relay))
 
     @staticmethod
     def _lan_ip() -> str:
@@ -1492,32 +1513,52 @@ class ShareModal(ModalScreen[None]):
         padding-top: 1;
         text-style: italic;
     }}
+    .share-actions {{
+        padding-top: 1;
+        align: center middle;
+    }}
+    #stop-share {{
+        width: 16;
+    }}
     """
 
     BINDINGS = [
         Binding("escape", "dismiss", "Close"),
     ]
 
-    def __init__(self, code: str, lan_ip: str) -> None:
+    def __init__(self, code: str, lan_ip: str, port: int, stop_cb) -> None:
         super().__init__()
         self.code = code
         self.lan_ip = lan_ip
+        self.port = port
+        self.stop_cb = stop_cb
 
     def compose(self) -> ComposeResult:
         with Vertical(id="share-box"):
-            yield Static("🔗  Share Session", id="share-title")
+            yield Static("🔗  Share Session — relay running", id="share-title")
             yield Static(f"  {self.code}  ", id="share-code")
             yield Static(
                 f"Tell your friend to run:  clavus join",
                 id="share-hint",
             )
             yield Static(
-                f"Or open:  http://{self.lan_ip}:7890",
+                f"Or connect to:  http://{self.lan_ip}:{self.port}",
                 id="share-url",
             )
+            with Horizontal(classes="share-actions"):
+                yield Button("Stop Share", id="stop-share", variant="error")
             yield Static("Esc to close", id="share-footer")
 
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "stop-share":
+            self.action_stop()
+
     def action_dismiss(self) -> None:
+        self.stop_cb()
+        self.dismiss()
+
+    def action_stop(self) -> None:
+        self.stop_cb()
         self.dismiss()
 
 
