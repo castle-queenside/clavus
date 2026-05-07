@@ -162,6 +162,7 @@ class ClavusApp(App):
         self._input_mode: str = ""
         self._pending_cue_text: str = ""
         self._relay_proc = None
+        self._busy: bool = False
         _cfg = ClavusConfig.load()
         self.author = _cfg.author
         self._clavus_cfg = _cfg
@@ -1181,13 +1182,21 @@ class ClavusApp(App):
 
     @work(exclusive=True)
     async def action_pull(self):
-        self._status("pulling...")
-        await self._do_pull()
+        self._busy = True
+        self._status("\u23f3 pulling...")
+        try:
+            await self._do_pull()
+        finally:
+            self._busy = False
 
     @work(exclusive=True)
     async def action_push(self):
-        self._status("pushing...")
-        await self._do_push()
+        self._busy = True
+        self._status("\u23f3 pushing...")
+        try:
+            await self._do_push()
+        finally:
+            self._busy = False
 
     @work(exclusive=True)
     async def action_stem_push(self):
@@ -1328,12 +1337,16 @@ class ClavusApp(App):
                     text = line.decode().strip()
                     if text:
                         self._log_event(text)
-                        self._status(text)
-                        if "\u2705" in text or "\U0001f4c1" in text:
-                            result_line = text
+                        self._status(f"\u23f3 {text}")
             await proc.wait()
-            status = f"pull: {result_line}" if result_line else ("pull complete" if proc.returncode == 0 else f"pull failed (exit {proc.returncode})")
-            self._status(status)
+            if proc.returncode == 0:
+                cue_count = len(self.cues)
+                snap_count = len(self.snaps)
+                self.notify(f"\u2705 {cue_count} cues, {snap_count} snapshots", title="Pull complete")
+                self._status(f"\u2705 pull: {cue_count} cues, {snap_count} snapshots")
+            else:
+                self.notify(f"\u274c Pull failed (exit {proc.returncode})", title="Error", severity="error")
+                self._status(f"\u274c pull failed (exit {proc.returncode})")
             # Refresh local state from disk
             if self.project:
                 self._load_cues_from_disk()
@@ -1372,12 +1385,14 @@ class ClavusApp(App):
                     text = line.decode().strip()
                     if text:
                         self._log_event(text)
-                        self._status(text)
-                        if "\u2705" in text or "\U0001f4e4" in text:
-                            result_line = text
+                        self._status(f"\u23f3 {text}")
             await proc.wait()
-            status = f"push: {result_line}" if result_line else ("push complete" if proc.returncode == 0 else f"push failed (exit {proc.returncode})")
-            self._status(status)
+            if proc.returncode == 0:
+                self.notify("\u2705 Push complete", title="Push complete")
+                self._status("\u2705 push complete")
+            else:
+                self.notify(f"\u274c Push failed (exit {proc.returncode})", title="Error", severity="error")
+                self._status(f"\u274c push failed (exit {proc.returncode})")
         except asyncio.TimeoutError:
             self._status("push timed out")
         except Exception as e:
