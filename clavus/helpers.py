@@ -61,7 +61,9 @@ def get_store_and_project(clavus_dir: str = "") -> tuple[BlobStore, ClavusProjec
     store = BlobStore(store_dir)
     projects = store.list_projects()
     if not projects:
-        print("❌ No Clavus projects found. Run 'clavus init' first.")
+        print("❌ No Clavus projects found.")
+        print("   Pull from a remote:  clavus pull")
+        print("   Or init locally:     clavus init /path/to/project.als")
         sys.exit(1)
 
     # Prefer the last-used project

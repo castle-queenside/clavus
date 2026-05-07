@@ -1671,8 +1671,13 @@ def cmd_remote(args: argparse.Namespace) -> None:
     if args.action == "projects":
         remote_name = args.name
         if not remote_name:
-            print("❌ Specify a remote name: clavus remote projects <name>")
-            return
+            if len(remotes) == 1:
+                remote_name = remotes[0].name
+            else:
+                print("❌ Specify a remote name: clavus remote projects <name>")
+                if remotes:
+                    print(f"   Available: {', '.join(r.name for r in remotes)}")
+                return
         match = next((r for r in remotes if r.name == remote_name), None)
         if not match:
             print(f"❌ Remote '{remote_name}' not found.")
@@ -1705,8 +1710,13 @@ def cmd_remote(args: argparse.Namespace) -> None:
         remote_project = args.url  # Reusing url as optional project name
 
         if not remote_name:
-            print("❌ Specify a remote name: clavus remote pull <name> [project]")
-            return
+            if len(remotes) == 1:
+                remote_name = remotes[0].name
+            else:
+                print("❌ Specify a remote name: clavus remote pull <name> [project]")
+                if remotes:
+                    print(f"   Available: {', '.join(r.name for r in remotes)}")
+                return
 
         match = next((r for r in remotes if r.name == remote_name), None)
         if not match:
@@ -1970,12 +1980,98 @@ def cmd_push(args: argparse.Namespace) -> None:
 
 def cmd_pull(args: argparse.Namespace) -> None:
     """Pull cues and snapshots from remotes."""
-    store, proj = get_store_and_project()
+    from clavus.store import BlobStore
+    store = BlobStore()
+    proj = None
+
+    # Try to load project, but don't fail if none exists
+    try:
+        from clavus.helpers import get_store_and_project
+        import io
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            _, proj = get_store_and_project()
+        except SystemExit:
+            proj = None
+        finally:
+            sys.stdout = old_stdout
+    except Exception:
+        proj = None
+
     remotes = load_remotes(store)
 
     if not remotes:
         print(f"❌ No remotes configured.")
         print(f"   Add one with: clavus remote add <name> <url>")
+        return
+
+    # If no local project, fall through to remote pull
+    if not proj:
+        # Auto-pick remote
+        if args.remote:
+            matches = [r for r in remotes if r.name == args.remote]
+            if not matches:
+                print(f"❌ Remote '{args.remote}' not found.")
+                return
+            remote = matches[0]
+        elif len(remotes) == 1:
+            remote = remotes[0]
+        else:
+            print(f"📡 No local project. Pull one from a remote:")
+            for r in remotes:
+                print(f"   clavus remote pull {r.name}")
+            return
+
+        # Use the remote pull flow
+        from clavus.sync import SyncClient, pull_from_remote, pull_snapshot_blobs
+
+        client = SyncClient(remote.url)
+        try:
+            r = client.client.get(f"{remote.url}/api/projects", timeout=10)
+            if r.status_code != 200:
+                print(f"❌ Could not reach '{remote.name}' at {remote.url}")
+                return
+            projects = r.json().get("projects", [])
+            if not projects:
+                print(f"📡 No projects on '{remote.name}'")
+                return
+
+            if len(projects) == 1:
+                remote_project = projects[0]["name"]
+            else:
+                print(f"📡 Projects on '{remote.name}':")
+                for p in projects:
+                    print(f"  {p.get('name', '?')}")
+                print()
+                print(f"  Pick one: clavus remote pull {remote.name} <name>")
+                return
+
+            print(f"📥 Pulling '{remote_project}' from '{remote.name}'...")
+            from clavus.store import ClavusProject
+            r2 = client.client.get(
+                f"{remote.url}/api/sync/pull",
+                params={"name": remote_project},
+                timeout=30,
+            )
+            if r2.status_code != 200:
+                print(f"❌ Project '{remote_project}' not found on remote.")
+                return
+            data = r2.json()
+            remote_info = data.get("project", {})
+
+            new_proj = ClavusProject(
+                name=remote_project,
+                root_als=remote_info.get("root_als", f"~/{remote_project}/{remote_project}.als"),
+                created_at=time.time(),
+            )
+            store.set_index(new_proj)
+            print(f"   Created local project '{remote_project}'")
+            proj = new_proj
+        finally:
+            client.close()
+
+    if not proj:
         return
 
     # If a remote name is specified, only pull from that one
