@@ -796,6 +796,7 @@ class ClavusApp(App):
         # Re-pull to update cues/snapshots display
         await self._do_pull()
 
+    @work(exclusive=False)
     async def _run_open(self, hash_str: str = ""):
         """Materialize the .als to a usable path and optionally open it."""
         if not self.project:
@@ -831,11 +832,8 @@ class ClavusApp(App):
             self._status("raw .als blob missing — try pulling")
             return
 
-        # Try project root path, fall back to Desktop
-        if proj.root_als and Path(proj.root_als).parent.exists():
-            out = Path(proj.root_als)
-        else:
-            out = Path.home() / "Desktop" / f"{self.project}.als"
+        # Write to Desktop for easy access
+        out = Path.home() / "Desktop" / f"{self.project}.als"
 
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(raw)

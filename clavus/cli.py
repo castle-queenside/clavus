@@ -1991,11 +1991,8 @@ def cmd_open(args: argparse.Namespace) -> None:
     # Determine output path
     if args.output:
         out_path = Path(args.output)
-    elif proj.root_als:
-        out_path = Path(proj.root_als)
     else:
-        desktop = Path.home() / "Desktop"
-        out_path = desktop / f"{proj.name}.als"
+        out_path = Path.home() / "Desktop" / f"{proj.name}.als"
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_bytes(raw_als)
