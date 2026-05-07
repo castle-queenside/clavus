@@ -1146,14 +1146,10 @@ async def sync_push_snapshots(body: SyncPushSnapshotsBody,
         if not snap_hash:
             continue
 
-        # Store snapshot metadata
+        # Store snapshot metadata (always update — fields may change)
         meta_dir = store.objects_dir / snap_hash[:2]
         meta_dir.mkdir(parents=True, exist_ok=True)
         meta_path = meta_dir / f"{snap_hash}.meta"
-
-        # Skip if we already have this snapshot
-        if meta_path.exists():
-            continue
 
         from dataclasses import asdict
         snap = Snapshot(
@@ -1165,6 +1161,7 @@ async def sync_push_snapshots(body: SyncPushSnapshotsBody,
             track_count=s.get("track_count", 0),
             bpm=s.get("bpm", 120.0),
             tags=s.get("tags", []),
+            als_hash=s.get("als_hash", None),
         )
         meta_path.write_text(json.dumps(asdict(snap), indent=2, default=str))
         imported += 1

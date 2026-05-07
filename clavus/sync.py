@@ -404,6 +404,7 @@ def _snapshots_to_dicts(store: BlobStore, proj: ClavusProject) -> list[dict]:
             "project_path": snap.project_path,
             "tags": snap.tags,
             "parent": snap.parent,
+            "als_hash": snap.als_hash,
         })
         if snap.parent == current:
             break
