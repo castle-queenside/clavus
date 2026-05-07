@@ -19,17 +19,13 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-import httpx
-
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Static, Input, ListView, ListItem, Label, Button
-from textual.message import Message
 from textual.css.query import NoMatches
-from textual.worker import WorkerState
 
 # ─── Color Palette (CRUX dark) ──────────────────────────────────────────────
 
@@ -78,284 +74,6 @@ class Snap:
             timestamp=d.get("timestamp", 0.0),
             track_count=d.get("track_count", 0),
         )
-
-# ─── ClavusClient ───────────────────────────────────────────────────────────
-
-class ClavusClient:
-    def __init__(self, base_url: str = "http://localhost:7890"):
-        self.base_url = base_url.rstrip("/")
-        self.client = httpx.AsyncClient(timeout=10.0)
-
-    async def ping(self) -> bool:
-        try:
-            r = await self.client.get(f"{self.base_url}/api/ping")
-            return r.status_code == 200
-        except Exception:
-            return False
-
-    async def get_project_info(self, name: str = "") -> Optional[dict]:
-        try:
-            params = {"name": name} if name else {}
-            r = await self.client.get(f"{self.base_url}/api/project", params=params)
-            if r.status_code == 200:
-                return r.json()
-        except Exception:
-            pass
-        return None
-
-    async def get_project(self) -> Optional[dict]:
-        try:
-            r = await self.client.get(f"{self.base_url}/api/project")
-            if r.status_code == 200:
-                return r.json()
-        except Exception:
-            pass
-        return None
-
-    async def list_projects(self) -> list[dict]:
-        try:
-            r = await self.client.get(f"{self.base_url}/api/projects")
-            if r.status_code == 200:
-                return r.json().get("projects", [])
-        except Exception:
-            pass
-        return []
-
-    async def switch_project(self, name: str) -> bool:
-        """Tell server to switch active project. Returns True on success."""
-        try:
-            r = await self.client.post(
-                f"{self.base_url}/api/projects/switch",
-                params={"name": name},
-                timeout=5,
-            )
-            return r.status_code == 200
-        except Exception:
-            return False
-
-    async def init_project(self, path: str) -> Optional[dict]:
-        """Register a project from a path. Returns project info or error dict."""
-        try:
-            r = await self.client.post(
-                f"{self.base_url}/api/projects/init",
-                params={"path": path},
-                timeout=15,
-            )
-            return r.json()
-        except Exception:
-            return None
-
-    async def browse_dir(self, directory: str = "") -> Optional[dict]:
-        """Browse a directory for .als files. Empty string = home dir."""
-        try:
-            params = {"dir": directory} if directory else {}
-            r = await self.client.get(
-                f"{self.base_url}/api/projects/browse",
-                params=params,
-                timeout=10,
-            )
-            if r.status_code == 200:
-                return r.json()
-        except Exception:
-            pass
-        return None
-
-    async def inject_cues(self, project: str) -> Optional[dict]:
-        """Inject unresolved cues as Ableton markers into the .als file."""
-        try:
-            r = await self.client.post(
-                f"{self.base_url}/api/projects/inject",
-                params={"name": project},
-                timeout=15,
-            )
-            if r.status_code == 200:
-                return r.json()
-        except Exception:
-            pass
-        return None
-
-    async def restore_snapshot(self, project: str, hash: str = "") -> Optional[dict]:
-        """Restore a project's .als from a snapshot backup."""
-        try:
-            params = {"name": project}
-            if hash:
-                params["hash"] = hash
-            r = await self.client.post(
-                f"{self.base_url}/api/projects/restore",
-                params=params,
-                timeout=15,
-            )
-            if r.status_code == 200:
-                return r.json()
-            # Return error dict for non-200
-            try:
-                return r.json()
-            except Exception:
-                return {"error": f"HTTP {r.status_code}"}
-        except Exception as e:
-            return {"error": str(e)}
-
-    async def create_snapshot(self, project: str, message: str, tags: str = "") -> Optional[dict]:
-        """Create a new snapshot of the current project state."""
-        try:
-            params = {"name": project}
-            r = await self.client.post(
-                f"{self.base_url}/api/projects/snapshot",
-                params=params,
-                json={"message": message, "tags": tags},
-                timeout=15,
-            )
-            if r.status_code == 200:
-                return r.json()
-            try:
-                return r.json()
-            except Exception:
-                return {"error": f"HTTP {r.status_code}"}
-        except Exception as e:
-            return {"error": str(e)}
-
-    async def get_visual_diff(self, project: str, hash: str = "") -> Optional[str]:
-        """Get visual diff HTML for a snapshot vs its parent."""
-        try:
-            params = {"name": project}
-            if hash:
-                params["before"] = hash
-            r = await self.client.get(
-                f"{self.base_url}/api/projects/compare",
-                params=params, timeout=15,
-            )
-            if r.status_code == 200:
-                return r.text
-        except Exception:
-            pass
-        return None
-
-    async def pull(self, project: str) -> tuple[list[Cue], list[Snap]]:
-        try:
-            r = await self.client.get(
-                f"{self.base_url}/api/sync/pull",
-                params={"name": project}, timeout=15,
-            )
-            if r.status_code == 200:
-                data = r.json()
-                cues = []
-                fields = {"id","position","text","author","status",
-                          "timestamp","track_name","snapshot_hash",
-                          "assignee","in_progress"}
-                for c in data.get("cues", []):
-                    cue = Cue(**{k: v for k, v in c.items() if k in fields})
-                    cue.replies = [
-                        Reply(id=rr.get("id",""), author=rr.get("author",""),
-                              text=rr.get("text",""), timestamp=rr.get("timestamp",0))
-                        for rr in c.get("replies", [])
-                    ]
-                    cues.append(cue)
-                snaps = [Snap.from_dict(s) for s in data.get("snapshots", [])]
-                return cues, snaps
-        except Exception:
-            pass
-        return [], []
-
-    async def push(self, project: str, cues: list[Cue]) -> bool:
-        try:
-            def to_dict(r):
-                if isinstance(r, dict):
-                    return r
-                return {"id": r.id, "author": r.author, "text": r.text,
-                        "timestamp": r.timestamp}
-            payload = [{"id": c.id, "position": c.position, "text": c.text,
-                        "author": c.author, "status": c.status,
-                        "timestamp": c.timestamp,
-                        "assignee": c.assignee, "in_progress": c.in_progress,
-                        "track_name": c.track_name, "snapshot_hash": c.snapshot_hash,
-                        "replies": [to_dict(r) for r in c.replies]}
-                       for c in cues]
-            r = await self.client.post(
-                f"{self.base_url}/api/sync/push",
-                params={"name": project}, json={"cues": payload}, timeout=15,
-            )
-            return r.status_code == 200
-        except Exception:
-            return False
-
-    async def close(self):
-        await self.client.aclose()
-        if self._ws:
-            try:
-                await self._ws.close()
-            except Exception:
-                pass
-            self._ws = None
-
-    async def archive_cue(self, project: str, cue_id: str) -> bool:
-        """Archive a specific cue via the server API."""
-        try:
-            r = await self.client.post(
-                f"{self.base_url}/api/cues/{cue_id}/archive",
-                params={"name": project}, timeout=10,
-            )
-            return r.status_code == 200
-        except Exception:
-            return False
-
-    async def delete_cue(self, project: str, cue_id: str) -> bool:
-        """Delete a cue permanently via the server API."""
-        try:
-            r = await self.client.delete(
-                f"{self.base_url}/api/cues/{cue_id}",
-                params={"project": project}, timeout=10,
-            )
-            return r.status_code == 200
-        except Exception:
-            return False
-
-    async def archive_resolved(self, project: str) -> int:
-        """Archive all resolved/skipped cues. Returns count."""
-        try:
-            r = await self.client.get(
-                f"{self.base_url}/api/cues/archived",
-                params={"name": project}, timeout=10,
-            )
-            if r.status_code == 200:
-                data = r.json()
-                return len(data.get("cues", []))
-            return 0
-        except Exception:
-            return 0
-
-    # ─── WebSocket listener ────────────────────────────────────────────
-
-    _ws = None  # type: ignore
-
-    async def _ensure_connected(self) -> bool:
-        """Ensure the HTTP client is ready. Return True if ok."""
-        try:
-            await self.client.get(f"{self.base_url}/api/ping")
-            return True
-        except Exception:
-            return False
-
-    async def ws_listen(self, project: str) -> None:
-        """Connect WebSocket and listen for real-time cue events.
-        Yields (event_type, data) tuples. Returns on disconnect/error."""
-        ws_url = self.base_url.replace("http://", "ws://").replace("https://", "wss://")
-        ws_url = f"{ws_url}/ws?project={project}"
-        try:
-            import websockets
-            async with websockets.client.connect(ws_url) as ws:
-                self._ws = ws
-                while True:
-                    msg = await ws.recv()
-                    try:
-                        import json
-                        data = json.loads(msg)
-                        yield data.get("event", ""), data.get("data", {})
-                    except json.JSONDecodeError:
-                        continue
-        except Exception:
-            pass
-        finally:
-            self._ws = None
 
 # ─── App ────────────────────────────────────────────────────────────────────
 
@@ -1490,23 +1208,15 @@ class ClavusApp(App):
     # ─── Persistence ────────────────────────────────────────────────────
 
     def _save(self):
-        """Push changes to server in the background."""
-        self.post_message(SaveRequest())
-
-    @work(exclusive=False, group="save")
-    async def _do_save(self):
+        """Save cues to disk directly."""
         if not self.project or not self._cue_store:
             return
         try:
-            # Save cues to disk via CueStore
             for cue in self.cues:
                 self._cue_store._save_cue(cue)
             self._status("saved")
         except Exception:
             self._status("save failed")
-
-    def on_save_request(self, event: SaveRequest):
-        self._do_save()
 
     # ─── Connection ─────────────────────────────────────────────────────
 
@@ -1885,12 +1595,6 @@ class ClavusApp(App):
                 f"[{C['accent']}]{s.hash}[/] [{C['dim']}]{ts}[/]"
                 f"  [{C['fg']}]{safe_msg}[/]"
             )))
-
-
-# ─── Messages ───────────────────────────────────────────────────────────────
-
-class SaveRequest(Message):
-    pass
 
 
 # ─── Modals ──────────────────────────────────────────────────────────────────

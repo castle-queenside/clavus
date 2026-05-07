@@ -444,47 +444,6 @@ def _resolve_hash(store: BlobStore, proj: ClavusProject, short_hash: str, head: 
     return None
 
 
-@app.get("/api/projects/compare")
-def compare_snapshots(
-    before: str = Query(..., description="Before snapshot hash"),
-    after: str = Query(..., description="After snapshot hash"),
-    name: str = Query("", description="Project name"),
-):
-    """Compare two snapshots and return visual diff HTML."""
-    try:
-        store, proj = _get_project(name)
-    except HTTPException:
-        return JSONResponse({"error": "No clavus project found"}, status_code=404)
-
-    # Resolve short hashes by walking the chain
-    head = store.read_ref("HEAD")
-    before_full = _resolve_hash(store, proj, before, head)
-    after_full = _resolve_hash(store, proj, after, head)
-    if not before_full:
-        return JSONResponse({"error": f"Snapshot '{before}' not found"}, status_code=404)
-    if not after_full:
-        return JSONResponse({"error": f"Snapshot '{after}' not found"}, status_code=404)
-
-    snap_before = store.load_snapshot(before_full)
-    snap_after = store.load_snapshot(after_full)
-    if not snap_before or not snap_after:
-        return JSONResponse({"error": "Failed to load one or both snapshots"}, status_code=404)
-
-    # Build diff from stored project data
-    from clavus.visual_diff import render_diff_html
-
-    proj_before = store.load_project(before_full)
-    proj_after = store.load_project(after_full)
-    if not proj_before or not proj_after:
-        return JSONResponse({"error": "Failed to load project data for one or both snapshots"}, status_code=404)
-
-    diff = diff_projects(proj_before, proj_after)
-
-    html = render_diff_html(diff, before_proj=proj_before, after_proj=proj_after)
-
-    return JSONResponse({"diff": html})
-
-
 @app.get("/api/cues")
 async def get_cues(pending_only: bool = False, name: str = Query("", description="Project name")):
     """List all cues."""
