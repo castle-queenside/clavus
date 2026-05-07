@@ -336,11 +336,8 @@ def pull_snapshot_blobs(
     import base64
     import httpx
 
-    try:
-        # First, pull the remote's snapshot metadata so we know what exists
-        pull_from_remote(store, proj, remote)
-    except Exception:
-        pass
+    # pull_from_remote already called by cmd_pull before us;
+    # we just handle blob downloading.
 
     client = SyncClient(remote.url)
     count = 0
