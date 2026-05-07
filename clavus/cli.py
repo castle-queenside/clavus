@@ -1998,26 +1998,31 @@ def cmd_open(args: argparse.Namespace) -> None:
         out_path = project_dir / f"{project_name}.als"
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_bytes(raw_als)
-    print(f"✅ {project_name}.als → {out_path}")
-    print(f"   Snapshot: {snap.short_hash()} — {snap.message or '(no message)'}")
-    print(f"   {snap.track_count} tracks, {snap.bpm} BPM")
 
-    # Materialize audio samples into the project folder (where Ableton expects them)
+    # Materialize audio samples into the project folder first (so they exist)
+    sample_written = 0
     if snap.sample_hashes:
         base_dir = out_path.parent  # Project folder root
-        written = 0
         for sh in snap.sample_hashes:
             fname = store.get_sample_filename(sh)
             relpath = store.get_sample_relpath(sh) or ""
             if fname and store.has_object(sh):
                 try:
                     store.materialize_sample(sh, base_dir, fname, relpath)
-                    written += 1
+                    sample_written += 1
                 except Exception:
                     pass
-        if written:
-            print(f"   🎵 {written} audio sample{'s' if written != 1 else ''} → {base_dir}")
+
+    # Rewrite .als sample paths to point to local project folder (cross-OS fix)
+    from clavus.parser import rewrite_als_sample_paths
+    raw_als = rewrite_als_sample_paths(raw_als, out_path.parent)
+
+    out_path.write_bytes(raw_als)
+    print(f"✅ {project_name}.als → {out_path}")
+    print(f"   Snapshot: {snap.short_hash()} — {snap.message or '(no message)'}")
+    print(f"   {snap.track_count} tracks, {snap.bpm} BPM")
+    if sample_written:
+        print(f"   🎵 {sample_written} audio sample{'s' if sample_written != 1 else ''} → {base_dir}")
 
     # Launch Ableton
     system = platform.system()

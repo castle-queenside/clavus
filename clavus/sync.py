@@ -483,8 +483,8 @@ def pull_snapshot_blobs(
                             project_dir = Path.home() / "Desktop" / f"{project_name} Project"
                             out = project_dir / f"{project_name}.als"
                         out.parent.mkdir(parents=True, exist_ok=True)
-                        out.write_bytes(raw)
-                        # Also materialize samples into project folder
+
+                        # Materialize samples first
                         if snap.sample_hashes:
                             for sh in snap.sample_hashes:
                                 fname = store.get_sample_filename(sh)
@@ -494,6 +494,11 @@ def pull_snapshot_blobs(
                                         store.materialize_sample(sh, out.parent, fname, relpath)
                                     except Exception:
                                         pass
+
+                        # Rewrite .als paths then write
+                        from clavus.parser import rewrite_als_sample_paths
+                        raw = rewrite_als_sample_paths(raw, out.parent)
+                        out.write_bytes(raw)
         except Exception:
             pass
 

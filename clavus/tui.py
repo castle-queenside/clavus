@@ -838,9 +838,8 @@ class ClavusApp(App):
         out = project_dir / f"{project_name}.als"
 
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_bytes(raw)
 
-        # Materialize audio samples into the project folder (where Ableton expects them)
+        # Materialize audio samples into the project folder first (so they exist)
         sample_count = 0
         if snap.sample_hashes:
             base_dir = out.parent  # Project folder root
@@ -853,6 +852,12 @@ class ClavusApp(App):
                         sample_count += 1
                     except Exception:
                         pass
+
+        # Rewrite .als sample paths to point to local project folder (cross-OS fix)
+        from clavus.parser import rewrite_als_sample_paths
+        raw = rewrite_als_sample_paths(raw, out.parent)
+
+        out.write_bytes(raw)
 
         msg = f"opened {self.project}.als → {out}"
         if sample_count:

@@ -473,3 +473,45 @@ def project_summary(project: Project) -> str:
             lines.append(f"    📍 {m.time}  {m.name}")
 
     return "\n".join(lines)
+
+
+def rewrite_als_sample_paths(raw_als: bytes, project_dir: str | Path) -> bytes:
+    """Rewrite absolute sample paths in a .als file to point to a local project folder.
+
+    Finds all <Path Value="..."/> elements inside <SampleRef> blocks and replaces
+    absolute Mac paths with the corresponding local paths under project_dir.
+    Uses the <RelativePath> value (which already has the correct relative structure)
+    to construct the new path. Returns the modified gzipped .als bytes.
+    """
+    import gzip
+    import re
+    from pathlib import Path
+
+    data = gzip.decompress(raw_als)
+    text = data.decode("utf-8", errors="replace")
+    project_root = str(Path(project_dir).resolve())
+
+    # Find <SampleRef> blocks and rewrite their <Path> elements
+    result_parts = []
+    pos = 0
+    for m in re.finditer(r'<SampleRef>.*?</SampleRef>', text, re.DOTALL):
+        result_parts.append(text[pos:m.start()])
+        block = m.group(0)
+
+        # Replace absolute <Path Value="..."> with local path
+        def path_replacer(pm):
+            old_path = pm.group(1)
+            # Find the corresponding RelativePath in this SampleRef block
+            rel_m = re.search(r'<RelativePath\s+Value="([^"]+)"', block)
+            if rel_m:
+                new_path = str(Path(project_root) / rel_m.group(1))
+                return f'<Path Value="{new_path}"'
+            return pm.group(0)
+
+        block = re.sub(r'<Path\s+Value="([^"]+)"', path_replacer, block)
+        result_parts.append(block)
+        pos = m.end()
+
+    result_parts.append(text[pos:])
+    new_data = "".join(result_parts).encode("utf-8")
+    return gzip.compress(new_data)
