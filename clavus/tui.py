@@ -1261,16 +1261,8 @@ class ClavusApp(App):
         from clavus.sync import load_remotes
         remotes = load_remotes(self.store)
         self._peer_name = remotes[0].name if remotes else ""
-        # Quick ping to check reachability
-        if remotes:
-            try:
-                from clavus.sync import SyncClient
-                client = SyncClient(remotes[0].url)
-                r = client.client.get(f"{remotes[0].url}/api/share", timeout=3)
-                self._peer_reachable = r.status_code == 200
-                client.close()
-            except Exception:
-                self._peer_reachable = False
+        # Assume reachable if we have remotes (verified on first pull/push)
+        self._peer_reachable = bool(remotes)
         self._update_header()
         self._update_footer()
 
