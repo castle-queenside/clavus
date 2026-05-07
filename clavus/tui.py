@@ -832,16 +832,18 @@ class ClavusApp(App):
             self._status("raw .als blob missing — try pulling")
             return
 
-        # Write to Desktop for easy access
-        out = Path.home() / "Desktop" / f"{self.project}.als"
+        # Write to a proper Ableton project folder on Desktop
+        project_name = self.project.replace(" ", " ")
+        project_dir = Path.home() / "Desktop" / f"{project_name} Project"
+        out = project_dir / f"{project_name}.als"
 
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(raw)
 
-        # Materialize audio samples with original directory structure
+        # Materialize audio samples into the project folder (where Ableton expects them)
         sample_count = 0
         if snap.sample_hashes:
-            base_dir = out.parent  # Desktop (where .als lives)
+            base_dir = out.parent  # Project folder root
             for sh in snap.sample_hashes:
                 fname = store.get_sample_filename(sh)
                 relpath = store.get_sample_relpath(sh) or ""

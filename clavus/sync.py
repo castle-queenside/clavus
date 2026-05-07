@@ -466,8 +466,8 @@ def pull_snapshot_blobs(
     finally:
         client.close()
 
-    # Auto-materialize latest .als after blob download
-    if count > 0 and missing_als:
+    # Auto-materialize latest .als + samples into project folder after blob download
+    if count > 0 and (missing_als or missing_samples):
         try:
             head = proj.head
             if head:
@@ -479,9 +479,21 @@ def pull_snapshot_blobs(
                         if proj_ref and proj_ref.root_als:
                             out = Path(proj_ref.root_als)
                         else:
-                            out = Path.home() / "Desktop" / f"{proj.name}.als"
+                            project_name = proj.name.replace(" ", " ")
+                            project_dir = Path.home() / "Desktop" / f"{project_name} Project"
+                            out = project_dir / f"{project_name}.als"
                         out.parent.mkdir(parents=True, exist_ok=True)
                         out.write_bytes(raw)
+                        # Also materialize samples into project folder
+                        if snap.sample_hashes:
+                            for sh in snap.sample_hashes:
+                                fname = store.get_sample_filename(sh)
+                                relpath = store.get_sample_relpath(sh) or ""
+                                if fname and store.has_object(sh):
+                                    try:
+                                        store.materialize_sample(sh, out.parent, fname, relpath)
+                                    except Exception:
+                                        pass
         except Exception:
             pass
 

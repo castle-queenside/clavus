@@ -1988,21 +1988,24 @@ def cmd_open(args: argparse.Namespace) -> None:
         print(f"❌ .als blob missing. Try pulling again to fetch it.")
         sys.exit(1)
 
-    # Determine output path
+    # Determine output path — create a proper Ableton project folder
+    project_name = proj.name.replace(" ", " ")
     if args.output:
         out_path = Path(args.output)
     else:
-        out_path = Path.home() / "Desktop" / f"{proj.name}.als"
+        # Create project folder on Desktop, .als inside it
+        project_dir = Path.home() / "Desktop" / f"{project_name} Project"
+        out_path = project_dir / f"{project_name}.als"
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_bytes(raw_als)
-    print(f"✅ {proj.name}.als → {out_path}")
+    print(f"✅ {project_name}.als → {out_path}")
     print(f"   Snapshot: {snap.short_hash()} — {snap.message or '(no message)'}")
     print(f"   {snap.track_count} tracks, {snap.bpm} BPM")
 
-    # Materialize audio samples with original directory structure
+    # Materialize audio samples into the project folder (where Ableton expects them)
     if snap.sample_hashes:
-        base_dir = out_path.parent  # Desktop (where .als lives)
+        base_dir = out_path.parent  # Project folder root
         written = 0
         for sh in snap.sample_hashes:
             fname = store.get_sample_filename(sh)
