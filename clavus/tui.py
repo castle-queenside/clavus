@@ -1517,7 +1517,7 @@ class ClavusApp(App):
         self._update_footer()
 
         # Load cues from disk
-        await self._load_cues_from_disk()
+        self._load_cues_from_disk()
         # Load snapshots from store
         self._load_snapshots_from_disk()
         self._status(f"{len(self.cues)} cues, {len(self.snaps)} snapshots")
