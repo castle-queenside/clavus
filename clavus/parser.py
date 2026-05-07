@@ -504,8 +504,8 @@ def rewrite_als_sample_paths(raw_als: bytes, project_dir: str | Path) -> bytes:
             # Find the corresponding RelativePath in this SampleRef block
             rel_m = re.search(r'<RelativePath\s+Value="([^"]+)"', block)
             if rel_m:
-                new_path = str(Path(project_root) / rel_m.group(1))
-                return f'<Path Value="{new_path}"'
+                # Use relative path for <Path> too — works cross-OS
+                return f'<Path Value="{rel_m.group(1)}"'
             return pm.group(0)
 
         block = re.sub(r'<Path\s+Value="([^"]+)"', path_replacer, block)
