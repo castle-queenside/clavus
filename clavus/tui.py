@@ -637,11 +637,9 @@ class ClavusApp(App):
         self.connected = True
         self._log_event(f"switched to project '{name}'")
         self._update_header()
-        cues, snaps = await self.api.pull(self.project) if self.project else (None, None)
-        if cues:
-            self.cues = self._sort_cues(cues)
-        if snaps:
-            self.snaps = snaps
+        cues, snaps = await self.api.pull(self.project) if self.project else ([], [])
+        self.cues = self._sort_cues(cues) if cues else []
+        self.snaps = snaps or []
         self.idx = 0
         self._update_header()
         self._render()
