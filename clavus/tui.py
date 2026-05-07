@@ -1506,10 +1506,12 @@ class ClavusApp(App):
         try:
             lv = self.query_one("#clv", ListView)
             if self.idx < len(lv.children):
-                lv.index = self.idx
-                target = lv.children[self.idx]
-                lv.scroll_to_widget(target, animate=False)
-        except (NoMatches, IndexError):
+                # Skip non-ListItem children (temporary banners)
+                if isinstance(lv.children[self.idx], ListItem):
+                    lv.index = self.idx
+                    target = lv.children[self.idx]
+                    lv.scroll_to_widget(target, animate=False)
+        except (NoMatches, IndexError, AssertionError):
             pass
 
     async def _do_push(self):
