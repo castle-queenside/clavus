@@ -1402,14 +1402,11 @@ class ClavusApp(App):
     async def action_pull(self):
         self._status("pulling...")
         await self._do_pull()
-        self._status("pulled")
-        self._log_event("pulled from server")
 
     @work(exclusive=True)
     async def action_push(self):
         self._status("pushing...")
         await self._do_push()
-        self._log_event("pushed to server")
 
     @work(exclusive=True)
     async def action_stem_push(self):
@@ -1583,15 +1580,34 @@ class ClavusApp(App):
         return sorted(cues, key=sort_key)
 
     async def _do_pull(self):
-        if not self.project:
-            return
-        cues, snaps = await self.api.pull(self.project)
-        if cues:
-            self.cues = self._sort_cues(cues)
-        self.snaps = snaps
-        self.idx = min(self.idx, len(self.cues) - 1) if self.cues else 0
-        self._update_header()
-        self._render()
+        """Pull cues + snapshots + blobs from remotes (same as 'clavus pull')."""
+        import asyncio
+        self._status("pulling from remotes...")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, "-m", "clavus", "pull",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+            out = stdout.decode().strip()
+            if out:
+                for line in out.split("\n")[:8]:
+                    self._log_event(line)
+            self._status("pull complete" if proc.returncode == 0 else f"pull failed (exit {proc.returncode})")
+            # Refresh local state
+            if self.project:
+                cues, snaps = await self.api.pull(self.project)
+                if cues:
+                    self.cues = self._sort_cues(cues)
+                self.snaps = snaps
+                self.idx = min(self.idx, len(self.cues) - 1) if self.cues else 0
+                self._update_header()
+                self._render()
+        except asyncio.TimeoutError:
+            self._status("pull timed out")
+        except Exception as e:
+            self._status(f"pull error: {e}")
         # Restore scroll position after re-render
         try:
             lv = self.query_one("#clv", ListView)
@@ -1605,10 +1621,25 @@ class ClavusApp(App):
             pass
 
     async def _do_push(self):
-        if not self.project:
-            return
-        ok = await self.api.push(self.project, self.cues)
-        self._status("pushed" if ok else "push failed")
+        """Push cues + snapshots + blobs to remotes (same as 'clavus push')."""
+        import asyncio
+        self._status("pushing to remotes...")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, "-m", "clavus", "push",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+            out = stdout.decode().strip()
+            if out:
+                for line in out.split("\n")[:6]:
+                    self._log_event(line)
+            self._status("push complete" if proc.returncode == 0 else f"push failed (exit {proc.returncode})")
+        except asyncio.TimeoutError:
+            self._status("push timed out")
+        except Exception as e:
+            self._status(f"push error: {e}")
 
     def _get_cue(self) -> Optional[Cue]:
         if 0 <= self.idx < len(self.cues):
