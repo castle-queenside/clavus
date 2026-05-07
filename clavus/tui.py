@@ -134,6 +134,7 @@ class ClavusApp(App):
         Binding("x", "archive", "Archive"),
         Binding("C", "snapshot", "Snapshot"),
         Binding("d", "diff", "Diff"),
+        Binding("!", "resolve_conflict", "Conflict"),
         Binding("p", "pull", "Pull"),
         Binding("P", "push", "Push"),
         Binding("U", "stem_push", "Stem↑", show=False),
@@ -878,6 +879,76 @@ class ClavusApp(App):
         self._status("resolved" if cue.status == "resolved" else "unresolved")
         self._save()
 
+    def action_resolve_conflict(self):
+        """Resolve a sync conflict on the selected cue — keep local or remote version."""
+        cue = self._get_cue()
+        if not cue or not cue.conflict:
+            self._status("no conflict to resolve")
+            return
+
+        from textual.screen import Screen
+        from textual.widgets import Static, Button, Footer
+        from textual.binding import Binding as ScrBinding
+        from textual.containers import Horizontal, Vertical
+
+        local_ts = time.strftime("%m/%d %H:%M", time.localtime(cue.timestamp)) if cue.timestamp else ""
+        remote_ts = time.strftime("%m/%d %H:%M", time.localtime(cue.conflict["timestamp"])) if cue.conflict.get("timestamp") else ""
+
+        class ConflictScreen(Screen):
+            BINDINGS = [
+                ScrBinding("escape", "dismiss", "Close"),
+                ScrBinding("q", "dismiss", "Close"),
+            ]
+
+            def __init__(self_, parent, cue_):
+                super().__init__()
+                self_._parent = parent
+                self_._cue = cue_
+
+            def compose(self_):
+                c = self_._cue.conflict
+                yield Static(
+                    f"[bold {C['yellow']}]⚠ Sync Conflict[/]\n"
+                    f"  {self_._cue.id[:12]} @{self_._cue.position}\n\n"
+                    f"[{C['green']}]Yours (local)[/] [{C['muted']}]{local_ts}[/]\n"
+                    f"  [{C['fg']}]{self_._cue.text[:80]}[/]\n"
+                    f"  status: [{C['yellow']}]{self_._cue.status}[/]\n\n"
+                    f"[{C['accent']}]Theirs (remote)[/] [{C['muted']}]{remote_ts}[/]\n"
+                    f"  [{C['fg']}]{c['text'][:80]}[/]\n"
+                    f"  status: [{C['yellow']}]{c['status']}[/]  author: {c.get('author', '?')}\n",
+                    id="conflict-info"
+                )
+                with Horizontal(classes="conflict-actions"):
+                    yield Button("Keep Mine", id="keep-mine", variant="primary")
+                    yield Button("Keep Theirs", id="keep-theirs", variant="warning")
+                yield Footer()
+
+            def on_button_pressed(self_, event: Button.Pressed):
+                if event.button.id == "keep-mine":
+                    self_._cue.conflict = None
+                    self_._parent._save()
+                    self_._parent._load_cues_from_disk()
+                    self_._parent._render()
+                    self_._parent._status("kept local version")
+                elif event.button.id == "keep-theirs":
+                    c = self_._cue.conflict
+                    self_._cue.text = c["text"]
+                    self_._cue.status = c["status"]
+                    self_._cue.position = c["position"]
+                    self_._cue.assignee = c.get("assignee", "")
+                    self_._cue.timestamp = c["timestamp"]
+                    self_._cue.conflict = None
+                    self_._parent._save()
+                    self_._parent._load_cues_from_disk()
+                    self_._parent._render()
+                    self_._parent._status("kept remote version")
+                self_.dismiss()
+
+            def action_dismiss(self_):
+                self_.dismiss()
+
+        self.push_screen(ConflictScreen(self, cue))
+
     def action_skip(self):
         cue = self._get_cue()
         if not cue:
@@ -1322,7 +1393,11 @@ class ClavusApp(App):
                     return
                 cues_n = result.get("cues", 0)
                 snaps_n = result.get("snapshots", 0)
-                self._log_event(f"  got {cues_n} cues, {snaps_n} snapshots")
+                conflicts_n = result.get("conflicts", 0)
+                log_msg = f"  got {cues_n} cues, {snaps_n} snapshots"
+                if conflicts_n:
+                    log_msg += f" — ⚠ {conflicts_n} conflict(s)"
+                self._log_event(log_msg)
                 blobs = pull_snapshot_blobs(self.store, proj_index, remote)
                 if blobs:
                     self._log_event(f"  {blobs} blob(s)")
@@ -1514,6 +1589,7 @@ class ClavusApp(App):
                 f"[{C['accent']}]C[/] snap  "
                 f"[{C['accent']}]a[/] assign  "
                 f"[{C['accent']}]x[/] archive  "
+                f"[{C['accent']}]![/] conflict  "
                 f"[{C['accent']}]U[/] stems  "
                 f"[{C['accent']}]q[/] quit  "
                 f"[{C['accent']}]:[/] cmd"
@@ -1555,10 +1631,11 @@ class ClavusApp(App):
             assignee_part = f"  👤 {c.assignee}" if c.assignee else ""
             in_prog = f" [{C['yellow']}]▶[/]" if c.in_progress else ""
             safe_text = c.text[:60].replace("[", "\\[").replace("]", "\\]")
+            conflict_mark = f" [{C['yellow']}]⚠[/]" if c.conflict else ""
             cue_line = (
                 f"  [{color}]{dot}[/] [dim]@{c.position}[/] "
                 f"[{C['fg']}]{safe_text}[/]"
-                f" [{C['muted']}]{c.id[:8]}[/]{rc}"
+                f" [{C['muted']}]{c.id[:8]}[/]{rc}{conflict_mark}"
             )
             lines = [cue_line]
             if assignee_part:

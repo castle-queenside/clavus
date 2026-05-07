@@ -634,6 +634,7 @@ def pull_from_remote(store: BlobStore, proj: ClavusProject, remote: Remote, outp
         cues_store = CueStore(proj.name, store=store)
 
         # Import cues
+        conflict_count = 0
         if cues_count:
             print(f"  📝 Importing {cues_count} cue(s)...")
         for c in data.get("cues", []):
@@ -647,7 +648,9 @@ def pull_from_remote(store: BlobStore, proj: ClavusProject, remote: Remote, outp
                 assignee=c.get("assignee", ""),
                 in_progress=c.get("in_progress", False),
             )
-            cues_store.import_cue(cue)
+            status = cues_store.import_cue(cue)
+            if status == "conflict":
+                conflict_count += 1
 
             # Import replies
             for r in c.get("replies", []):
@@ -661,7 +664,11 @@ def pull_from_remote(store: BlobStore, proj: ClavusProject, remote: Remote, outp
 
         result["cues"] = len(data.get("cues", []))
         if result["cues"]:
-            print(f"  ✅ Imported {result['cues']} cue(s)")
+            msg = f"  ✅ Imported {result['cues']} cue(s)"
+            if conflict_count:
+                msg += f" — ⚠ {conflict_count} conflict(s)"
+            print(msg)
+        result["conflicts"] = conflict_count
 
         # Import snapshots
         snapshots_data = data.get("snapshots", [])

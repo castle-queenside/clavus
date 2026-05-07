@@ -59,6 +59,7 @@ class Cue:
     replies: list[CueReply] = field(default_factory=list)
     assignee: str = ""  # Who is responsible for addressing this cue
     in_progress: bool = False  # Whether someone is actively working on this cue
+    conflict: Optional[dict] = None  # Conflicting remote version: {"text","status","position","assignee","author"} or None
 
     @property
     def is_open(self) -> bool:
@@ -357,16 +358,44 @@ class CueStore:
 
     # ── Sync Import ──
 
-    def import_cue(self, cue: Cue) -> None:
+    def import_cue(self, cue: Cue) -> str:
         """Import a cue from sync.
 
-        If a cue with the same ID already exists and the existing one
-        has a NEWER timestamp, skip (don't overwrite). Otherwise, overwrite.
+        Returns: imported (new/saved), unchanged (same content), conflict (both modified).
         """
         existing = self.get_cue(cue.id)
-        if existing is not None and existing.timestamp > cue.timestamp:
-            return  # existing is newer — don't overwrite
-        self._save_cue(cue)
+        if existing is None:
+            self._save_cue(cue)
+            return "imported"
+
+        # Check if content actually differs
+        key_fields = ["text", "status", "position", "assignee", "in_progress"]
+        remote_fields = {k: getattr(cue, k) for k in key_fields}
+        local_fields = {k: getattr(existing, k) for k in key_fields}
+        if remote_fields == local_fields:
+            return "unchanged"
+
+        # Content differs — who wins?
+        if cue.timestamp > existing.timestamp:
+            # Remote is newer — overwrite local
+            for k in key_fields:
+                setattr(existing, k, getattr(cue, k))
+            existing.timestamp = cue.timestamp
+            existing.conflict = None
+            self._save_cue(existing)
+            return "imported"
+
+        # Local is newer or same age — CONFLICT
+        existing.conflict = {
+            "text": cue.text,
+            "status": cue.status,
+            "position": cue.position,
+            "assignee": cue.assignee,
+            "author": cue.author,
+            "timestamp": cue.timestamp,
+        }
+        self._save_cue(existing)
+        return "conflict"
 
     def import_reply(self, cue_id: str, reply: CueReply) -> bool:
         """Import a reply from sync.
