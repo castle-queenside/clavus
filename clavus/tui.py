@@ -1519,14 +1519,13 @@ class ClavusApp(App):
             sync_part = ""
             if self._last_sync:
                 sync_part = f"  [{C['green']}]{self._last_sync}[/]"
-            # Peer indicator
-            if self._peer_name:
-                if self._peer_reachable:
-                    peer = f"  [bold {C['green']}]\u25cf[/] [bold {C['green']}]{self._peer_name}[/]"
-                else:
-                    peer = f"  [{C['yellow']}]\u25cb[/] [{C['dim']}]{self._peer_name}[/]"
+            # Peer dot
+            if self._peer_name and self._peer_reachable:
+                peer = f"  [bold {C['green']}]\u25cf[/]"
+            elif self._peer_name:
+                peer = f"  [{C['yellow']}]\u25cb[/]"
             else:
-                peer = f"  [{C['dim']}]\u25cb no peer[/]"
+                peer = f"  [{C['dim']}]\u25cb[/]"
             self.query_one("#header-title", Static).update(
                 f"[bold {C['accent']}]~▼~ clavus[/]{proj}{cue_part}{peer}{sync_part}")
         except Exception:
