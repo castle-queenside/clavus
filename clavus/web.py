@@ -1184,12 +1184,21 @@ async def sync_push_snapshots(body: SyncPushSnapshotsBody,
 
     # Update HEAD if we got new snapshots
     if imported > 0:
-        # Use the last pushed snapshot as HEAD if none is set
-        last_snap = body.snapshots[-1]
-        new_head = last_snap.get("full_hash", last_snap.get("hash", ""))
+        # Find the newest snapshot by timestamp (body order is not reliable)
+        newest = max(body.snapshots, key=lambda s: s.get("timestamp", 0))
+        new_head = newest.get("full_hash", newest.get("hash", ""))
         if new_head:
-            store.update_ref("HEAD", new_head)
-            proj.head = new_head
+            # Only update if the relay's HEAD is older (or unset)
+            current_head = store.read_ref("HEAD")
+            current_time = 0
+            if current_head:
+                old_snap = store.load_snapshot(current_head)
+                if old_snap:
+                    current_time = old_snap.timestamp
+            newest_time = newest.get("timestamp", 0)
+            if newest_time > current_time or not current_head:
+                store.update_ref("HEAD", new_head)
+                proj.head = new_head
         store.set_index(proj)
 
     return {"status": "ok", "imported": imported}
