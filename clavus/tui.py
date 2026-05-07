@@ -1327,8 +1327,8 @@ class ClavusApp(App):
         self._status("\u23f3 pulling from remotes...")
         stderr_lines: list[str] = []
         try:
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable, "-m", "clavus", "pull",
+            proc = await asyncio.create_subprocess_shell(
+                "clavus pull",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -1388,8 +1388,8 @@ class ClavusApp(App):
         self._status("\u23f3 pushing to remotes...")
         stderr_lines: list[str] = []
         try:
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable, "-m", "clavus", "push",
+            proc = await asyncio.create_subprocess_shell(
+                "clavus push",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
