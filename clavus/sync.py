@@ -511,6 +511,28 @@ def pull_from_remote(store: BlobStore, proj: ClavusProject, remote: Remote) -> d
 
         result["snapshots"] = len(data.get("snapshots", []))
 
+        # Update HEAD to latest snapshot if we have one and HEAD is empty
+        if result["snapshots"] > 0:
+            current_head = store.read_ref("HEAD")
+            if not current_head:
+                # Find the snapshot with no parent (root) or just use the first one
+                snap_list = data.get("snapshots", [])
+                for s in snap_list:
+                    snap_hash = s.get("full_hash", s.get("hash", ""))
+                    parent = s.get("parent", None)
+                    if not parent or parent == snap_hash:
+                        store.update_ref("HEAD", snap_hash)
+                        proj.head = snap_hash
+                        store.set_index(proj)
+                        break
+                else:
+                    # Fallback: use last snapshot in list
+                    last = snap_list[-1]
+                    last_hash = last.get("full_hash", last.get("hash", ""))
+                    store.update_ref("HEAD", last_hash)
+                    proj.head = last_hash
+                    store.set_index(proj)
+
         remote.last_sync = time.time()
         save_remotes(store, load_remotes(store))
     finally:
