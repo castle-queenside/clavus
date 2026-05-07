@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "clavus"
 version = "0.7.0-beta"
-description = "Git for Ableton — snapshot, diff, sync, and comment on Live projects"
+description = "Snapshot, sync, and collaborate on Ableton Live projects"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"

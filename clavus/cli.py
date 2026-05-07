@@ -2347,7 +2347,7 @@ def cmd_stem_push(args: argparse.Namespace) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Clavus — Git for Ableton Live projects.",
+        description="Clavus — snapshot, sync, and collaborate on Ableton Live projects.",
         prog="clavus",
     )
     parser.add_argument("--clavus-dir", help="Override clavus storage directory")

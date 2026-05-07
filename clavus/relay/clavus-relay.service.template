@@ -12,7 +12,7 @@
 #   journalctl -u clavus-relay -f
 
 [Unit]
-Description=Clavus Relay — Git for Ableton Live
+Description=Clavus Relay — snapshot and sync for Ableton Live
 Documentation=https://github.com/castle-queenside/clavus
 After=network-online.target
 Wants=network-online.target
