@@ -1336,7 +1336,7 @@ class ClavusApp(App):
             result = await asyncio.to_thread(
                 subprocess.run,
                 cmd,
-                capture_output=True, text=True, timeout=300,
+                capture_output=True, text=True, encoding="utf-8", timeout=300,
             )
             # Show output lines as log events
             for line in result.stdout.splitlines():
@@ -1388,7 +1388,7 @@ class ClavusApp(App):
             result = await asyncio.to_thread(
                 subprocess.run,
                 cmd,
-                capture_output=True, text=True, timeout=300,
+                capture_output=True, text=True, encoding="utf-8", timeout=300,
             )
             for line in result.stdout.splitlines():
                 line = line.strip()
