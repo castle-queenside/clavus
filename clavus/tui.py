@@ -84,9 +84,7 @@ class ClavusApp(App):
 
     #main {{ layout: grid; grid-size: 1 3; grid-rows: auto 1fr auto; height: 100%; }}
 
-    #header {{ height: auto; background: {C['surface']}; padding: 0 1; }}
-    #header-title {{ color: {C['accent']}; text-style: bold; }}
-    #header-status {{ color: {C['fg']}; }}
+    #header-title {{ color: {C['accent']}; text-style: bold; background: {C['surface']}; padding: 0 1; }}
 
     #content {{ layout: grid; grid-size: 2 1; grid-columns: 5fr 2fr; height: 100%; }}
 
@@ -182,11 +180,7 @@ class ClavusApp(App):
 
     def compose(self):
         with Container(id="main"):
-            yield Vertical(
-                Static("~▼~ clavus", id="header-title"),
-                Static("connecting...", id="header-status"),
-                id="header",
-            )
+            yield Static("~▼~ clavus", id="header-title")
             yield Container(
                 Static("", id="share-banner"),
                 Static("", id="join-banner"),
@@ -1525,24 +1519,16 @@ class ClavusApp(App):
             sync_part = ""
             if self._last_sync:
                 sync_part = f"  [{C['green']}]{self._last_sync}[/]"
-            self.query_one("#header-title", Static).update(
-                f"[bold {C['accent']}]~▼~ clavus[/]{proj}{cue_part}{sync_part}")
-            # Status line: peer connection + remotes
+            # Peer indicator
             if self._peer_name:
                 if self._peer_reachable:
-                    peer = f"[bold {C['green']}]\u25cf[/] [bold {C['green']}]{self._peer_name}[/]"
+                    peer = f"  [bold {C['green']}]\u25cf[/] [bold {C['green']}]{self._peer_name}[/]"
                 else:
-                    peer = f"[{C['yellow']}]\u25cb[/] [{C['dim']}]{self._peer_name} (unreachable)[/]"
+                    peer = f"  [{C['yellow']}]\u25cb[/] [{C['dim']}]{self._peer_name}[/]"
             else:
-                peer = f"[{C['dim']}]\u25cb no peer[/]"
-            from clavus.sync import load_remotes
-            remotes = load_remotes(self.store)
-            remote_part = f"  [{C['dim']}]{len(remotes)} remote[/]"
-            relay_info = ""
-            if self._relay_proc and self._relay_proc.poll() is None:
-                relay_info = f"  [{C['dim']}]⧩ relay[/]"
-            self.query_one("#header-status", Static).update(
-                f"{peer}{remote_part}{relay_info}  [{C['muted']}]local[/]")
+                peer = f"  [{C['dim']}]\u25cb no peer[/]"
+            self.query_one("#header-title", Static).update(
+                f"[bold {C['accent']}]~▼~ clavus[/]{proj}{cue_part}{peer}{sync_part}")
         except Exception:
             pass
 
