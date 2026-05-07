@@ -2587,8 +2587,8 @@ def main():
 
     # Join (discover and connect)
     p_join = subparsers.add_parser("join", help="Discover and connect to a Clavus share session")
-    p_join.add_argument("--code", "-c", default="",
-                       help="Share code to connect to (optional — scans all if omitted)")
+    p_join.add_argument("code", nargs="?", default="",
+                       help="Share code or relay URL to connect to (e.g. BRIGHT-DUCK-7 or http://100.127.1.109:7890)")
     p_join.add_argument("--timeout", "-t", type=int, default=5,
                        help="Seconds to scan for (default: 5)")
     p_join.add_argument("--lan", action="store_true",
