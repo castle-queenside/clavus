@@ -31,7 +31,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from clavus import parse_als, project_summary
+from clavus.parser import parse_als, project_summary
 from clavus.config import ClavusConfig, CONFIG_PATH
 from clavus.store import (
     BlobStore, ClavusProject, diff_projects, format_diff,
