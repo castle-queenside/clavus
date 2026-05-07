@@ -367,11 +367,7 @@ def discover_tailscale_peers(timeout: float = 5.0) -> list[ClavusPeer]:
     peers: list[ClavusPeer] = []
     device_list = []
 
-    # Collect all devices (self + peers)
-    self_dev = status.get("Self", {})
-    if self_dev:
-        device_list.append(("(you)", self_dev))
-
+    # Collect all devices (peers only — skip self since we're scanning for OTHERS)
     for peer_id, peer_data in status.get("Peer", {}).items():
         if isinstance(peer_data, dict):
             device_list.append((peer_id, peer_data))
@@ -391,18 +387,18 @@ def discover_tailscale_peers(timeout: float = 5.0) -> list[ClavusPeer]:
                 url = f"http://[{ts_ip}]:{port}" if ":" in ts_ip else f"http://{ts_ip}:{port}"
                 r = httpx.get(f"{url}/api/ping", timeout=3)
                 if r.status_code == 200:
-                    # Get more info from status endpoint
+                    # Get project/user info from share endpoint
                     try:
-                        sr = httpx.get(f"{url}/api/m4l/status", timeout=3)
+                        sr = httpx.get(f"{url}/api/share", timeout=3)
                         if sr.status_code == 200:
                             info = sr.json()
                             return ClavusPeer(
                                 name=hostname,
                                 host=ts_ip,
                                 port=port,
-                                project=info.get("project", "") or "",
-                                user=info.get("user", "") or "",
-                                version="",
+                                project=info.get("project", {}).get("name", "") or "",
+                                user=info.get("author", "") or "",
+                                version=info.get("version", ""),
                                 last_seen=_time.time(),
                             )
                     except Exception:
