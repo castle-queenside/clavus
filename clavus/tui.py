@@ -163,6 +163,8 @@ class ClavusApp(App):
         self._pending_cue_text: str = ""
         self._relay_proc = None
         self._busy: bool = False
+        self._last_sync: str = ""     # "⬆ push ✓ 12:34" or "⬇ pull ✓ 12:34"
+        self._peer_name: str = ""     # remote name (e.g. "mac")
         _cfg = ClavusConfig.load()
         self.author = _cfg.author
         self._clavus_cfg = _cfg
@@ -1254,6 +1256,10 @@ class ClavusApp(App):
 
         self.project = match.name
         self._status(f"loaded: {self.project}")
+        # Detect peer name from remotes
+        from clavus.sync import load_remotes
+        remotes = load_remotes(self.store)
+        self._peer_name = remotes[0].name if remotes else ""
         self._update_header()
         self._update_footer()
 
@@ -1323,41 +1329,28 @@ class ClavusApp(App):
 
     async def _do_pull(self):
         """Pull cues + snapshots + blobs from remotes (same as 'clavus pull')."""
-        import asyncio
-        self._status("\u23f3 pulling from remotes...")
-        stderr_lines: list[str] = []
+        import subprocess
+        self._status("\u23f3 pulling...")
         try:
-            proc = await asyncio.create_subprocess_shell(
+            result = await asyncio.to_thread(
+                subprocess.run,
                 "clavus pull",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                capture_output=True, text=True, shell=True, timeout=300,
             )
-            async def _read_stderr():
-                if proc.stderr:
-                    async for line in proc.stderr:
-                        err = line.decode().strip()
-                        if err:
-                            stderr_lines.append(err)
-            stderr_task = asyncio.create_task(_read_stderr())
-            if proc.stdout:
-                async for line in proc.stdout:
-                    text = line.decode().strip()
-                    if text:
-                        self._log_event(text)
-                        self._status(f"\u23f3 {text}")
-            await proc.wait()
-            stderr_task.cancel()
-            try:
-                await stderr_task
-            except asyncio.CancelledError:
-                pass
-            if proc.returncode == 0:
-                cue_count = len(self.cues)
-                snap_count = len(self.snaps)
-                self._log_event(f"\u2705 pull: {cue_count} cues, {snap_count} snapshots")
-                self._status(f"\u2705 pull: {cue_count} cues, {snap_count} snapshots")
+            # Show output lines as log events
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if line:
+                    self._log_event(line)
+            if result.returncode == 0:
+                import time
+                ts = time.strftime("%H:%M")
+                self._last_sync = f"⬇ pull ✓ {ts}"
+                self._update_header()
+                self._log_event(f"✅ pull: {len(self.cues)} cues, {len(self.snaps)} snapshots")
+                self._status(f"✅ pull: {len(self.cues)} cues, {len(self.snaps)} snapshots")
             else:
-                err_detail = "; ".join(stderr_lines[-3:]) if stderr_lines else f"exit {proc.returncode}"
+                err_detail = result.stderr.strip() or f"exit {result.returncode}"
                 self._log_event(f"\u274c pull failed: {err_detail}")
                 self._status(f"\u274c pull failed: {err_detail}")
             # Refresh local state from disk
@@ -1366,7 +1359,7 @@ class ClavusApp(App):
                 self._load_snapshots_from_disk()
                 self._update_header()
                 self._render()
-        except asyncio.TimeoutError:
+        except subprocess.TimeoutExpired:
             self._status("pull timed out")
         except Exception as e:
             self._status(f"pull error: {e}")
@@ -1384,42 +1377,30 @@ class ClavusApp(App):
 
     async def _do_push(self):
         """Push cues + snapshots + blobs to remotes (same as 'clavus push')."""
-        import asyncio
-        self._status("\u23f3 pushing to remotes...")
-        stderr_lines: list[str] = []
+        import subprocess
+        self._status("\u23f3 pushing...")
         try:
-            proc = await asyncio.create_subprocess_shell(
+            result = await asyncio.to_thread(
+                subprocess.run,
                 "clavus push",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                capture_output=True, text=True, shell=True, timeout=300,
             )
-            async def _read_stderr():
-                if proc.stderr:
-                    async for line in proc.stderr:
-                        err = line.decode().strip()
-                        if err:
-                            stderr_lines.append(err)
-            stderr_task = asyncio.create_task(_read_stderr())
-            if proc.stdout:
-                async for line in proc.stdout:
-                    text = line.decode().strip()
-                    if text:
-                        self._log_event(text)
-                        self._status(f"\u23f3 {text}")
-            await proc.wait()
-            stderr_task.cancel()
-            try:
-                await stderr_task
-            except asyncio.CancelledError:
-                pass
-            if proc.returncode == 0:
-                self._log_event("\u2705 push complete")
-                self._status("\u2705 push complete")
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if line:
+                    self._log_event(line)
+            if result.returncode == 0:
+                import time
+                ts = time.strftime("%H:%M")
+                self._last_sync = f"⬆ push ✓ {ts}"
+                self._update_header()
+                self._log_event("✅ push complete")
+                self._status("✅ push complete")
             else:
-                err_detail = "; ".join(stderr_lines[-3:]) if stderr_lines else f"exit {proc.returncode}"
+                err_detail = result.stderr.strip() or f"exit {result.returncode}"
                 self._log_event(f"\u274c push failed: {err_detail}")
                 self._status(f"\u274c push failed: {err_detail}")
-        except asyncio.TimeoutError:
+        except subprocess.TimeoutExpired:
             self._status("push timed out")
         except Exception as e:
             self._status(f"push error: {e}")
@@ -1529,22 +1510,29 @@ class ClavusApp(App):
 
     def _update_header(self):
         try:
-            ws_dot = "⚡" if self.ws_connected else ""
-            dot = "⬤" if self.connected else "◌"
-            conn_color = C['green'] if self.connected else C['dim']
-            conn = "connected" if self.connected else "offline"
             proj = f"  [white]{self.project}[/]" if self.project else ""
-            # Show server URL when relay is auto-started
+            cue_part = f"  [{C['dim']}]{len(self.cues)} cues[/]"
+            # Last sync status
+            sync_part = ""
+            if self._last_sync:
+                sync_part = f"  [{C['green']}]{self._last_sync}[/]"
+            self.query_one("#header-title", Static).update(
+                f"[bold {C['accent']}]~▼~ clavus[/]{proj}{cue_part}{sync_part}")
+            # Status line: peer connection + remotes
+            if self._peer_name:
+                peer_dot = f"[{C['green']}]⬤[/]"
+                peer = f"{peer_dot} [{C['fg']}]{self._peer_name}[/]"
+            else:
+                peer = f"[{C['dim']}]◌ no peer[/]"
+            from clavus.sync import load_remotes
+            remotes = load_remotes(self.store)
+            remote_part = f"  [{C['dim']}]{len(remotes)} remote[/]"
             relay_info = ""
             if self._relay_proc and self._relay_proc.poll() is None:
                 relay_info = f"  [{C['dim']}]⧩ relay[/]"
-            self.query_one("#header-title", Static).update(
-                f"[bold {C['accent']}]~▼~ clavus[/]{proj}{relay_info}")
             self.query_one("#header-status", Static).update(
-                f"{ws_dot}[{conn_color}]{dot} {conn}[/]"
-                f"  [{C['dim']}]{len(self.cues)} cues[/]"
-                f"  [{C['muted']}]local[/]")
-        except NoMatches:
+                f"{peer}{remote_part}{relay_info}  [{C['muted']}]local[/]")
+        except Exception:
             pass
 
     def _update_footer(self):
