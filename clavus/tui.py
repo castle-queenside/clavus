@@ -818,8 +818,11 @@ class ClavusApp(App):
             self._status("snapshot complete" if proc.returncode == 0 else "snapshot failed")
         except Exception as e:
             self._status(f"snapshot error: {e}")
-        # Re-pull to show new snapshot in history
-        await self._do_pull()
+        # Reload snapshots from local disk (snapshot is local, not from remotes)
+        self._load_snapshots_from_disk()
+        self._render_history()
+        self._update_header()
+        self._render()
 
     # ─── Cue operations ────────────────────────────────────────────────
 
