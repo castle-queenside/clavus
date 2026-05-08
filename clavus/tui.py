@@ -1708,8 +1708,7 @@ class ClavusApp(App):
                 f"[{C['accent']}]q[/] quit  "
                 f"[{C['accent']}]:[/] cmd"
             )
-            self.query_one("#footer-stats", Static).update(
-                f"[{C['muted']}]j/k navigate | {len(self.cues)} cues[/]")
+            # Don't touch #footer-stats here — _status() owns that
         except NoMatches:
             pass
 
