@@ -328,6 +328,7 @@ class ClavusApp(App):
             if arg:
                 import subprocess, sys
                 subprocess.run([sys.executable, "-m", "clavus", cmd, arg])
+                self._last_sync = f"{'\u2b07' if cmd == 'pull' else '\u2b06'} {cmd} \u2713 {time.strftime('%H:%M')}"
                 self._connect()  # reload
             else:
                 self.action_pull() if cmd == "pull" else self.action_push()
