@@ -1315,13 +1315,13 @@ class ClavusApp(App):
         self._peer_name = remotes[0].name if remotes else ""
         # Assume reachable if we have remotes (verified on first pull/push)
         self._peer_reachable = bool(remotes)
-        self._update_header()
         self._update_footer()
 
         # Load cues from disk
         self._load_cues_from_disk()
         # Load snapshots from store
         self._load_snapshots_from_disk()
+        self._update_header()
         self._status(f"{len(self.cues)} cues, {len(self.snaps)} snapshots")
         self._render()
 
