@@ -1520,10 +1520,10 @@ class ClavusApp(App):
                     self._peer_name = remotes[0].name if remotes else ""
                     self._peer_reachable = True
                     self._last_sync = f"\u2b07 {time.strftime('%H:%M')}"
-                    self._sync_status = ""
                     self._load_cues_from_disk()
                     self._load_snapshots_from_disk()
                     self._update_header()
+                    asyncio.create_task(self._delayed_clear_sync())
                     await asyncio.sleep(0)
                     self._render()
                     self._status(f"\u2705 pulled {self.project}: {len(self.cues)} cues, {len(self.snaps)} snaps")
@@ -1553,8 +1553,8 @@ class ClavusApp(App):
                 await asyncio.sleep(0)
                 self._peer_reachable = True
             self._last_sync = f"\u2b07 {time.strftime('%H:%M')}"
-            self._sync_status = ""
             self._update_header()
+            asyncio.create_task(self._delayed_clear_sync())
             await asyncio.sleep(0)
             self._status(f"\u2705 pulled: {len(self.cues)} cues, {len(self.snaps)} snapshots")
             # Refresh from disk
@@ -1613,8 +1613,8 @@ class ClavusApp(App):
                 await asyncio.sleep(0)
                 self._peer_reachable = True
             self._last_sync = f"\u2b06 {time.strftime('%H:%M')}"
-            self._sync_status = ""
             self._update_header()
+            asyncio.create_task(self._delayed_clear_sync())
             await asyncio.sleep(0)
             self._status("\u2705 push complete")
             self.set_timer(0.05, self._update_header)
@@ -1730,13 +1730,19 @@ class ClavusApp(App):
         except NoMatches:
             pass
 
+    async def _delayed_clear_sync(self):
+        """Keep live sync status visible for 1.5s after sync completes."""
+        await asyncio.sleep(1.5)
+        self._sync_status = ""
+        self._update_header()
+
     def _update_header(self):
         try:
             proj = f"  [white]{self.project}[/]" if self.project else ""
             cue_part = f"  [{C['dim']}]{len(self.cues)} cues[/]"
             sync_part = ""
             if self._sync_status:
-                sync_part = f"  [{C['yellow']}]{self._sync_status}[/]"
+                sync_part = f"  [bold {C['accent']}]{self._sync_status}[/]"
             elif self._last_sync:
                 sync_part = f"  [{C['green']}]{self._last_sync}[/]"
             if self._peer_name and self._peer_reachable:
