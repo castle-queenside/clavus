@@ -41,6 +41,7 @@ class Remote:
     name: str
     url: str  # e.g., "http://friend.local:7890"
     last_sync: float = 0.0
+    last_head: str | None = None  # relay HEAD after last sync — for optimistic lock
 
 
 def load_remotes(store: BlobStore) -> list[Remote]:
@@ -60,7 +61,7 @@ def save_remotes(store: BlobStore, remotes: list[Remote]) -> None:
     path = store.root / REMOTES_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(
-        {"remotes": [{"name": r.name, "url": r.url.rstrip("/"), "last_sync": r.last_sync}
+        {"remotes": [{"name": r.name, "url": r.url.rstrip("/"), "last_sync": r.last_sync, "last_head": r.last_head}
                      for r in remotes]},
         indent=2,
     ))
@@ -109,18 +110,38 @@ class SyncClient:
         except Exception:
             return False
 
-    def push_snapshots(self, project: str, snapshots: list[dict]) -> bool:
-        """Push snapshot metadata to remote."""
+    def push_snapshots(self, project: str, snapshots: list[dict],
+                        expected_parent: str | None = None) -> tuple[bool, str | None]:
+        """Push snapshot metadata to remote.
+
+        Args:
+            expected_parent: Hash the peer expects to be HEAD on the relay.
+                             If set and doesn't match, relay returns 409 Conflict.
+
+        Returns:
+            (success, conflict_message) — conflict_message is set on 409.
+        """
         try:
+            body: dict = {"snapshots": snapshots}
+            if expected_parent:
+                body["expected_parent"] = expected_parent
             r = self.client.post(
                 f"{self.base_url}/api/sync/push-snapshots",
                 params={"name": project},
-                json={"snapshots": snapshots},
+                json=body,
                 timeout=60,
             )
-            return r.status_code == 200
+            if r.status_code == 200:
+                return True, None
+            if r.status_code == 409:
+                try:
+                    err = r.json().get("error", "Conflict — pull first")
+                except Exception:
+                    err = "Conflict — pull first"
+                return False, err
+            return False, None
         except Exception:
-            return False
+            return False, None
 
     def close(self):
         self.client.close()
@@ -600,13 +621,18 @@ def push_to_remote(store: BlobStore, proj: ClavusProject, remote: Remote) -> dic
         # Push snapshots (always push, even empty — ensures project exists on relay)
         snap_data = _snapshots_to_dicts(store, proj)
         print(f"  📸 Pushing {len(snap_data)} snapshot(s)...")
-        ok = client.push_snapshots(proj.name, snap_data)
+        ok, conflict = client.push_snapshots(proj.name, snap_data,
+                                              expected_parent=remote.last_head)
         if snap_data:
             result["snapshots"] = len(snap_data) if ok else 0
-        if not ok and not result["error"]:
+        if conflict:
+            result["error"] = conflict
+        elif not ok and not result["error"]:
             result["error"] = "Failed to push snapshots"
         print(f"  {'✅' if ok else '❌'} Snapshots: {result['snapshots']} sent")
 
+        if ok:
+            remote.last_head = proj.head
         remote.last_sync = time.time()
         save_remotes(store, load_remotes(store))
     finally:
@@ -738,6 +764,7 @@ def pull_from_remote(store: BlobStore, proj: ClavusProject, remote: Remote, outp
                     proj.head = new_head
                     store.set_index(proj)
 
+        remote.last_head = proj.head
         remote.last_sync = time.time()
         save_remotes(store, load_remotes(store))
     finally:

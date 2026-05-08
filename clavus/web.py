@@ -1097,6 +1097,7 @@ async def sync_push(body: SyncPushBody, name: str = Query(..., description="Proj
 
 class SyncPushSnapshotsBody(BaseModel):
     snapshots: list[dict] = []
+    expected_parent: str | None = None  # HEAD hash peer expects on relay
 
 
 @app.post("/api/sync/push-snapshots")
@@ -1116,6 +1117,21 @@ async def sync_push_snapshots(body: SyncPushSnapshotsBody,
         store.set_index(proj)
 
     imported = 0
+
+    # ── Optimistic lock: reject if relay HEAD has moved since peer last synced ──
+    if body.expected_parent is not None:
+        current_head = store.read_ref("HEAD")
+        if current_head and current_head != body.expected_parent:
+            who = "unknown"
+            other = store.load_snapshot(current_head)
+            if other:
+                who = time.strftime("%H:%M", time.localtime(other.timestamp))
+            raise HTTPException(
+                status_code=409,
+                detail=f"HEAD has moved (current: {current_head[:8]}… @ {who}). "
+                       f"Pull first to integrate changes, then push again."
+            )
+
     for s in body.snapshots:
         snap_hash = s.get("full_hash", s.get("hash", ""))
         if not snap_hash:
