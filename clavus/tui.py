@@ -1249,11 +1249,16 @@ class ClavusApp(App):
 
     @work
     async def action_pull(self):
+        import datetime
+        with open("/tmp/clavus_debug.log", "a") as f:
+            f.write(f"{datetime.datetime.now().strftime('%H:%M:%S.%f')} action_pull START\n")
         self._busy = True
         self._status("\u23f3 pulling...")
         try:
             await self._do_pull()
         finally:
+            with open("/tmp/clavus_debug.log", "a") as f:
+                f.write(f"{datetime.datetime.now().strftime('%H:%M:%S.%f')} action_pull FINALLY _last_sync={self._last_sync!r}\n")
             self._busy = False
             self._update_header()
             self.refresh()
@@ -1729,6 +1734,7 @@ class ClavusApp(App):
             pass
 
     def _update_header(self):
+        import datetime
         try:
             proj = f"  [white]{self.project}[/]" if self.project else ""
             cue_part = f"  [{C['dim']}]{len(self.cues)} cues[/]"
@@ -1743,12 +1749,15 @@ class ClavusApp(App):
                 peer = f"  [{C['yellow']}]\u25cb[/]"
             else:
                 peer = f"  [{C['dim']}]\u25cb[/]"
+            text = f"[bold {C['accent']}]~▼~ clavus[/]{proj}{cue_part}{peer}{sync_part}"
+            with open("/tmp/clavus_debug.log", "a") as f:
+                f.write(f"{datetime.datetime.now().strftime('%H:%M:%S.%f')} _update_header: _last_sync={self._last_sync!r} _sync_status={self._sync_status!r} text={text[:80]!r}\n")
             widget = self.query_one("#header-title", Static)
-            widget.update(
-                f"[bold {C['accent']}]~▼~ clavus[/]{proj}{cue_part}{peer}{sync_part}")
+            widget.update(text)
             widget.refresh()
-        except NoMatches:
-            pass
+        except Exception as e:
+            with open("/tmp/clavus_debug.log", "a") as f:
+                f.write(f"{datetime.datetime.now().strftime('%H:%M:%S.%f')} _update_header ERROR: {e}\n")
 
     def _update_footer(self):
         try:
