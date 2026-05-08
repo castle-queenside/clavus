@@ -332,7 +332,7 @@ class ClavusApp(App):
                 import subprocess, sys
                 subprocess.run([sys.executable, "-m", "clavus", cmd, arg])
                 down = "\u2b07"; up = "\u2b06"
-                self._last_sync = f"{down if cmd == 'pull' else up} {cmd} \u2713 {time.strftime('%H:%M')}"
+                self._last_sync = f"{down if cmd == 'pull' else up} {time.strftime('%H:%M')}"
                 self._connect()  # reload
             else:
                 self.action_pull() if cmd == "pull" else self.action_push()
@@ -1249,16 +1249,11 @@ class ClavusApp(App):
 
     @work
     async def action_pull(self):
-        import datetime
-        with open("/tmp/clavus_debug.log", "a") as f:
-            f.write(f"{datetime.datetime.now().strftime('%H:%M:%S.%f')} action_pull START\n")
         self._busy = True
         self._status("\u23f3 pulling...")
         try:
             await self._do_pull()
         finally:
-            with open("/tmp/clavus_debug.log", "a") as f:
-                f.write(f"{datetime.datetime.now().strftime('%H:%M:%S.%f')} action_pull FINALLY _last_sync={self._last_sync!r}\n")
             self._busy = False
             self._update_header()
             self.refresh()
@@ -1524,7 +1519,7 @@ class ClavusApp(App):
                     self.project = proj_index.name
                     self._peer_name = remotes[0].name if remotes else ""
                     self._peer_reachable = True
-                    self._last_sync = f"\u2b07 pull \u2713 {time.strftime('%H:%M')}"
+                    self._last_sync = f"\u2b07 {time.strftime('%H:%M')}"
                     self._sync_status = ""
                     self._load_cues_from_disk()
                     self._load_snapshots_from_disk()
@@ -1541,13 +1536,11 @@ class ClavusApp(App):
                 await asyncio.sleep(0)
                 result = pull_from_remote(self.store, proj_index, remote)
                 if result.get("error"):
-                    self._last_sync = f"\u2b07 pull \u2717 {time.strftime('%H:%M')}"
+                    self._last_sync = f"\u2b07 \u2717 {time.strftime('%H:%M')}"
                     self._sync_status = ""
                     self._update_header()
                     await asyncio.sleep(0)
                     self._status(f"\u274c {result['error']}")
-                    with open("/tmp/clavus_debug.log", "a") as f:
-                        f.write(f"{time.strftime('%H:%M:%S')} _do_pull ERROR: remote={remote.url} error={result['error']!r}\n")
                     return
                 cues_n = result.get("cues", 0)
                 snaps_n = result.get("snapshots", 0)
@@ -1559,7 +1552,7 @@ class ClavusApp(App):
                 self._update_header()
                 await asyncio.sleep(0)
                 self._peer_reachable = True
-            self._last_sync = f"\u2b07 pull \u2713 {time.strftime('%H:%M')}"
+            self._last_sync = f"\u2b07 {time.strftime('%H:%M')}"
             self._sync_status = ""
             self._update_header()
             await asyncio.sleep(0)
@@ -1606,13 +1599,11 @@ class ClavusApp(App):
                 await asyncio.sleep(0)
                 result = push_to_remote(self.store, proj_index, remote)
                 if result.get("error"):
-                    self._last_sync = f"\u2b06 push \u2717 {time.strftime('%H:%M')}"
+                    self._last_sync = f"\u2b06 \u2717 {time.strftime('%H:%M')}"
                     self._sync_status = ""
                     self._update_header()
                     await asyncio.sleep(0)
                     self._status(f"\u274c {result['error']}")
-                    with open("/tmp/clavus_debug.log", "a") as f:
-                        f.write(f"{time.strftime('%H:%M:%S')} _do_push ERROR: remote={remote.url} error={result['error']!r}\n")
                     return
                 cues_n = result.get("cues", 0)
                 snaps_n = result.get("snapshots", 0)
@@ -1621,7 +1612,7 @@ class ClavusApp(App):
                 self._update_header()
                 await asyncio.sleep(0)
                 self._peer_reachable = True
-            self._last_sync = f"\u2b06 push \u2713 {time.strftime('%H:%M')}"
+            self._last_sync = f"\u2b06 {time.strftime('%H:%M')}"
             self._sync_status = ""
             self._update_header()
             await asyncio.sleep(0)
@@ -1740,7 +1731,6 @@ class ClavusApp(App):
             pass
 
     def _update_header(self):
-        import datetime
         try:
             proj = f"  [white]{self.project}[/]" if self.project else ""
             cue_part = f"  [{C['dim']}]{len(self.cues)} cues[/]"
@@ -1755,15 +1745,12 @@ class ClavusApp(App):
                 peer = f"  [{C['yellow']}]\u25cb[/]"
             else:
                 peer = f"  [{C['dim']}]\u25cb[/]"
-            text = f"[bold {C['accent']}]~▼~ clavus[/]{proj}{cue_part}{peer}{sync_part}"
-            with open("/tmp/clavus_debug.log", "a") as f:
-                f.write(f"{datetime.datetime.now().strftime('%H:%M:%S.%f')} _update_header: _last_sync={self._last_sync!r} _sync_status={self._sync_status!r} text={text[:80]!r}\n")
             widget = self.query_one("#header-title", Static)
-            widget.update(text)
+            widget.update(
+                f"[bold {C['accent']}]~▼~ clavus[/]{proj}{cue_part}{peer}{sync_part}")
             widget.refresh()
-        except Exception as e:
-            with open("/tmp/clavus_debug.log", "a") as f:
-                f.write(f"{datetime.datetime.now().strftime('%H:%M:%S.%f')} _update_header ERROR: {e}\n")
+        except NoMatches:
+            pass
 
     def _update_footer(self):
         try:
