@@ -1517,6 +1517,7 @@ class ClavusApp(App):
                     self._peer_name = remotes[0].name if remotes else ""
                     self._peer_reachable = True
                     self._last_sync = f"\u2b07 pull \u2713 {time.strftime('%H:%M')}"
+                    self._log_event(f"SYNC_DEBUG_AUTO: _last_sync={self._last_sync!r}")
                     self._sync_status = ""
                     self._load_cues_from_disk()
                     self._load_snapshots_from_disk()
@@ -1554,6 +1555,7 @@ class ClavusApp(App):
                 await asyncio.sleep(0)
                 self._peer_reachable = True
             self._last_sync = f"\u2b07 pull \u2713 {time.strftime('%H:%M')}"
+            self._log_event(f"SYNC_DEBUG: _last_sync={self._last_sync!r}")
             self._sync_status = ""
             self._update_header()
             await asyncio.sleep(0)
