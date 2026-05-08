@@ -1529,7 +1529,9 @@ class ClavusApp(App):
             ts = time.strftime("%H:%M")
             self._peer_reachable = True
             self._last_sync = f"\u2b07 pull \u2713 {ts}"
+            self._log_event(f"DEBUG: _last_sync set to: {self._last_sync}")
             self._update_header()
+            self._log_event(f"DEBUG: _update_header called, _last_sync={self._last_sync}")
             self._log_event(f"\u2705 pull: {len(self.cues)} cues, {len(self.snaps)} snapshots")
             self._status(f"\u2705 pull: {len(self.cues)} cues, {len(self.snaps)} snapshots")
             # Refresh from disk
@@ -1708,8 +1710,8 @@ class ClavusApp(App):
                 peer = f"  [{C['dim']}]\u25cb[/]"
             self.query_one("#header-title", Static).update(
                 f"[bold {C['accent']}]~▼~ clavus[/]{proj}{cue_part}{peer}{sync_part}")
-        except Exception:
-            pass
+        except Exception as e:
+            self._log_event(f"header update error: {e}")
 
     def _update_footer(self):
         try:
