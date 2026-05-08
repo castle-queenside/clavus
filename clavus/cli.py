@@ -399,12 +399,31 @@ def cmd_setup(args: argparse.Namespace) -> None:
     print("✅ Setup complete!")
     print(f"   Config: {CONFIG_PATH}")
     print(f"   Data:   {store.root}")
+
+    # Test connection to configured remotes
+    remotes = load_remotes(store)
+    if remotes:
+        print()
+        for remote in remotes:
+            if "localhost" in remote.url:
+                continue  # Skip localhost — only test external remotes
+            try:
+                from clavus.sync import SyncClient
+                client = SyncClient(remote.url)
+                r = client.client.get(f"{remote.url}/api/projects", timeout=5)
+                client.close()
+                if r.status_code == 200:
+                    projects = r.json().get("projects", [])
+                    print(f"   ✅ {remote.name} — {len(projects)} project(s) found")
+                else:
+                    print(f"   ⚠️  {remote.name} — relay responded but no projects (run 'clavus init' on host)")
+            except Exception:
+                print(f"   ⚠️  {remote.name} — unreachable (is 'clavus share' running?)")
     print()
     print("   Next:")
-    print("     clavus init               — track a project")
-    print("     clavus push               — send to collaborators")
+    print("     clavus pull               — sync projects from remotes")
+    print("     clavus init               — track a local project")
     print("     clavus tui                — terminal dashboard")
-    print("     clavus doctor             — check system health")
 
 
 def cmd_init(args: argparse.Namespace) -> None:
@@ -930,29 +949,21 @@ def cmd_relay(args: argparse.Namespace) -> None:
 
 
 def cmd_share(args: argparse.Namespace) -> None:
-    """Start a share session — relay + auto-discovery.
+    """Start a relay and print the URL collaborators connect to.
 
-    Starts the relay server with a share code, advertises via mDNS
-    (LAN) and Tailscale API, and waits for someone to connect.
-
-    Your friend runs 'clavus join' and they'll find your relay
-    automatically — they just need to verify the share code matches.
-
-    Works over LAN (same WiFi) or Tailscale (anywhere).
+    Simple: starts the relay, shows the direct URL.
+    Collaborators connect with: clavus join http://IP:PORT
     """
     try:
-        from clavus.web import run_relay_server, set_share_code
+        from clavus.web import run_relay_server
     except ImportError:
         print("❌ Relay server requires fastapi and uvicorn.")
         print("   Install with: pip install fastapi uvicorn")
         sys.exit(1)
 
-    from clavus.discovery import generate_share_code
-
     cfg = ClavusConfig.load()
     host = args.host or cfg.host
     port = args.port or cfg.port
-    share_code = generate_share_code()
 
     # Check if port is already in use — try to kill stale Clavus relay
     import socket, platform, signal
@@ -963,7 +974,7 @@ def cmd_share(args: argparse.Namespace) -> None:
         try:
             import httpx
             r = httpx.get(f"http://127.0.0.1:{port}/api/sync/pull", params={"name": "_"}, timeout=2)
-            if r.status_code in (200, 404):  # 404 = Clavus responding, just no project
+            if r.status_code in (200, 404):
                 print(f"   🔄 Restarting stale Clavus relay on port {port}...")
                 import subprocess
                 if platform.system() == "Windows":
@@ -984,132 +995,97 @@ def cmd_share(args: argparse.Namespace) -> None:
     else:
         sock.close()
 
-    print(f"  🎹 Clavus Share")
-    print(f"  {'─' * 52}")
-
-    # Direct URL (always works — no mDNS, no discovery needed)
+    # Show the URL(s) collaborators should use
     ts_ip = cfg.tailscale_ip
     tailscale_url = f"http://{ts_ip}:{port}" if ts_ip else ""
     lan_url = f"http://{socket.gethostbyname(socket.gethostname())}:{port}"
 
+    print(f"  🎹 Clavus Share")
+    print(f"  {'─' * 45}")
     if tailscale_url:
         print()
-        print(f"  🌐 Direct URL (for collaborators on your Tailscale):")
-        print(f"     {tailscale_url}")
-    print(f"  🏠 LAN URL:")
-    print(f"     {lan_url}")
+        print(f"  Collaborators connect:")
+        print(f"    clavus join {tailscale_url}")
+    print(f"  LAN:")
+    print(f"    clavus join {lan_url}")
+    print()
+    print(f"  Press Ctrl+C to stop.")
+    print(f"  {'─' * 45}")
     print()
 
-    # Share code (for auto-discovery on LAN/Tailscale — convenience)
-    print(f"  🔗 Share code: {share_code}")
-    print()
-    print(f"  Friend connects:")
-    print(f"    Direct:   clavus join {tailscale_url or lan_url}")
-    print(f"    Discover: clavus join {share_code}")
-    print()
-
-    # Start mDNS advertising with share code
-    try:
-        from clavus.discovery import ClavusAdvertiser
-        from clavus.store import BlobStore
-
-        store = BlobStore()
-        projects = store.list_projects()
-        proj_name = projects[0].name if projects else ""
-
-        advertiser = ClavusAdvertiser()
-        advertiser.start(
-            port=port,
-            project=proj_name,
-            user=cfg.author,
-            version="0.7.0-beta",
-            share_code=share_code,
-        )
-    except ImportError:
-        advertiser = None
-        print("  ⚠️  LAN advertising unavailable (install zeroconf)")
-    except Exception as e:
-        advertiser = None
-        print(f"  ⚠️  LAN advertising failed: {e}")
-
-    # Start relay (this blocks)
-    try:
-        run_relay_server(host=host, port=port, share_code=share_code)
-    finally:
-        if advertiser:
-            advertiser.stop()
+    run_relay_server(host=host, port=port)
 
 
 def cmd_join(args: argparse.Namespace) -> None:
-    """Connect to a Clavus relay — by URL, share code, or auto-discovery.
+    """Connect to a Clavus relay by direct URL.
 
-    Direct URL join (fastest, no scanning):
-      clavus join http://192.168.12.196:7890
       clavus join http://100.127.1.109:7890
-
-    Share code join (scans LAN/Tailscale):
-      clavus join GROOVE-BEAR-5
-
-    Auto-discover (scans LAN/Tailscale, lists sessions):
-      clavus join
     """
     from clavus.sync import save_remotes, Remote, load_remotes, pull_from_remote, pull_snapshot_blobs
     from clavus.store import BlobStore
-    import concurrent.futures
     from urllib.parse import urlparse
 
+    if not args.code:
+        print("❌ Provide a relay URL: clavus join http://IP:PORT")
+        return
+
+    if not (args.code.startswith("http://") or args.code.startswith("https://")):
+        print("❌ Not a URL. Provide the full address:")
+        print(f"   clavus join http://{args.code}:7890")
+        print("   Or get the URL from the person running 'clavus share'")
+        return
+
     # ── Direct URL join ──────────────────────────────────────────────
-    if args.code and (args.code.startswith("http://") or args.code.startswith("https://")):
-        url = args.code.rstrip("/")
-        parsed = urlparse(url)
-        host = parsed.hostname or "localhost"
-        port = parsed.port or 7890
-        base = f"http://{host}:{port}"
+    url = args.code.rstrip("/")
+    parsed = urlparse(url)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 7890
+    base = f"http://{host}:{port}"
 
-        print(f"🔗 Connecting to {base}...")
+    print(f"🔗 Connecting to {base}...")
 
-        # Hit /api/share to verify and get project info
-        from clavus.sync import SyncClient
-        try:
-            client = SyncClient(base)
-            r = client.client.get(f"{base}/api/share", timeout=10)
-            info = r.json() if r.status_code == 200 and r.text else {}
-            client.close()
-        except Exception as e:
-            print(f"  ❌ Cannot reach {base}: {e}")
-            return
+    from clavus.sync import SyncClient
+    try:
+        client = SyncClient(base)
+        r = client.client.get(f"{base}/api/projects", timeout=10)
+        info = r.json() if r.status_code == 200 and r.text else {}
+        client.close()
+    except Exception as e:
+        print(f"  ❌ Cannot reach {base}: {e}")
+        print(f"  Make sure 'clavus share' is running on the other machine.")
+        return
 
-        code = info.get("share_code", "") or "(no code)"
-        author = info.get("author", "") or host
-        project = info.get("project", {})
-        proj_name = project.get("name", "?") if project else "?"
+    projects = info.get("projects", [])
+    if not projects:
+        print(f"  ❌ No projects found on this relay.")
+        print(f"  Ask the host to run 'clavus init' first.")
+        return
 
-        print(f"  Relay:  {author} — {proj_name}")
-        print(f"  Code:   {code}")
-        print()
-
-        store = BlobStore()
-        remotes = load_remotes(store)
-        # Use hostname as remote name, deduplicate
-        name = info.get("hostname", host).lower().replace(" ", "-")
-        remotes = [r for r in remotes if r.name != name]
+    # Add remote (deduplicate by URL)
+    store = BlobStore()
+    remotes = load_remotes(store)
+    name = host.replace(".", "-")
+    existing_urls = {r.url for r in remotes}
+    if base not in existing_urls:
+        remotes = [r for r in remotes if r.url != base]
         remotes.append(Remote(name=name, url=base))
         save_remotes(store, remotes)
+        print(f"  ✅ Added remote '{name}' → {base}")
+    else:
+        print(f"  📡 Remote already configured: {base}")
 
-        # Ensure the project exists locally
-        proj_data = store.get_index(proj_name)
+    # Pull all projects
+    for pdata in projects:
+        pname = pdata["name"]
+        proj_data = store.get_index(pname)
         if not proj_data:
             proj_data = ClavusProject(
-                name=proj_name,
-                root_als="",
-                head=None,
+                name=pname, root_als="", head=None,
                 created_at=time.time(),
-                description=f"Joined from {author}",
+                description=f"Joined from {host}",
             )
             store.set_index(proj_data)
-
-        # Pull project data
-        print(f"  📥 Pulling from '{name}'...")
+        print(f"  📥 Pulling '{pname}'...")
         result = pull_from_remote(store, proj_data, Remote(name=name, url=base))
         if result.get("error"):
             print(f"  ❌ {result['error']}")
@@ -1118,169 +1094,9 @@ def cmd_join(args: argparse.Namespace) -> None:
             blob_count = pull_snapshot_blobs(store, proj_data, Remote(name=name, url=base))
             if blob_count:
                 print(f"  📦 {blob_count} blob(s) downloaded")
-        print()
-        print(f"  Done. Run 'clavus log' to see history.")
-        return
-
-    # ── Share code / auto-discovery (existing path) ──────────────────
-    from clavus.discovery import scan_for_share_codes
-
-    timeout = args.timeout
-
-    # Determine scan modes
-    scan_tailscale = not args.lan  # Default: on. Off if --lan is set.
-    scan_lan = not args.tailscale  # Default: on. Off if --tailscale is set.
-
-    if not scan_tailscale and not scan_lan:
-        print("❌ Can't use both --lan and --tailscale (that's the default)")
-        return
-
-    scan_label = []
-    if scan_lan: scan_label.append("LAN")
-    if scan_tailscale: scan_label.append("Tailscale")
-
-    if args.code:
-        print(f"🔍 Looking for relay with code '{args.code}'...")
-    else:
-        print(f"🔍 Scanning for Clavus share sessions...")
-
-    peers = scan_for_share_codes(
-        timeout=timeout,
-        scan_tailscale=scan_tailscale,
-        scan_lan=scan_lan,
-    )
-
-    if not peers:
-        print()
-        print("  No Clavus relays found.")
-        print()
-        print("  Make sure:")
-        print("    • The other person is running 'clavus share'")
-        print("    • You're on the same WiFi (LAN)")
-        print("    • Or you're both connected to Tailscale")
-        print()
-        print("  To scan only one method:")
-        print("    clavus join --lan       (scan LAN only)")
-        print("    clavus join --tailscale (scan Tailscale only)")
-        return
-
-    # Try to get share codes by hitting their /api/share endpoint
-    from clavus.sync import SyncClient
-    import concurrent.futures
-
-    def _get_share_info(peer):
-        try:
-            client = SyncClient(f"http://{peer.host}:{peer.port}")
-            r = client.client.get(
-                f"http://{peer.host}:{peer.port}/api/share",
-                timeout=10,
-            )
-            if r.status_code == 200:
-                return r.json()
-        except Exception as e:
-            # Debug: log the failure silently for now
-            _ = e
-        return None
-
-    relay_info = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
-        fut_map = {pool.submit(_get_share_info, p): p for p in peers}
-        for fut in concurrent.futures.as_completed(fut_map, timeout=timeout + 2):
-            peer = fut_map[fut]
-            try:
-                info = fut.result()
-                if info and info.get("share_code"):
-                    relay_info.append((peer, info))
-            except Exception:
-                continue
-
-    if not relay_info:
-        print()
-        print(f"  Found {len(peers)} Clavus server(s), but none in share mode.")
-        print()
-        print("  The other person needs to run 'clavus share' instead")
-        print("  of 'clavus relay'.")
-        return
-
-    # Filter by code if specified
-    if args.code:
-        code_upper = args.code.upper()
-        relay_info = [
-            (p, info) for p, info in relay_info
-            if info.get("share_code", "").upper() == code_upper
-        ]
-        if not relay_info:
-            print(f"  ❌ No relay found with code '{args.code}'")
-            return
 
     print()
-    print(f"  Found {len(relay_info)} share session(s):")
-    print()
-
-    for peer, info in relay_info:
-        code = info.get("share_code", "???")
-        author = info.get("author", "?")
-        project = info.get("project", {})
-        proj_name = project.get("name", "?") if project else "?"
-        host = peer.host
-        port = peer.port
-        print(f"  #{relay_info.index((peer, info)) + 1}")
-        print(f"    Code:    {code}")
-        print(f"    Host:    {author} — {proj_name}")
-        print(f"    URL:     http://{host}:{port}")
-        print()
-
-    # Auto-connect if only one found, or if code was specified
-    if len(relay_info) == 1 or args.code:
-        peer, info = relay_info[0]
-        code = info.get("share_code", "???")
-        author = info.get("author", "?")
-        host = peer.host
-        port = peer.port
-
-        print(f"  Connecting to '{author}' ({code})...")
-
-        # Add remote and pull
-        from clavus.store import BlobStore
-        from clavus.sync import save_remotes, Remote, load_remotes, pull_from_remote, pull_snapshot_blobs
-
-        store = BlobStore()
-        name = info.get("hostname", author).lower().replace(" ", "-")
-
-        remotes = load_remotes(store)
-        # Remove existing remote with same name
-        remotes = [r for r in remotes if r.name != name]
-        remotes.append(Remote(name=name, url=f"http://{host}:{port}"))
-        save_remotes(store, remotes)
-        print(f"  ✅ Remote added: '{name}' (http://{host}:{port})")
-
-        # Try to find and pull into matching project
-        projects = store.list_projects()
-        proj_name = info.get("project", {}).get("name", "")
-        matched_proj = next((p for p in projects if p.name == proj_name), None)
-
-        if matched_proj:
-            print(f"  📥 Pulling from '{name}'...")
-            result = pull_from_remote(store, matched_proj, Remote(name=name, url=f"http://{host}:{port}"))
-            if result.get("cues") or result.get("snapshots"):
-                print(f"     Got {result['cues']} cues, {result['snapshots']} snapshots")
-            # Pull blobs too
-            blob_count = pull_snapshot_blobs(store, matched_proj, Remote(name=name, url=f"http://{host}:{port}"))
-            if blob_count:
-                print(f"     Downloaded {blob_count} blob(s)")
-            print(f"  ✅ Synced with '{author}'")
-        else:
-            print(f"  💡 No matching local project '{proj_name}' found.")
-            print(f"     Run 'clavus pull' after setting up the project.")
-
-        print()
-        print(f"  To sync again: clavus push")
-        print(f"  For live sync: clavus sync")
-    else:
-        # Multiple found — ask which one
-        print(f"  Multiple sessions found. Connect to one:")
-        print(f"    clavus join --code <SHARE-CODE>")
-        print(f"  Or ask your friend for their code.")
+    print(f"  Done. Run 'clavus log' or 'clavus tui'.")
 
 
 def cmd_tui(args: argparse.Namespace) -> None:

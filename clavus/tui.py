@@ -356,11 +356,10 @@ class ClavusApp(App):
         elif cmd == "share":
             self._run_share()
         elif cmd == "join":
-            if arg.startswith("http://") or arg.startswith("https://"):
-                # Direct URL — add remote and pull
+            if arg and (arg.startswith("http://") or arg.startswith("https://")):
                 self._run_join_url(arg)
             else:
-                self.push_screen(JoinModal(arg))
+                self._status("use :join http://IP:PORT — get URL from 'clavus share' on host")
         elif cmd in ("help", "h", "?"):
             self._status("commands: project, projects, init, setup, browse, name, inject, restore, open, snapshot, archive, delete, share, join, backup, backups, restore-store, stem push/pull, log, config, remote, branch, status, doctor, help | C=snapshot")
         else:
@@ -1164,23 +1163,18 @@ class ClavusApp(App):
             self._status(f"delete failed: {e}")
 
     def _run_share(self):
-        """Start a share session — spawn relay + show share code modal."""
-        from clavus.discovery import generate_share_code
+        """Start a relay and show connection URLs."""
         from clavus.config import ClavusConfig
         import subprocess, os
 
         cfg = ClavusConfig.load()
-        code = generate_share_code()
         lan_ip = self._lan_ip()
         tailscale_ip = self._tailscale_ip()
         port = cfg.port
 
-        # Spawn the relay server as a subprocess with the share code
-        env = os.environ.copy()
-        env["CLAVUS_SHARE_CODE"] = code
+        # Spawn relay server
         proc = subprocess.Popen(
             [sys.executable, "-m", "clavus", "relay", "--port", str(port)],
-            env=env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -1193,7 +1187,7 @@ class ClavusApp(App):
                 except subprocess.TimeoutExpired:
                     proc.kill()
 
-        self.push_screen(ShareModal(code, lan_ip, tailscale_ip, port, stop_relay))
+        self.push_screen(ShareModal(lan_ip, tailscale_ip, port, stop_relay))
 
     @staticmethod
     def _lan_ip() -> str:
@@ -1774,7 +1768,7 @@ class ClavusApp(App):
 # ─── Modals ──────────────────────────────────────────────────────────────────
 
 class ShareModal(ModalScreen[None]):
-    """Modal showing share code and instructions."""
+    """Modal showing relay connection URLs."""
 
     CSS = f"""
     ShareModal {{
@@ -1792,13 +1786,13 @@ class ShareModal(ModalScreen[None]):
         color: {C['accent']};
         padding-bottom: 1;
     }}
-    #share-code {{
+    #share-url {{
         text-style: bold;
         color: {C['fg']};
         padding: 1 2;
         background: {C['surface2']};
     }}
-    #share-hint, #share-url {{
+    #share-hint {{
         color: {C['dim']};
         padding-top: 1;
     }}
@@ -1820,9 +1814,8 @@ class ShareModal(ModalScreen[None]):
         Binding("escape", "dismiss", "Close"),
     ]
 
-    def __init__(self, code: str, lan_ip: str, tailscale_ip: str, port: int, stop_cb) -> None:
+    def __init__(self, lan_ip: str, tailscale_ip: str, port: int, stop_cb) -> None:
         super().__init__()
-        self.code = code
         self.lan_ip = lan_ip
         self.tailscale_ip = tailscale_ip
         self.port = port
@@ -1831,29 +1824,20 @@ class ShareModal(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         join_url = f"http://{self.tailscale_ip or self.lan_ip}:{self.port}"
         with Vertical(id="share-box"):
-            yield Static("🔗  Share Session — relay running", id="share-title")
-            yield Static(f"  {self.code}  ", id="share-code")
+            yield Static("🎹  Clavus Share — relay running", id="share-title")
+            yield Static(f"  {join_url}  ", id="share-url")
             yield Static(
-                f"Other person runs:  clavus join --code {self.code}",
+                "Collaborator runs:  clavus join " + join_url,
                 id="share-hint",
             )
             if self.tailscale_ip:
                 yield Static(
-                    f"Tailscale: {join_url}",
-                    id="share-ts",
-                )
-                yield Static(
-                    f"LAN:       http://{self.lan_ip}:{self.port}",
-                    id="share-lan",
-                )
-            else:
-                yield Static(
                     f"LAN:  http://{self.lan_ip}:{self.port}",
-                    id="share-url",
+                    id="share-lan",
                 )
             with Horizontal(classes="share-actions"):
                 yield Button("Stop Share", id="stop-share", variant="error")
-            yield Static("Esc to close", id="share-footer")
+            yield Static("Esc to close (relay keeps running)", id="share-footer")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "stop-share":
