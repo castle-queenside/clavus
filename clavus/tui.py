@@ -1773,10 +1773,9 @@ class ClavusApp(App):
             elif self._last_sync:
                 sync_part = f"  [{C['green']}]{self._last_sync}[/]"
             remote_part = f"  [{C['dim']}]{self._peer_name}[/]" if self._peer_name else ""
-            # DEBUG
-            import sys as _sys
-            _sys.stderr.write(f"HEADER: peer_name={self._peer_name!r} peer_reachable={self._peer_reachable} last_sync={self._last_sync!r} sync_status={self._sync_status!r} remote_part={remote_part!r}\n")
-            _sys.stderr.flush()
+            # DEBUG — write to file since Textual swallows stderr on Windows
+            with open(os.path.expanduser("~/.clavus_header_debug.log"), "a") as _df:
+                _df.write(f"HEADER: peer_name={self._peer_name!r} peer_reachable={self._peer_reachable} last_sync={self._last_sync!r} sync_status={self._sync_status!r} remote_part={remote_part!r}\n")
             if self._peer_name and self._peer_reachable:
                 peer = f"  [bold {C['green']}]\u25cf[/]"
             elif self._peer_name:
