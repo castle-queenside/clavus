@@ -1248,15 +1248,19 @@ class ClavusApp(App):
             await self._do_pull()
         finally:
             self._busy = False
+            self._update_header()
+            self.refresh()
 
     @work(exclusive=True)
     async def action_push(self):
         self._busy = True
-        self._status("⏳ pushing...")
+        self._status("\u23f3 pushing...")
         try:
             await self._do_push()
         finally:
             self._busy = False
+            self._update_header()
+            self.refresh()
 
     @work(exclusive=True)
     async def action_stem_push(self):
