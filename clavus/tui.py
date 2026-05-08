@@ -1327,11 +1327,14 @@ class ClavusApp(App):
     def _load_cues_from_disk(self):
         """Load cues for the current project from CueStore."""
         if not self.project:
+            self._log_event("_load_cues: no project set")
             return
         from clavus.cues import CueStore, CueFilter
         cue_store = CueStore(self.project, store=self.store)
         self._cue_store = cue_store
-        self.cues = self._sort_cues(cue_store.list_cues(CueFilter()))
+        all_cues = cue_store.list_cues(CueFilter())
+        self._log_event(f"_load_cues: {len(all_cues)} cue(s) from {cue_store.cues_dir}")
+        self.cues = self._sort_cues(all_cues)
         self.idx = min(self.idx, len(self.cues) - 1) if self.cues else 0
 
     def _load_snapshots_from_disk(self):
