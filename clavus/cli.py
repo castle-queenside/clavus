@@ -2257,9 +2257,11 @@ def cmd_open(args: argparse.Namespace) -> None:
                 except Exception:
                     pass
 
-    # Rewrite .als sample paths to point to local project folder (cross-OS fix)
-    from clavus.parser import rewrite_als_sample_paths
-    raw_als = rewrite_als_sample_paths(raw_als, out_path.parent)
+    # NOTE: Path rewriting DISABLED — it corrupts .als XML on Windows.
+    # Write the raw blob as-is. Samples are materialized alongside; Ableton
+    # finds them once you point at any one sample in the project folder.
+    # from clavus.parser import rewrite_als_sample_paths
+    # raw_als = rewrite_als_sample_paths(raw_als, out_path.parent)
 
     out_path.write_bytes(raw_als)
     print(f"✅ {project_name}.als → {out_path}")
