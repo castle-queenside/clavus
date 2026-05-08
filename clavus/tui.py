@@ -331,7 +331,8 @@ class ClavusApp(App):
             if arg:
                 import subprocess, sys
                 subprocess.run([sys.executable, "-m", "clavus", cmd, arg])
-                self._last_sync = f"{'\u2b07' if cmd == 'pull' else '\u2b06'} {cmd} \u2713 {time.strftime('%H:%M')}"
+                down = "\u2b07"; up = "\u2b06"
+                self._last_sync = f"{down if cmd == 'pull' else up} {cmd} \u2713 {time.strftime('%H:%M')}"
                 self._connect()  # reload
             else:
                 self.action_pull() if cmd == "pull" else self.action_push()
@@ -1728,24 +1729,25 @@ class ClavusApp(App):
             pass
 
     def _update_header(self):
-        f"HEADER: _sync_status={self._sync_status!r} _last_sync={self._last_sync!r}\n"
-        proj = f"  [white]{self.project}[/]" if self.project else ""
-        cue_part = f"  [{C['dim']}]{len(self.cues)} cues[/]"
-        sync_part = ""
-        if self._sync_status:
-            sync_part = f"  [{C['yellow']}]{self._sync_status}[/]"
-        elif self._last_sync:
-            sync_part = f"  [{C['green']}]{self._last_sync}[/]"
-        if self._peer_name and self._peer_reachable:
-            peer = f"  [bold {C['green']}]\u25cf[/]"
-        elif self._peer_name:
-            peer = f"  [{C['yellow']}]\u25cb[/]"
-        else:
-            peer = f"  [{C['dim']}]\u25cb[/]"
-        w = self._header_title
-        if w is not None:
-            w.update(f"[bold {C['accent']}]~▼~ clavus[/]{proj}{cue_part}{peer}{sync_part}")
-            w.refresh()
+        try:
+            proj = f"  [white]{self.project}[/]" if self.project else ""
+            cue_part = f"  [{C['dim']}]{len(self.cues)} cues[/]"
+            sync_part = ""
+            if self._sync_status:
+                sync_part = f"  [{C['yellow']}]{self._sync_status}[/]"
+            elif self._last_sync:
+                sync_part = f"  [{C['green']}]{self._last_sync}[/]"
+            if self._peer_name and self._peer_reachable:
+                peer = f"  [bold {C['green']}]\u25cf[/]"
+            elif self._peer_name:
+                peer = f"  [{C['yellow']}]\u25cb[/]"
+            else:
+                peer = f"  [{C['dim']}]\u25cb[/]"
+            self.query_one("#header-title", Static).update(
+                f"[bold {C['accent']}]~▼~ clavus[/]{proj}{cue_part}{peer}{sync_part}")
+            self.refresh()
+        except Exception:
+            pass
 
     def _update_footer(self):
         try:
