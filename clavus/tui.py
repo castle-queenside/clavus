@@ -1377,7 +1377,15 @@ class ClavusApp(App):
             if snap.parent == current:
                 break
             current = snap.parent
-        self.snaps = history
+        self.snaps = [
+            Snap(
+                hash=s.hash[:10],
+                message=s.message,
+                timestamp=s.timestamp,
+                track_count=s.track_count,
+            )
+            for s in history
+        ]
         self._render_history()
 
     def _sort_cues(self, cues: list[Cue]) -> list[Cue]:
