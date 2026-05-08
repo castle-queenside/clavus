@@ -686,8 +686,9 @@ def cmd_snapshot(args: argparse.Namespace) -> None:
         tags=args.tag.split(",") if args.tag else [],
     )
 
-    # Check if anything actually changed
-    if snap.hash == proj.head and proj.head is not None:
+    # Check if anything actually changed (compare raw .als bytes, not parsed structure)
+    prev = store.load_snapshot(proj.head) if proj.head else None
+    if prev and snap.als_hash and snap.als_hash == prev.als_hash:
         print(f"⚠️  No changes detected — project state is identical to last snapshot.")
         print(f"   Current HEAD: {snap.short_hash()} — '{store.load_snapshot(proj.head).message if store.load_snapshot(proj.head) else ''}'")
         return

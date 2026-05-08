@@ -182,11 +182,11 @@ def push_snapshot_blobs(
             if not snap:
                 break
 
-            # Content blob hash = the snapshot hash itself
-            if snap.hash not in seen:
-                content_hashes.append(snap.hash)
+            # Content blob hash = snapshot's content_hash (parsed JSON)
+            if snap.content_hash and snap.content_hash not in seen:
+                content_hashes.append(snap.content_hash)
 
-            # .als backup blob hash
+            # .als backup blob hash (raw .als = snapshot identity now)
             if snap.als_hash and snap.als_hash not in seen:
                 als_hashes.append(snap.als_hash)
 
@@ -385,8 +385,10 @@ def pull_snapshot_blobs(
             if not snap:
                 break
 
-            if not store.has_object(snap.hash):
-                missing_content.add(snap.hash)
+            # Content blob is stored under content_hash (parsed JSON)
+            if snap.content_hash and not store.has_object(snap.content_hash):
+                missing_content.add(snap.content_hash)
+            # Raw .als blob = snapshot identity (also als_hash field for compat)
             if snap.als_hash and not store.has_object(snap.als_hash):
                 missing_als.add(snap.als_hash)
             for sh in (snap.sample_hashes or []):
@@ -592,6 +594,7 @@ def _snapshots_to_dicts(store: BlobStore, proj: ClavusProject) -> list[dict]:
             "tags": snap.tags,
             "parent": snap.parent,
             "als_hash": snap.als_hash,
+            "content_hash": snap.content_hash,
             "sample_hashes": snap.sample_hashes,
             "sample_paths": snap.sample_paths,
         })
@@ -731,6 +734,7 @@ def pull_from_remote(store: BlobStore, proj: ClavusProject, remote: Remote, outp
                 bpm=s.get("bpm", 120.0),
                 tags=s.get("tags", []),
                 als_hash=s.get("als_hash", None),
+                content_hash=s.get("content_hash", None),
                 sample_hashes=s.get("sample_hashes", []),
                 sample_paths=s.get("sample_paths", {}),
             )

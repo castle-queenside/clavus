@@ -42,7 +42,7 @@ CONFIG_FILE = "config.json"
 @dataclass
 class Snapshot:
     """A single snapshot of an Ableton project state."""
-    hash: str  # SHA256 of the serialized project
+    hash: str  # SHA256 of the raw .als file (snapshot identity)
     timestamp: float  # Unix timestamp
     message: str  # User-provided message (e.g., "arrangement pass 3")
     parent: Optional[str] = None  # Parent snapshot hash (None for first)
@@ -50,7 +50,8 @@ class Snapshot:
     track_count: int = 0
     bpm: float = 120.0
     tags: list[str] = field(default_factory=list)  # User tags
-    als_hash: Optional[str] = None  # SHA256 of raw .als bytes (for restore)
+    als_hash: Optional[str] = None  # DEPRECATED: now same as .hash (kept for compat)
+    content_hash: Optional[str] = None  # SHA256 of serialized project JSON (for diff)
     sample_hashes: list[str] = field(default_factory=list)  # SHA256 of referenced audio samples
     sample_paths: dict[str, str] = field(default_factory=dict)  # hash → relative path from project root
 
@@ -249,20 +250,16 @@ class BlobStore:
                       parent: Optional[str] = None, tags: list[str] | None = None) -> Snapshot:
         """Serialize a project, hash it, and store as a snapshot.
 
-        Also stores the raw .als file bytes alongside the parsed data
-        so the snapshot can be restored later (dumb-but-bulletproof approach).
-        """
-        # Serialize the project to JSON
+        Snapshot identity = SHA256 of raw .als bytes. ANY save in Ableton
+        that changes the file produces a new snapshot. Parsed project JSON
+        is still stored (content-addressed) for diff/comparison."""
+        # Serialize the project to JSON (for diff display)
         project_data = _project_to_dict(project)
         serialized = json.dumps(project_data, sort_keys=True, default=str).encode("utf-8")
-
-        # Content-address: hash the serialized project
         content_hash = hashlib.sha256(serialized).hexdigest()
-
-        # Store the content
         self.put_object(serialized, content_hash)
 
-        # Also store raw .als bytes (for restore) — hash of the raw file
+        # Raw .als bytes — THIS is the snapshot identity
         als_hash = None
         if project.file_path and Path(project.file_path).exists():
             raw_als = Path(project.file_path).read_bytes()
@@ -288,9 +285,9 @@ class BlobStore:
         except Exception:
             pass  # Sample extraction is best-effort
 
-        # Create the snapshot metadata
+        # Create the snapshot metadata — identity = raw .als hash
         snapshot = Snapshot(
-            hash=content_hash,
+            hash=als_hash or content_hash,  # fallback for edge cases
             timestamp=time.time(),
             message=message,
             parent=parent,
@@ -299,6 +296,7 @@ class BlobStore:
             bpm=project.bpm,
             tags=tags or [],
             als_hash=als_hash,
+            content_hash=content_hash,
             sample_hashes=sample_hashes,
             sample_paths=sample_paths,
         )
@@ -322,12 +320,24 @@ class BlobStore:
         return Snapshot(**data)
 
     def load_project(self, hash_str: str) -> Optional[Project]:
-        """Deserialize a Project from a snapshot hash."""
+        """Deserialize a Project from a snapshot hash.
+
+        Snapshot hash is now the raw .als SHA256. The parsed JSON is stored
+        under content_hash (found in snapshot metadata). For backward compat,
+        also try loading the hash directly as a content blob."""
+        # Try loading via snapshot metadata first (new format: hash = als_hash)
+        snap = self.load_snapshot(hash_str)
+        if snap and snap.content_hash:
+            data = self.get_object(snap.content_hash)
+            if data:
+                project_dict = json.loads(data)
+                return _dict_to_project(project_dict)
+        # Fallback: old format (hash was content_hash directly)
         data = self.get_object(hash_str)
-        if data is None:
-            return None
-        project_dict = json.loads(data)
-        return _dict_to_project(project_dict)
+        if data:
+            project_dict = json.loads(data)
+            return _dict_to_project(project_dict)
+        return None
 
     def _write_snapshot_meta(self, snapshot: Snapshot) -> None:
         """Write snapshot metadata alongside the content blob."""

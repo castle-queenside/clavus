@@ -114,9 +114,12 @@ def _take_snapshot(store: BlobStore, proj: ClavusProject, verbose: bool = True) 
         print(f"❌ Failed to parse .als: {e}")
         return
 
-    # Check if anything actually changed
-    old_project = store.load_project(proj.head) if proj.head else None
-    if old_project and project == old_project:
+    # Check if anything actually changed (compare raw .als hashes)
+    import hashlib
+    raw_bytes = als_path.read_bytes()
+    current_als_hash = hashlib.sha256(raw_bytes).hexdigest()
+    prev = store.load_snapshot(proj.head) if proj.head else None
+    if prev and prev.als_hash == current_als_hash:
         return  # identical content, no snapshot needed
 
     snap = store.save_snapshot(
@@ -125,8 +128,8 @@ def _take_snapshot(store: BlobStore, proj: ClavusProject, verbose: bool = True) 
         parent=proj.head,
     )
 
-    # Skip if no changes
-    if snap.hash == proj.head:
+    # Skip if no changes (redundant — pre-check already caught this)
+    if snap.als_hash == current_als_hash:
         return
 
     # Update references
@@ -135,9 +138,13 @@ def _take_snapshot(store: BlobStore, proj: ClavusProject, verbose: bool = True) 
     store.set_index(proj)
 
     if verbose:
-        if old_project:
-            diff = diff_projects(old_project, project)
-            summary = diff.summary
+        if prev:
+            prev_project = store.load_project(prev.hash)
+            if prev_project:
+                diff = diff_projects(prev_project, project)
+                summary = diff.summary
+            else:
+                summary = f"{project.track_count} tracks @ {project.bpm}bpm"
         else:
             summary = f"{project.track_count} tracks @ {project.bpm}bpm"
         print(f"📸 Auto-snapshot: {snap.short_hash()} — {summary}")
@@ -156,23 +163,16 @@ def watch_once(
     if not als_path.exists():
         return False
 
-    current_hash = _file_hash(als_path)
-    
-    # If current hash matches HEAD's content hash, no change
-    if proj.head:
-        head_snap = store.load_snapshot(proj.head)
-        if head_snap and current_hash == head_snap.hash[:64]:  # rough check
-            # Still do a proper parse to be sure
-            pass
+    import hashlib
+    current_als_hash = hashlib.sha256(als_path.read_bytes()).hexdigest()
+    prev = store.load_snapshot(proj.head) if proj.head else None
+    if prev and prev.als_hash == current_als_hash:
+        return False  # no change
     
     try:
         project = parse_als(als_path)
     except Exception:
         return False
-    
-    old_project = store.load_project(proj.head) if proj.head else None
-    if old_project and project == old_project:
-        return False  # no change
     
     snap = store.save_snapshot(
         project,
@@ -180,7 +180,7 @@ def watch_once(
         parent=proj.head,
     )
     
-    if snap.hash == proj.head:
+    if snap.als_hash == current_als_hash:
         return False
     
     store.update_ref("HEAD", snap.hash)
@@ -188,9 +188,13 @@ def watch_once(
     store.set_index(proj)
     
     if verbose:
-        if old_project:
-            diff = diff_projects(old_project, project)
-            summary = diff.summary
+        if prev:
+            prev_project = store.load_project(prev.hash)
+            if prev_project:
+                diff = diff_projects(prev_project, project)
+                summary = diff.summary
+            else:
+                summary = f"{project.track_count} tracks @ {project.bpm}bpm"
         else:
             summary = f"{project.track_count} tracks @ {project.bpm}bpm"
         print(f"📸 Auto-snapshot: {snap.short_hash()} — {summary}")
