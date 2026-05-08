@@ -1539,13 +1539,9 @@ class ClavusApp(App):
                     _f.write(f"FOR_LOOP_BODY: remote={remote.name} url={remote.url}\n")
                 self._sync_status = f"\u2b07 {time.strftime("%H:%M")} {remote.name}..."
                 self._update_header()
-                with open(r"C:\Users\chris\clavus\clavus_trace.log", "a") as _f:
-                    _f.write(f"AFTER_UPDATE_HEADER\n")
                 await asyncio.sleep(0)
                 result = pull_from_remote(self.store, proj_index, remote)
                 if result.get("error"):
-                    with open(r"C:\Users\chris\clavus\clavus_trace.log", "a") as _f:
-                        _f.write(f"REMOTE_ERROR: {result['error']}\n")
                     self._sync_status = ""
                     self._update_header()
                     await asyncio.sleep(0)
@@ -1555,8 +1551,6 @@ class ClavusApp(App):
                 snaps_n = result.get("snapshots", 0)
                 conflicts_n = result.get("conflicts", 0)
                 blobs = pull_snapshot_blobs(self.store, proj_index, remote)
-                with open(r"C:\Users\chris\clavus\clavus_trace.log", "a") as _f:
-                    _f.write(f"AFTER_PULL_SNAPSHOT_BLOBS: blobs={blobs}\n")
                 self._sync_status = f"\u2b07 {time.strftime("%H:%M")} {remote.name}  {cues_n}c {snaps_n}s" + (f" {blobs}b" if blobs else "")
                 if conflicts_n:
                     self._sync_status += f"  \u26a0{conflicts_n}"
