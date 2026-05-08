@@ -22,6 +22,7 @@ from typing import Optional
 
 from textual import work
 from textual.app import App, ComposeResult
+from textual.reactive import reactive
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
@@ -148,6 +149,17 @@ class ClavusApp(App):
         Binding("escape", "cancel_input", "Cancel input", show=False),
     ]
 
+    sync_status = reactive("")     # Live: "⬇ 14:32 pulling..."
+    last_sync = reactive("")        # Last completed: "⬇ pull ✓ 14:32"
+
+    def watch_sync_status(self, value: str) -> None:
+        """Auto-update header when sync_status changes."""
+        self._render_header()
+
+    def watch_last_sync(self, value: str) -> None:
+        """Auto-update header when last_sync changes."""
+        self._render_header()
+
     def __init__(self, url: str = ""):
         super().__init__()
         from clavus.store import BlobStore
@@ -164,8 +176,8 @@ class ClavusApp(App):
         self._pending_cue_text: str = ""
         self._relay_proc = None
         self._busy: bool = False
-        self._last_sync: str = ""     # "⬆ ✓ 12:34" or "⬇ ✓ 12:34" — last completed sync
-        self._sync_status: str = ""    # Live sync progress: "⬆ pushing...", "⬇ pulling..."
+        # Reactive sync status — set these and the header auto-updates
+        # (class-level default, instance-level override)
         self._peer_name: str = ""     # remote name (e.g. "mac")
         self._peer_reachable: bool = False
         _cfg = ClavusConfig.load()
@@ -204,7 +216,7 @@ class ClavusApp(App):
             )
 
     def on_mount(self):
-        self._update_header()
+        self._render_header()
         self._update_footer()
         self._connect()
 
@@ -328,7 +340,7 @@ class ClavusApp(App):
             if arg:
                 import subprocess, sys
                 subprocess.run([sys.executable, "-m", "clavus", cmd, arg])
-                self._last_sync = f"{'\u2b07' if cmd == 'pull' else '\u2b06'} {cmd} \u2713 {time.strftime('%H:%M')}"
+                self.last_sync = f"{'\u2b07' if cmd == 'pull' else '\u2b06'} {cmd} \u2713 {time.strftime('%H:%M')}"
                 self._connect()  # reload
             else:
                 self.action_pull() if cmd == "pull" else self.action_push()
@@ -385,7 +397,7 @@ class ClavusApp(App):
         self._load_cues_from_disk()
         self._load_snapshots_from_disk()
         self.idx = 0
-        self._update_header()
+        self._render_header()
         self._render()
         self._update_footer()
         # Show result as a temporary label at top of cue list
@@ -825,7 +837,7 @@ class ClavusApp(App):
         # Reload snapshots from local disk (snapshot is local, not from remotes)
         self._load_snapshots_from_disk()
         self._render_history()
-        self._update_header()
+        self._render_header()
         self._render()
 
     # ─── Cue operations ────────────────────────────────────────────────
@@ -1251,7 +1263,7 @@ class ClavusApp(App):
             await self._do_pull()
         finally:
             self._busy = False
-            self._update_header()
+            self._render_header()
             self.refresh()
 
     @work(exclusive=True)
@@ -1262,7 +1274,7 @@ class ClavusApp(App):
             await self._do_push()
         finally:
             self._busy = False
-            self._update_header()
+            self._render_header()
             self.refresh()
 
     @work(exclusive=True)
@@ -1314,7 +1326,7 @@ class ClavusApp(App):
                     self._log_event("no remotes — use :join http://IP:PORT")
             except Exception:
                 self._status("no project — use :init <path> to add one")
-            self._update_header()
+            self._render_header()
             self._update_footer()
             return
 
@@ -1346,9 +1358,9 @@ class ClavusApp(App):
         # Green dot if we already have pulled data (reachability already proven)
         if remotes and (self.cues or self.snaps):
             self._peer_reachable = True
-            if not self._last_sync:
-                self._last_sync = f"synced {time.strftime('%H:%M')}"
-        self._update_header()
+            if not self.last_sync:
+                self.last_sync = f"synced {time.strftime('%H:%M')}"
+        self._render_header()
         self._status(f"{len(self.cues)} cues, {len(self.snaps)} snapshots")
         self._render()
 
@@ -1431,26 +1443,26 @@ class ClavusApp(App):
             proj_index = self.store.get_index(self.project) if self.project else None
             remotes = load_remotes(self.store)
             if not remotes:
-                self._sync_status = ""
-                self._update_header()
+                self.sync_status = ""
+                self._render_header()
                 self._status("\u274c no remotes — use :join http://...")
                 return
-            self._sync_status = f"\u2b07 {time.strftime("%H:%M")} pulling..."
-            self._update_header()
+            self.sync_status = f"\u2b07 {time.strftime("%H:%M")} pulling..."
+            self._render_header()
             await asyncio.sleep(0)
             self._status("\u2b07 pulling...")
 
             # If no local project, auto-discover from remotes
             if not proj_index:
-                self._sync_status = f"\u2b07 {time.strftime("%H:%M")} probing {len(remotes)} remote(s)..."
-                self._update_header()
+                self.sync_status = f"\u2b07 {time.strftime("%H:%M")} probing {len(remotes)} remote(s)..."
+                self._render_header()
                 await asyncio.sleep(0)
                 # Try external remotes first (localhost is slow/unreachable on Windows)
                 remotes_sorted = sorted(remotes, key=lambda r: 0 if "localhost" in r.url else -1)
                 pulled_any = False
                 for remote in remotes_sorted:
-                    self._sync_status = f"\u2b07 {time.strftime("%H:%M")} {remote.name}..."
-                    self._update_header()
+                    self.sync_status = f"\u2b07 {time.strftime("%H:%M")} {remote.name}..."
+                    self._render_header()
                     await asyncio.sleep(0)
                     client = SyncClient(remote.url)
                     try:
@@ -1465,8 +1477,8 @@ class ClavusApp(App):
                             if self.store.get_index(pname):
                                 proj_index = self.store.get_index(pname)
                             else:
-                                self._sync_status = f"\u2b07 {time.strftime("%H:%M")} {pname}..."
-                                self._update_header()
+                                self.sync_status = f"\u2b07 {time.strftime("%H:%M")} {pname}..."
+                                self._render_header()
                                 await asyncio.sleep(0)
                                 r2 = client.client.get(
                                     f"{remote.url}/api/sync/pull",
@@ -1489,22 +1501,22 @@ class ClavusApp(App):
                             if result.get("cues"): parts.append(f"{result['cues']}c")
                             if result.get("snapshots"): parts.append(f"{result['snapshots']}s")
                             if blob_count: parts.append(f"{blob_count}b")
-                            self._sync_status = f"\u2b07 {time.strftime("%H:%M")} {pname}  {' '.join(parts)}" if parts else f"\u2b07 {time.strftime("%H:%M")} {pname}  up to date"
-                            self._update_header()
+                            self.sync_status = f"\u2b07 {time.strftime("%H:%M")} {pname}  {' '.join(parts)}" if parts else f"\u2b07 {time.strftime("%H:%M")} {pname}  up to date"
+                            self._render_header()
                             await asyncio.sleep(0)
                             pulled_any = True
                         if pulled_any:
                             break
                     except Exception as e:
-                        self._sync_status = f"\u2b07 {time.strftime("%H:%M")} {remote.name}: err"
-                        self._update_header()
+                        self.sync_status = f"\u2b07 {time.strftime("%H:%M")} {remote.name}: err"
+                        self._render_header()
                         continue
                     finally:
                         client.close()
 
                 if not pulled_any:
-                    self._sync_status = ""
-                    self._update_header()
+                    self.sync_status = ""
+                    self._render_header()
                     await asyncio.sleep(0)
                     self._status("\u274c no projects found on any remote")
                     return
@@ -1514,24 +1526,24 @@ class ClavusApp(App):
                     self.project = proj_index.name
                     self._peer_name = remotes[0].name if remotes else ""
                     self._peer_reachable = True
-                    self._last_sync = f"\u2b07 pull \u2713 {time.strftime('%H:%M')}"
-                    self._sync_status = ""
+                    self.last_sync = f"\u2b07 pull \u2713 {time.strftime('%H:%M')}"
+                    self.sync_status = ""
                     self._load_cues_from_disk()
                     self._load_snapshots_from_disk()
-                    self._update_header()
+                    self._render_header()
                     self._render()
                     self._status(f"\u2705 pulled {self.project}: {len(self.cues)} cues, {len(self.snaps)} snaps")
                 return
 
             # ── Normal pull for existing project ──
             for remote in remotes:
-                self._sync_status = f"\u2b07 {time.strftime("%H:%M")} {remote.name}..."
-                self._update_header()
+                self.sync_status = f"\u2b07 {time.strftime("%H:%M")} {remote.name}..."
+                self._render_header()
                 await asyncio.sleep(0)
                 result = pull_from_remote(self.store, proj_index, remote)
                 if result.get("error"):
-                    self._sync_status = ""
-                    self._update_header()
+                    self.sync_status = ""
+                    self._render_header()
                     await asyncio.sleep(0)
                     self._status(f"\u274c {result['error']}")
                     return
@@ -1539,24 +1551,24 @@ class ClavusApp(App):
                 snaps_n = result.get("snapshots", 0)
                 conflicts_n = result.get("conflicts", 0)
                 blobs = pull_snapshot_blobs(self.store, proj_index, remote)
-                self._sync_status = f"\u2b07 {time.strftime("%H:%M")} {remote.name}  {cues_n}c {snaps_n}s" + (f" {blobs}b" if blobs else "")
+                self.sync_status = f"\u2b07 {time.strftime("%H:%M")} {remote.name}  {cues_n}c {snaps_n}s" + (f" {blobs}b" if blobs else "")
                 if conflicts_n:
-                    self._sync_status += f"  \u26a0{conflicts_n}"
-                self._update_header()
+                    self.sync_status += f"  \u26a0{conflicts_n}"
+                self._render_header()
                 await asyncio.sleep(0)
                 self._peer_reachable = True
-            self._last_sync = f"\u2b07 pull \u2713 {time.strftime('%H:%M')}"
-            self._sync_status = ""
-            self._update_header()
+            self.last_sync = f"\u2b07 pull \u2713 {time.strftime('%H:%M')}"
+            self.sync_status = ""
+            self._render_header()
             await asyncio.sleep(0)
             self._status(f"\u2705 pulled: {len(self.cues)} cues, {len(self.snaps)} snapshots")
             # Refresh from disk
             if self.project:
                 self._load_cues_from_disk()
                 self._load_snapshots_from_disk()
-                self._update_header()
+                self._render_header()
                 self._render()
-            self.set_timer(0.05, self._update_header)
+            self.set_timer(0.05, self._render_header)
         except Exception as e:
             self._log_event(f"\u274c pull error: {e}")
             self._status(f"\u274c pull error: {e}")
@@ -1569,47 +1581,47 @@ class ClavusApp(App):
         try:
             proj_index = self.store.get_index(self.project)
             if not proj_index:
-                self._sync_status = ""
-                self._update_header()
+                self.sync_status = ""
+                self._render_header()
                 self._status("\u274c no project")
                 return
             remotes = load_remotes(self.store)
             if not remotes:
-                self._sync_status = ""
-                self._update_header()
+                self.sync_status = ""
+                self._render_header()
                 self._status("\u274c no remotes configured")
                 return
-            self._sync_status = f"\u2b06 {time.strftime("%H:%M")} pushing..."
-            self._update_header()
+            self.sync_status = f"\u2b06 {time.strftime("%H:%M")} pushing..."
+            self._render_header()
             await asyncio.sleep(0)
             self._status("\u2b06 pushing...")
             for remote in remotes:
-                self._sync_status = f"\u2b06 {time.strftime("%H:%M")} {remote.name}..."
-                self._update_header()
+                self.sync_status = f"\u2b06 {time.strftime("%H:%M")} {remote.name}..."
+                self._render_header()
                 await asyncio.sleep(0)
                 result = push_to_remote(self.store, proj_index, remote)
                 if result.get("error"):
-                    self._sync_status = ""
-                    self._update_header()
+                    self.sync_status = ""
+                    self._render_header()
                     await asyncio.sleep(0)
                     self._status(f"\u274c {result['error']}")
                     return
                 cues_n = result.get("cues", 0)
                 snaps_n = result.get("snapshots", 0)
                 blobs = push_snapshot_blobs(self.store, proj_index, remote)
-                self._sync_status = f"\u2b06 {time.strftime("%H:%M")} {remote.name}  {cues_n}c {snaps_n}s" + (f" {blobs}b" if blobs else "")
-                self._update_header()
+                self.sync_status = f"\u2b06 {time.strftime("%H:%M")} {remote.name}  {cues_n}c {snaps_n}s" + (f" {blobs}b" if blobs else "")
+                self._render_header()
                 await asyncio.sleep(0)
                 self._peer_reachable = True
-            self._last_sync = f"\u2b06 push \u2713 {time.strftime('%H:%M')}"
-            self._sync_status = ""
-            self._update_header()
+            self.last_sync = f"\u2b06 push \u2713 {time.strftime('%H:%M')}"
+            self.sync_status = ""
+            self._render_header()
             await asyncio.sleep(0)
             self._status("\u2705 push complete")
-            self.set_timer(0.05, self._update_header)
+            self.set_timer(0.05, self._render_header)
         except Exception as e:
-            self._sync_status = ""
-            self._update_header()
+            self.sync_status = ""
+            self._render_header()
             await asyncio.sleep(0)
             self._status(f"\u274c push error: {e}")
 
@@ -1720,28 +1732,26 @@ class ClavusApp(App):
         except NoMatches:
             pass
 
-    def _update_header(self):
+    def _render_header(self) -> None:
+        """Rebuild and push the header text — called reactively via watch methods."""
+        proj = f"  [white]{self.project}[/]" if self.project else ""
+        cue_part = f"  [{C['dim']}]{len(self.cues)} cues[/]"
+        sync_part = ""
+        if self.sync_status:
+            sync_part = f"  [{C['yellow']}]{self.sync_status}[/]"
+        elif self.last_sync:
+            sync_part = f"  [{C['green']}]{self.last_sync}[/]"
+        if self._peer_name and self._peer_reachable:
+            peer = f"  [bold {C['green']}]\u25cf[/]"
+        elif self._peer_name:
+            peer = f"  [{C['yellow']}]\u25cb[/]"
+        else:
+            peer = f"  [{C['dim']}]\u25cb[/]"
         try:
-            proj = f"  [white]{self.project}[/]" if self.project else ""
-            cue_part = f"  [{C['dim']}]{len(self.cues)} cues[/]"
-            # Last sync status
-            sync_part = ""
-            if self._sync_status:
-                # Active sync in progress — show it prominently
-                sync_part = f"  [{C['yellow']}]{self._sync_status}[/]"
-            elif self._last_sync:
-                sync_part = f"  [{C['green']}]{self._last_sync}[/]"
-            # Peer dot
-            if self._peer_name and self._peer_reachable:
-                peer = f"  [bold {C['green']}]\u25cf[/]"
-            elif self._peer_name:
-                peer = f"  [{C['yellow']}]\u25cb[/]"
-            else:
-                peer = f"  [{C['dim']}]\u25cb[/]"
             self.query_one("#header-title", Static).update(
                 f"[bold {C['accent']}]~▼~ clavus[/]{proj}{cue_part}{peer}{sync_part}")
-        except Exception as e:
-            self._log_event(f"header update error: {e}")
+        except Exception:
+            pass
 
     def _update_footer(self):
         try:
