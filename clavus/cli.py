@@ -1750,7 +1750,8 @@ def cmd_remote(args: argparse.Namespace) -> None:
         print(f"   Use 'clavus remote add <name> <url>' to add one.")
         return
 
-    print(f"📡 Remotes for '{proj.name}'")
+    label = proj.name if proj else "this machine"
+    print(f"📡 Remotes for {label}")
     print()
     for r in remotes:
         last_sync = time.strftime("%m/%d %H:%M", time.localtime(r.last_sync)) if r.last_sync else "never"

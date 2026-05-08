@@ -510,9 +510,10 @@ def pull_snapshot_blobs(
                                 except Exception:
                                     pass
 
-                    # Rewrite .als paths then write
-                    from clavus.parser import rewrite_als_sample_paths
-                    raw = rewrite_als_sample_paths(raw, out.parent)
+                    # NOTE: Path rewriting DISABLED — it corrupts .als XML on Windows.
+                    # Write the raw blob as-is.
+                    # from clavus.parser import rewrite_als_sample_paths
+                    # raw = rewrite_als_sample_paths(raw, out.parent)
                     out.write_bytes(raw)
                     print(f"   📁 Project folder → {out.parent}")
     except Exception:
