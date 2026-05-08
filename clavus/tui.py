@@ -1324,14 +1324,16 @@ class ClavusApp(App):
         from clavus.sync import load_remotes
         remotes = load_remotes(self.store)
         self._peer_name = remotes[0].name if remotes else ""
-        # Yellow until first successful pull/push
-        self._peer_reachable = False  # proven on first pull/push
+        self._peer_reachable = False  # default yellow — proven below or via pull/push
         self._update_footer()
 
         # Load cues from disk
         self._load_cues_from_disk()
         # Load snapshots from store
         self._load_snapshots_from_disk()
+        # Green dot if we already have pulled data (reachability already proven)
+        if remotes and (self.cues or self.snaps):
+            self._peer_reachable = True
         self._update_header()
         self._status(f"{len(self.cues)} cues, {len(self.snaps)} snapshots")
         self._render()
