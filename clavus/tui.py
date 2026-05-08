@@ -1340,6 +1340,8 @@ class ClavusApp(App):
         # Green dot if we already have pulled data (reachability already proven)
         if remotes and (self.cues or self.snaps):
             self._peer_reachable = True
+            if not self._last_sync:
+                self._last_sync = "synced"
         self._update_header()
         self._status(f"{len(self.cues)} cues, {len(self.snaps)} snapshots")
         self._render()
