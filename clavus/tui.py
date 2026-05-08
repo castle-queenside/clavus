@@ -1241,10 +1241,9 @@ class ClavusApp(App):
                 self._relay_proc.kill()
             self._relay_proc = None
 
-    @work(exclusive=True)
     async def action_pull(self):
         self._busy = True
-        self._status("⏳ pulling...")
+        self._status("\u23f3 pulling...")
         try:
             await self._do_pull()
         finally:
