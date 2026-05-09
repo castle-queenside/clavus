@@ -85,10 +85,12 @@ class HelpScreen(Screen):
     CSS = f"""
     HelpScreen {{ background: {C['bg']}e0; align: center middle; }}
     #help-box {{ 
-        width: 54; max-height: 90%; overflow-y: auto;
+        width: 68; max-height: 95%; overflow-y: auto;
         background: {C['surface']}; border: thick {C['accent']};
-        padding: 1 2;
+        padding: 0 1;
+        scrollbar-color: #1a9e9e #0f1a20;
     }}
+    #help-box > .scrollbar--grabber {{ background: #1a9e9e; }}
     #help-box Static {{ width: 100%; }}
     #help-box .help-title {{ color: {C['accent']}; text-style: bold; }}
     #help-box .help-key {{ color: {C['accent']}; }}
@@ -107,34 +109,22 @@ class HelpScreen(Screen):
     def compose(self):
         yield Container(
             Static("CLAVUS — KEY BINDINGS", classes="help-title"),
-            Static(""),
             Static("CUES & COLLABORATION", classes="help-section"),
-            Static("  c    New cue        r    Reply to cue"),
-            Static("  e    Edit cue        a    Assign cue"),
-            Static("  s    Skip cue        x    Archive cue"),
-            Static("  R    Resolve cue     !    Resolve conflict"),
-            Static("  d    View diff       T    Restore snapshot"),
-            Static(""),
+            Static("  c    New cue        r    Reply        e    Edit"),
+            Static("  a    Assign         s    Skip          x    Archive"),
+            Static("  R    Resolve        !    Conflict      d    Diff"),
+            Static("  T    Restore snap   i    Inject cues"),
             Static("SNAPSHOTS & SYNC", classes="help-section"),
-            Static("  C    Snapshot        p    Pull from remote"),
-            Static("  P    Push to remote  i    Inject cues"),
-            Static(""),
+            Static("  C    Snapshot       p    Pull          P    Push"),
             Static("NAVIGATION", classes="help-section"),
-            Static("  j/↓  Down           k/↑  Up"),
-            Static("  Tab  Switch pane     Esc  Cancel / Dismiss"),
-            Static("  ?/h  Help            :help  Show this screen"),
-            Static(""),
+            Static("  j/↓  Down           k/↑  Up           Tab  Switch pane"),
+            Static("  Esc  Cancel/Dismiss ?/h  Help         :    Command mode"),
             Static("COMMANDS (:)", classes="help-section"),
-            Static("  :snapshot <msg>  Create named snapshot"),
-            Static("  :project <name>  Switch project"),
-            Static("  :open [path]     Open .als in Ableton"),
-            Static("  :pull / :push    Manual sync"),
-            Static("  :stem push/pull  Stem file sync"),
-            Static("  :init <path>     Init a new project"),
-            Static("  :remote <url>    Add a remote relay"),
-            Static("  :help            Show this screen"),
-            Static(""),
-            Static("[dim]Press Esc, q, Enter, or h to close[/]", classes="help-dim"),
+            Static("  :snapshot <msg>  Create snapshot     :project <name>  Switch project"),
+            Static("  :open [path]     Open in Ableton     :pull / :push    Manual sync"),
+            Static("  :stem push/pull  Stem file sync      :init <path>     Init project"),
+            Static("  :remote rename <old> <new>           :remote add <name> <url>"),
+            Static("[dim]Esc / q / Enter / h — close[/]", classes="help-dim"),
             id="help-box",
         )
 
