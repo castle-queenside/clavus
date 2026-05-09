@@ -1436,13 +1436,7 @@ def cmd_join(args: argparse.Namespace) -> None:
         print(f"  Make sure 'clavus share' is running on the other machine.")
         return
 
-    projects = info.get("projects", [])
-    if not projects:
-        print(f"  ❌ No projects found on this relay.")
-        print(f"  Ask the host to run 'clavus init' first.")
-        return
-
-    # Add remote (deduplicate by URL)
+    # ── Save remote first (always, so user can push their own projects) ──
     store = BlobStore()
     remotes = load_remotes(store)
     name = host.replace(".", "-")
@@ -1454,6 +1448,11 @@ def cmd_join(args: argparse.Namespace) -> None:
         print(f"  ✅ Added remote '{name}' → {base}")
     else:
         print(f"  📡 Remote already configured: {base}")
+
+    projects = info.get("projects", [])
+    if not projects:
+        print(f"  ℹ️  No projects on relay yet — push yours with 'clavus push' or P in TUI")
+        return
 
     # Pull all projects
     for pdata in projects:
