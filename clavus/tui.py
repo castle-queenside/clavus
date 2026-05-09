@@ -192,7 +192,7 @@ class ClavusApp(App):
                 Static("", id="join-banner"),
                 Container(ListView(id="clv"), id="cues-list"),
                 Container(
-                    Static(" History", classes="label"),
+                    Static(" History", id="history-label"),
                     Container(ListView(id="hlv"), id="history-list"),
                     id="history",
                 ),
@@ -1860,6 +1860,26 @@ class ClavusApp(App):
             widget.update(
                 f"[bold {C['accent']}]clavus[/]{proj}{cue_part}{peer}{sync_part}")
             widget.refresh()
+            # Also update the history label with snap age
+            self._update_history_label()
+        except NoMatches:
+            pass
+
+    def _update_history_label(self):
+        try:
+            label = self.query_one('#history-label', Static)
+            text = ' History'
+            if self._last_snap_time:
+                elapsed = time.time() - self._last_snap_time
+                if elapsed < 120:
+                    text += f'  [{C["dim"]}]● {int(elapsed)}s[/]'
+                elif elapsed < 3600:
+                    text += f'  [{C["dim"]}]● {int(elapsed // 60)}m[/]'
+                elif elapsed < 86400:
+                    text += f'  [{C["dim"]}]● {int(elapsed // 3600)}h[/]'
+                else:
+                    text += f'  [{C["dim"]}]● {int(elapsed // 86400)}d[/]'
+            label.update(text)
         except NoMatches:
             pass
 
@@ -1945,27 +1965,12 @@ class ClavusApp(App):
             lv.append(ListItem(Label(f"  [{C['dim']}]no snapshots yet[/]")))
             lv.refresh()
             return
-
-        # Build snap age indicator (shown on the most recent snapshot)
-        snap_age = ""
-        if self._last_snap_time:
-            elapsed = time.time() - self._last_snap_time
-            if elapsed < 120:
-                snap_age = f" [{C['dim']}]{int(elapsed)}s ago[/]"
-            elif elapsed < 3600:
-                snap_age = f" [{C['dim']}]{int(elapsed // 60)}m ago[/]"
-            elif elapsed < 86400:
-                snap_age = f" [{C['dim']}]{int(elapsed // 3600)}h ago[/]"
-            else:
-                snap_age = f" [{C['dim']}]{int(elapsed // 86400)}d ago[/]"
-
-        for i, s in enumerate(self.snaps[:10]):
+        for s in self.snaps[:10]:
             ts = time.strftime("%m/%d %H:%M", time.localtime(s.timestamp)) if s.timestamp else ""
-            safe_msg = s.message[:50].replace("[", "\\[").replace("]", "\\]")
-            age = snap_age if i == 0 else ""
+            safe_msg = s.message[:50].replace("[", "\[").replace("]", "\]")
             lv.append(ListItem(Label(
                 f"[{C['accent']}]{s.hash}[/] [{C['dim']}]{ts}[/]"
-                f"{age}  [{C['fg']}]{safe_msg}[/]"
+                f"  [{C['fg']}]{safe_msg}[/]"
             )))
         lv.refresh()
 
