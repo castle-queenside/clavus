@@ -128,18 +128,15 @@ class ClavusApp(App):
         Binding("e", "edit", "Edit"),
         Binding("c", "cue_new", "New cue"),
         Binding("s", "skip", "Skip"),
+        Binding("R", "resolve", "Resolve"),
         Binding("T", "restore_snapshot", "Restore"),
         Binding("i", "inject_cues", "Inject"),
-        Binding("R", "resolve", "Resolve"),
         Binding("a", "assign", "Assign"),
-        Binding("S", "start", "Start/Stop"),
         Binding("x", "archive", "Archive"),
         Binding("C", "snapshot", "Snapshot"),
         Binding("d", "diff", "Diff"),
-        Binding("!", "resolve_conflict", "Conflict"),
         Binding("p", "pull", "Pull"),
         Binding("P", "push", "Push"),
-        Binding("U", "stem_push", "Stem↑", show=False),
         Binding("tab", "focus_next_pane", "Pane"),
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
@@ -1877,7 +1874,9 @@ class ClavusApp(App):
                 f"[{C['accent']}]c[/] cue  "
                 f"[{C['accent']}]C[/] snap  "
                 f"[{C['accent']}]a[/] assign  "
-                f"[{C['accent']}]x[/] archive"
+                f"[{C['accent']}]x[/] archive  "
+                f"[{C['accent']}]p[/] pull  "
+                f"[{C['accent']}]P[/] push"
             )
             # Don't touch #footer-stats here — _status() owns that
         except NoMatches:
