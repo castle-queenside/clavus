@@ -1864,34 +1864,17 @@ class ClavusApp(App):
         self._update_header()
 
     def _update_header(self):
+        """Minimal header: clavus logo, connection dot, remote name."""
         try:
-            proj = f"  [white]{self.project}[/]" if self.project else ""
-            cue_part = f"  [{C['dim']}]{len(self.cues)} cues[/]"
-            if self._archived_count:
-                cue_part += f" [{C['dim']}]+{self._archived_count} archived[/]"
-            sync_part = ""
-            if self._sync_status:
-                sync_part = f"  [bold {C['yellow']}]{self._sync_status}[/]"
-            elif self._last_sync:
-                sync_part = f"  [{C['green']}]{self._last_sync}[/]"
+            # Connection dot
             if self._peer_name and self._peer_reachable:
-                peer = f"  [bold {C['green']}]\u25cf[/]"
+                peer = f"  [bold {C['green']}]\u25cf[/] {self._peer_name}"
             elif self._peer_name:
-                peer = f"  [{C['yellow']}]\u25cb[/]"
+                peer = f"  [{C['yellow']}]\u25cb[/] {self._peer_name}"
             else:
-                peer = f"  [{C['dim']}]\u25cb[/]"
-            snap_part = ""
-            if self._last_snap_time:
-                elapsed = time.time() - self._last_snap_time
-                if elapsed < 3600:
-                    mins = int(elapsed // 60)
-                    snap_part = f"  [{C['dim']}]● {mins}m[/]"
-                else:
-                    hours = int(elapsed // 3600)
-                    snap_part = f"  [{C['dim']}]● {hours}h[/]"
+                peer = ""
             widget = self.query_one("#header-title", Static)
-            widget.update(
-                f"[bold {C['accent']}]clavus[/]{proj}{cue_part}{snap_part}{peer}{sync_part}")
+            widget.update(f"[bold {C['accent']}]clavus[/]{peer}")
             widget.refresh()
             # Also update the history label with snap age
             self._update_history_label()
@@ -1923,37 +1906,33 @@ class ClavusApp(App):
             pass
 
     def _update_footer(self):
-        """Build context-aware status bar — project, cues, snaps, connection."""
+        """Footer is the single source of truth for project state and activity."""
         try:
             status = self.query_one("#footer-status", Static)
-            if self.project:
-                proj = self.project
-                n_cues = len(self.cues)
-                n_snaps = len(self.snaps)
-                head_short = ""
-                if self.snaps:
-                    head_short = self.snaps[0].hash[:8]
-                    last_msg = self.snaps[0].message[:40] if self.snaps[0].message else ""
-                else:
-                    last_msg = ""
-                # Build segments
-                parts = [f"[bold]{proj}[/]"]
-                if n_cues:
-                    parts.append(f"{n_cues} cues")
-                if head_short:
-                    parts.append(f"📸 {head_short}")
-                if self._sync_status:
-                    spinner = self.BRAILLE[self._spinner_idx % len(self.BRAILLE)]
-                    parts.append(f"[{C['yellow']}]{spinner} {self._sync_status}[/]")
-                elif self._last_sync:
-                    parts.append(f"[{C['green']}]{self._last_sync}[/]")
-                elif self._peer_name:
-                    reachable = "✓" if self._peer_reachable else "✗"
-                    parts.append(f"🔗 {self._peer_name} {reachable}")
-                status.update("  ".join(parts))
-            else:
+            if not self.project:
                 status.update(f"[{C['dim']}]no project — :init <path> to start[/]")
-            # Right side: :help hint is always visible (set in compose)
+                return
+
+            parts = [f"[bold]{self.project}[/]"]
+
+            # Cues — always show, even 0
+            n = len(self.cues)
+            parts.append(f"{n} cue{'s' if n != 1 else ''}")
+
+            # Snapshot — most recent hash + message
+            if self.snaps:
+                snap = self.snaps[0]
+                msg = snap.message[:30] if snap.message else ""
+                parts.append(f"📸 {snap.hash[:8]}" + (f" '{msg}'" if msg else ""))
+
+            # Sync activity — spinner during, timestamp after
+            if self._sync_status:
+                s = self.BRAILLE[self._spinner_idx % len(self.BRAILLE)]
+                parts.append(f"[{C['yellow']}]{s} {self._sync_status}[/]")
+            elif self._last_sync:
+                parts.append(f"[{C['green']}]{self._last_sync}[/]")
+
+            status.update("  ".join(parts))
         except NoMatches:
             pass
 
