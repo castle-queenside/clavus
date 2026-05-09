@@ -821,6 +821,68 @@ def cmd_project(args: argparse.Namespace) -> None:
     print(f"   Branch: {proj.branch}")
 
 
+def create_snapshot(message: str, allow_frozen: bool = True) -> tuple[Optional[str], list[str]]:
+    """Core snapshot logic (non-interactive). Returns (snap_hash, log_lines). 
+    
+    If allow_frozen=True, skips frozen track prompt. Used by TUI.
+    Returns (None, [...]) on failure or no-change.
+    """
+    logs: list[str] = []
+    store, proj = get_store_and_project()
+    als_path = Path(proj.root_als) if proj.root_als else None
+    if not als_path or not als_path.is_file():
+        from clavus.helpers import get_projects_dir
+        candidate = get_projects_dir() / proj.name / f"{proj.name}.als"
+        if candidate.is_file():
+            als_path = candidate
+        else:
+            logs.append(f"❌ .als file not found: {proj.root_als or 'projects/' + proj.name}")
+            # Also try the Project subfolder convention
+            candidate2 = get_projects_dir() / proj.name / f"{proj.name} Project" / f"{proj.name}.als"
+            if candidate2.is_file():
+                als_path = candidate2
+                logs.append(f"   Found in project subfolder: {candidate2}")
+            else:
+                return None, logs
+
+    project = parse_als(als_path)
+    frozen_count = 0
+    try:
+        raw = als_path.read_bytes()
+        frozen_count = raw.count(b'<Freeze Value=\"true\"')
+    except Exception:
+        pass
+    if frozen_count and not allow_frozen:
+        logs.append(f"  ⚠️  {frozen_count} frozen track(s) — pass allow_frozen=True to skip")
+        return None, logs
+
+    snap = store.save_snapshot(
+        project, message=message, parent=proj.head, tags=[],
+    )
+
+    prev = store.load_snapshot(proj.head) if proj.head else None
+    if prev and snap.als_hash and snap.als_hash == prev.als_hash:
+        logs.append(f"⚠️  No changes — {proj.name}.als is identical to last snapshot")
+        return None, logs
+
+    store.update_ref("HEAD", snap.hash)
+    proj.head = snap.hash
+    store.set_index(proj)
+
+    if prev:
+        prev_project = store.load_project(prev.hash)
+        if prev_project:
+            diff = diff_projects(prev_project, project)
+            logs.append(f"📸 {snap.short_hash()} — '{snap.message}'")
+            logs.append(f"   {diff.summary}")
+        else:
+            logs.append(f"📸 {snap.short_hash()} — '{snap.message}'")
+    else:
+        logs.append(f"📸 {snap.short_hash()} — '{snap.message}' ({project.track_count} tracks @ {project.bpm}bpm)")
+
+    return snap.hash, logs
+
+
 def cmd_snapshot(args: argparse.Namespace) -> None:
     """Create a new snapshot of the current project state."""
     store, proj = get_store_and_project()

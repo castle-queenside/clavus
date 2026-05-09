@@ -781,40 +781,26 @@ class ClavusApp(App):
 
     @work(exclusive=False)
     async def _run_snapshot(self, message: str = ""):
-        """Create a new snapshot via CLI subprocess."""
+        """Create a new snapshot — in-process, no subprocess."""
         if not self.project:
             self._status("no project selected")
             return
         if not message:
             self._status("usage: :snapshot <message>")
             return
-        import asyncio
         self._status("creating snapshot...")
         try:
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable, "-m", "clavus", "snapshot", "--allow-frozen", message,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-            out = stdout.decode().strip()
-            err = stderr.decode().strip()
-            if out:
-                for line in out.split("\n"):
-                    if line.strip():
-                        self._log_event(line.strip())
-            if err:
-                for line in err.split("\n"):
-                    if line.strip():
-                        self._log_event(line.strip())
-            # Use last line of output as status (most informative)
-            status_line = (out + "\n" + err).strip().split("\n")[-1] if (out or err) else ""
-            if proc.returncode == 0:
-                self._status(status_line if status_line else "snapshot complete")
+            from clavus.cli import create_snapshot
+            snap_hash, logs = create_snapshot(message, allow_frozen=True)
+            for line in logs:
+                self._log_event(line)
+            if snap_hash:
+                self._status(f"📸 {snap_hash[:10]} — '{message}'")
             else:
-                self._status(f"snapshot failed: {status_line}" if status_line else "snapshot failed")
+                self._status("snapshot skipped (no changes or error) — see log")
         except Exception as e:
             self._status(f"snapshot error: {e}")
+            self._log_event(f"snapshot error: {e}")
         # Reload snapshots from disk and refresh UI
         self._load_snapshots_from_disk()
         self._update_header()
