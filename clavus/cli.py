@@ -358,7 +358,7 @@ def cmd_setup(args: argparse.Namespace) -> None:
     else:
         print("   ℹ️  No remotes — use 'clavus remote add' later or 'clavus join http://...'")
 
-    # 7. Projects folder
+    # 5. Projects folder
     from clavus.config import DEFAULT_PROJECTS_DIR
     current_dir = cfg.projects_dir or DEFAULT_PROJECTS_DIR
     print(f"📁 Projects folder [{current_dir}]: ", end="")
@@ -371,7 +371,7 @@ def cmd_setup(args: argparse.Namespace) -> None:
         pass
     print(f"   All synced projects go here")
 
-    # 5. Ableton detection
+    # 6. Ableton detection
     print()
     ableton = None
     if platform.system() == "Darwin":
@@ -2771,7 +2771,7 @@ def main():
             from importlib.metadata import version
             v = version("clavus")
         except ImportError:
-            v = "0.7.0-beta"
+            v = "0.8.0-beta"
         print(f"clavus {v}")
         return
 
