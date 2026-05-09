@@ -1486,8 +1486,8 @@ class ClavusApp(App):
                     await asyncio.sleep(0)
                     client = SyncClient(remote.url)
                     try:
-                        r = client.client.get(f"{remote.url}/api/projects", timeout=10)
-                        if r.status_code != 200:
+                        r, err = client.request_with_retry("GET", "/api/projects", timeout=10)
+                        if r is None or r.status_code != 200:
                             continue
                         projects = r.json().get("projects", [])
                         if not projects:
@@ -1500,10 +1500,10 @@ class ClavusApp(App):
                                 self._sync_status = f"\u2b07 {time.strftime("%H:%M")} {pname}..."
                                 self._update_header()
                                 await asyncio.sleep(0)
-                                r2 = client.client.get(
-                                    f"{remote.url}/api/sync/pull",
+                                r2, _ = client.request_with_retry(
+                                    "GET", "/api/sync/pull",
                                     params={"name": pname}, timeout=30)
-                                if r2.status_code != 200:
+                                if r2 is None or r2.status_code != 200:
                                     continue
                                 info = r2.json().get("project", {})
                                 new_proj = ClavusProject(

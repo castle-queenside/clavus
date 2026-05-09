@@ -69,46 +69,91 @@ def save_remotes(store: BlobStore, remotes: list[Remote]) -> None:
 
 # ─── Sync Client ──────────────────────────────────────────────────────
 
+# Retryable exceptions: transient network failures, not semantic errors
+_RETRYABLE = (
+    httpx.ConnectError,
+    httpx.TimeoutException,
+    httpx.RemoteProtocolError,
+    httpx.NetworkError,
+    ConnectionError,
+    TimeoutError,
+    OSError,  # "Connection reset by peer" etc
+)
+_MAX_RETRIES = 3
+_RETRY_BACKOFF = [1.0, 2.0, 4.0]  # seconds between attempts
+
+
 class SyncClient:
-    """HTTP client for talking to remote clavus servers."""
+    """HTTP client for talking to remote clavus servers.
+
+    All HTTP calls get automatic retry on transient network failures
+    (timeouts, connection resets, DNS blips). Semantic errors (409, 404)
+    are never retried — they mean something that retrying won't fix.
+    """
 
     def __init__(self, remote_url: str):
         self.base_url = remote_url.rstrip("/")
         self.client = httpx.Client(timeout=30.0)
 
+    def _retry(self, fn, *args, **kwargs):
+        """Call fn() up to _MAX_RETRIES times with backoff on transient errors.
+
+        Returns (response, None) on success, (None, error_message) on failure.
+        Semantic errors (4xx except 429) return immediately without retry.
+        """
+        last_error = None
+        for attempt in range(_MAX_RETRIES):
+            try:
+                r = fn(*args, **kwargs)
+                # 4xx errors (except 429 rate-limit) are semantic — don't retry
+                if 400 <= r.status_code < 500 and r.status_code != 429:
+                    return r, None
+                if r.status_code < 500:
+                    return r, None
+                # 5xx — retryable
+                last_error = f"HTTP {r.status_code}"
+            except _RETRYABLE as e:
+                last_error = str(e)[:120]
+            except Exception as e:
+                # Unexpected — don't retry
+                return None, str(e)[:120]
+
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(_RETRY_BACKOFF[attempt])
+
+        return None, last_error or "unknown"
+
     def ping(self) -> bool:
-        try:
-            r = self.client.get(f"{self.base_url}/api/ping")
-            return r.status_code == 200
-        except Exception:
-            return False
+        r, _ = self._retry(
+            lambda: self.client.get(f"{self.base_url}/api/ping", timeout=10)
+        )
+        return r is not None and r.status_code == 200
 
     def pull(self, project: str) -> Optional[dict]:
-        """Pull cues and snapshots from remote."""
-        try:
-            r = self.client.get(
+        r, err = self._retry(
+            lambda: self.client.get(
                 f"{self.base_url}/api/sync/pull",
                 params={"name": project},
                 timeout=30,
             )
-            if r.status_code == 200:
+        )
+        if r is not None and r.status_code == 200:
+            try:
                 return r.json()
-        except Exception:
-            pass
+            except Exception:
+                return None
         return None
 
     def push_cues(self, project: str, cues: list[dict]) -> bool:
-        """Push cues to remote."""
-        try:
-            r = self.client.post(
+        r, _ = self._retry(
+            lambda: self.client.post(
                 f"{self.base_url}/api/sync/push",
                 params={"name": project},
                 json={"cues": cues},
                 timeout=30,
             )
-            return r.status_code == 200
-        except Exception:
-            return False
+        )
+        return r is not None and r.status_code == 200
 
     def push_snapshots(self, project: str, snapshots: list[dict],
                         expected_parent: str | None = None) -> tuple[bool, str | None]:
@@ -119,41 +164,53 @@ class SyncClient:
                              If set and doesn't match, relay returns 409 Conflict.
 
         Returns:
-            (success, conflict_message) — conflict_message is set on 409.
+            (success, conflict_message, relay_head) — conflict_message set on 409,
+            relay_head is the current relay HEAD from the 409 response (for auto-recovery).
         """
-        try:
-            body: dict = {"snapshots": snapshots}
-            if expected_parent:
-                body["expected_parent"] = expected_parent
-            r = self.client.post(
+        body: dict = {"snapshots": snapshots}
+        if expected_parent:
+            body["expected_parent"] = expected_parent
+
+        r, _ = self._retry(
+            lambda: self.client.post(
                 f"{self.base_url}/api/sync/push-snapshots",
                 params={"name": project},
                 json=body,
                 timeout=60,
             )
-            if r.status_code == 200:
-                return True, None, None
-            if r.status_code == 409:
-                try:
-                    body = r.json()
-                    # FastAPI wraps detail in {"detail": ...}
-                    detail = body.get("detail", body) if isinstance(body, dict) else body
-                    if isinstance(detail, dict):
-                        err = detail.get("message", detail.get("error", "Conflict — pull first"))
-                        relay_head = detail.get("relay_head")
-                    else:
-                        err = str(detail)
-                        relay_head = None
-                except Exception:
-                    err = "Conflict — pull first"
+        )
+        if r is None:
+            return False, None, None
+        if r.status_code == 200:
+            return True, None, None
+        if r.status_code == 409:
+            try:
+                resp_body = r.json()
+                # FastAPI wraps detail in {"detail": ...}
+                detail = resp_body.get("detail", resp_body) if isinstance(resp_body, dict) else resp_body
+                if isinstance(detail, dict):
+                    err = detail.get("message", detail.get("error", "Conflict — pull first"))
+                    relay_head = detail.get("relay_head")
+                else:
+                    err = str(detail)
                     relay_head = None
-                return False, err, relay_head
-            return False, None, None
-        except Exception:
-            return False, None, None
+            except Exception:
+                err = "Conflict — pull first"
+                relay_head = None
+            return False, err, relay_head
+        return False, None, None
 
     def close(self):
         self.client.close()
+
+    def request_with_retry(self, method: str, path: str, **kwargs):
+        """Make an HTTP request with retry. Use this for raw API calls
+        that aren't covered by ping/pull/push_cues/push_snapshots."""
+        return self._retry(
+            lambda: self.client.request(
+                method, f"{self.base_url}{path}", **kwargs
+            )
+        )
 
 
 # ─── Snapshot Blob Sync ──────────────────────────────────────────────
@@ -614,7 +671,14 @@ def _snapshots_to_dicts(store: BlobStore, proj: ClavusProject) -> list[dict]:
 
 
 def push_to_remote(store: BlobStore, proj: ClavusProject, remote: Remote) -> dict:
-    """Push all data to a remote. Returns summary."""
+    """Push all data to a remote. Returns summary.
+
+    ORDER MATTERS: snapshots → blobs → cues.
+    Snapshots create the project on the relay and establish the history chain.
+    If they fail (network or 409 conflict), nothing lands — clean stop.
+    Cues go last because they reference snapshots; by the time they arrive,
+    the project and its history already exist on the relay.
+    """
     result = {"cues": 0, "snapshots": 0, "error": ""}
     client = SyncClient(remote.url)
 
@@ -626,18 +690,7 @@ def push_to_remote(store: BlobStore, proj: ClavusProject, remote: Remote) -> dic
             return result
         print(f"  ✅ Connected")
 
-        # Push cues (always push, even empty — ensures project exists on relay)
-        cues_store = CueStore(proj.name, store=store)
-        cues_data = _cues_to_dicts(cues_store)
-        print(f"  📋 Pushing {len(cues_data)} cue(s)...")
-        ok = client.push_cues(proj.name, cues_data)
-        if cues_data:
-            result["cues"] = len(cues_data) if ok else 0
-        if not ok and not result["error"]:
-            result["error"] = "Failed to push cues"
-        print(f"  {'✅' if ok else '❌'} Cues: {result['cues']} sent")
-
-        # Push snapshots (always push, even empty — ensures project exists on relay)
+        # ── Phase 1: Snapshots (establishes project + history on relay) ──
         snap_data = _snapshots_to_dicts(store, proj)
         print(f"  📸 Pushing {len(snap_data)} snapshot(s)...")
         ok, conflict, relay_head = client.push_snapshots(proj.name, snap_data,
@@ -659,6 +712,23 @@ def push_to_remote(store: BlobStore, proj: ClavusProject, remote: Remote) -> dic
         elif not ok and not result["error"]:
             result["error"] = "Failed to push snapshots"
         print(f"  {'✅' if ok else '❌'} Snapshots: {result['snapshots']} sent")
+
+        # If snapshots failed (conflict or network), don't push blobs or cues
+        if not ok:
+            return result
+
+        # ── Phase 3: Cues (safe to push now — project exists on relay) ──
+        cues_store = CueStore(proj.name, store=store)
+        cues_data = _cues_to_dicts(cues_store)
+        print(f"  📋 Pushing {len(cues_data)} cue(s)...")
+        ok_cues = client.push_cues(proj.name, cues_data)
+        if cues_data:
+            result["cues"] = len(cues_data) if ok_cues else 0
+        if not ok_cues:
+            # Cues failed but snapshots already landed — note it, don't overwrite error
+            if not result["error"]:
+                result["error"] = "Snapshots synced but cues failed — retry push"
+        print(f"  {'✅' if ok_cues else '❌'} Cues: {result['cues']} sent")
 
         if ok:
             remote.last_head = proj.head
