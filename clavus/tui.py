@@ -129,6 +129,7 @@ class ClavusApp(App):
         Binding("c", "cue_new", "New cue"),
         Binding("s", "skip", "Skip"),
         Binding("T", "restore_snapshot", "Restore"),
+        Binding("i", "inject_cues", "Inject"),
         Binding("R", "resolve", "Resolve"),
         Binding("a", "assign", "Assign"),
         Binding("S", "start", "Start/Stop"),
@@ -165,6 +166,7 @@ class ClavusApp(App):
         self._relay_proc = None
         self._busy: bool = False
         self._last_sync: str = ""     # "⬆ ✓ 12:34" or "⬇ ✓ 12:34" — last completed sync
+        self._last_snap_time: float = 0.0  # unix timestamp of last auto-snapshot
         self._sync_status: str = ""    # Live sync progress: "⬆ pushing...", "⬇ pulling..."
         self._peer_name: str = ""     # remote name (e.g. "mac")
         self._peer_reachable: bool = False
@@ -212,6 +214,8 @@ class ClavusApp(App):
         self._update_header()
         self._update_footer()
         self._connect()
+        # Refresh header every 60s to update snap time indicator
+        self.set_interval(60.0, self._update_header)
 
     # ─── Input bar ──────────────────────────────────────────────────────
 
@@ -490,7 +494,7 @@ class ClavusApp(App):
 
     @work(exclusive=False)
     async def _run_inject(self):
-        """Inject cues as Ableton markers via CLI subprocess."""
+        """Inject unresolved cues as Ableton markers via CLI subprocess."""
         if not self.project:
             self._status("no project selected")
             return
@@ -498,15 +502,19 @@ class ClavusApp(App):
         self._status("injecting cues into .als...")
         try:
             proc = await asyncio.create_subprocess_exec(
-                sys.executable, "-m", "clavus", "inject",
+                sys.executable, "-m", "clavus", "cue-render", "--inject",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
             out = stdout.decode().strip()
+            err = stderr.decode().strip()
             if out:
                 for line in out.split("\n"):
-                    self._log_event(line.strip())
+                    if line.strip():
+                        self._log_event(line.strip())
+            if proc.returncode != 0 and err:
+                self._log_event(f"error: {err}")
             self._status("inject complete" if proc.returncode == 0 else "inject failed")
         except Exception as e:
             self._status(f"inject error: {e}")
@@ -1017,6 +1025,17 @@ class ClavusApp(App):
         self._status("skipped" if cue.status == "skipped" else "unskipped")
         self._save()
 
+    def action_inject_cues(self):
+        """Inject unresolved cues as Ableton markers."""
+        if not self.project:
+            self._status("no project selected")
+            return
+        if not self.cues:
+            self._status("no cues to inject")
+            return
+        self._status("injecting cues...")
+        self._run_inject()
+
     def action_restore_snapshot(self):
         """Restore the most recently selected snapshot from the history pane."""
         if not self.snaps:
@@ -1438,6 +1457,9 @@ class ClavusApp(App):
             )
             for s in history
         ]
+        # Track last snapshot time for auto-snap indicator in header
+        if self.snaps:
+            self._last_snap_time = self.snaps[0].timestamp
         self._render_history()
 
     def _sort_cues(self, cues: list[Cue]) -> list[Cue]:
@@ -1826,9 +1848,18 @@ class ClavusApp(App):
                 peer = f"  [{C['yellow']}]\u25cb[/]"
             else:
                 peer = f"  [{C['dim']}]\u25cb[/]"
+            snap_part = ""
+            if self._last_snap_time:
+                elapsed = time.time() - self._last_snap_time
+                if elapsed < 3600:
+                    mins = int(elapsed // 60)
+                    snap_part = f"  [{C['dim']}]\U0001F4F7 {mins}m[/]"
+                else:
+                    hours = int(elapsed // 3600)
+                    snap_part = f"  [{C['dim']}]\U0001F4F7 {hours}h[/]"
             widget = self.query_one("#header-title", Static)
             widget.update(
-                f"[bold {C['accent']}]clavus[/]{proj}{cue_part}{peer}{sync_part}")
+                f"[bold {C['accent']}]clavus[/]{proj}{cue_part}{snap_part}{peer}{sync_part}")
             widget.refresh()
         except NoMatches:
             pass
@@ -1842,9 +1873,10 @@ class ClavusApp(App):
                 f"[{C['accent']}]c[/] cue  "
                 f"[{C['accent']}]C[/] snap  "
                 f"[{C['accent']}]a[/] assign  "
+                f"[{C['accent']}]i[/] inject  "
+                f"[{C['accent']}]T[/] restore  "
                 f"[{C['accent']}]x[/] archive  "
                 f"[{C['accent']}]![/] conflict  "
-                f"[{C['accent']}]U[/] stems  "
                 f"[{C['accent']}]q[/] quit  "
                 f"[{C['accent']}]:[/] cmd"
             )
