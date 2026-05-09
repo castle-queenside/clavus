@@ -111,7 +111,7 @@ class HelpScreen(Screen):
             Static("CLAVUS — KEY BINDINGS", classes="help-title"),
             Static("CUES & COLLABORATION", classes="help-section"),
             Static("  c    New cue        r    Reply        e    Edit"),
-            Static("  a    Assign         x    Archive       s    Quick snap"),
+            Static("  a    Assign         x    Archive       S    Quick snap"),
             Static("  R    Resolve        !    Conflict      d    Diff"),
             Static("  T    Restore snap   i    Inject cues"),
             Static("SNAPSHOTS & SYNC", classes="help-section"),
@@ -183,8 +183,8 @@ class ClavusApp(App):
         Binding("r", "reply", "Reply"),
         Binding("e", "edit", "Edit"),
         Binding("c", "cue_new", "New cue"),
-        Binding("s", "snapshot", "Snapshot"),
-        Binding("S", "snapshot", "Snapshot", show=False),
+        Binding("S", "snapshot", "Snapshot"),
+        Binding("s", "snapshot", "Snapshot", show=False),
         Binding("R", "resolve", "Resolve"),
         Binding("T", "restore_snapshot", "Restore"),
         Binding("i", "inject_cues", "Inject"),
@@ -1902,11 +1902,11 @@ class ClavusApp(App):
         try:
             hlv = self.query_one("#hlv", ListView)
             if hlv.has_focus:
-                hint = "s snap  T restore  d diff  :help"
+                hint = "S snap  T restore  d diff  :help"
             else:
                 clv = self.query_one("#clv", ListView)
                 if clv.has_focus:
-                    hint = "c cue  r reply  a assign  s snap  p pull  :help"
+                    hint = "c cue  r reply  a assign  S snap  p pull  :help"
         except NoMatches:
             pass
         try:
@@ -2148,7 +2148,7 @@ class ClavusApp(App):
         lv = self.query_one("#hlv", ListView)
         lv.clear()
         if not self.snaps:
-            lv.append(ListItem(Label(f"  [{C['dim']}]no snapshots yet — s to capture[/]")))
+            lv.append(ListItem(Label(f"  [{C['dim']}]no snapshots yet — S to capture[/]")))
             lv.refresh()
             return
         for s in self.snaps[:10]:
