@@ -771,23 +771,43 @@ class ClavusApp(App):
     def _run_remote(self, action: str = ""):
         """Manage remotes: list, add, remove, rename.
         
-        Smart rename: :remote rename Relay  → renames connected remote to Relay
-                      :remote rename mac Relay → renames specific remote
+        Smart rename:
+          :remote rename Relay       → renames connected remote to "Relay"
+          :remote rename mac Studio  → renames remote "mac" to "mac Studio"
+          :remote rename "mac studio"→ renames connected remote to "mac studio"
         """
         import subprocess, sys
         try:
             cmd = [sys.executable, "-m", "clavus", "remote"]
             if action:
                 parts = action.split()
-                # Smart rename: if only one arg and it's not list/add/remove, 
-                # auto-fill the old name from connected remote
-                if parts[0] == "rename" and len(parts) == 2:
-                    if self._peer_name:
-                        cmd.extend(["rename", self._peer_name, parts[1]])
-                        self._log_event(f"renaming connected remote '{self._peer_name}' → '{parts[1]}'")
+                if parts[0] == "rename" and len(parts) >= 2:
+                    if len(parts) == 2:
+                        # :remote rename Relay → rename connected remote
+                        if self._peer_name:
+                            cmd.extend(["rename", self._peer_name, parts[1]])
+                            self._log_event(f"renaming '{self._peer_name}' → '{parts[1]}'")
+                        else:
+                            self._status("no connected remote — use :remote rename <old> <new>")
+                            return
                     else:
-                        self._status("no connected remote — use :remote rename <old> <new>")
-                        return
+                        # :remote rename mac Studio → is "mac" an existing remote?
+                        from clavus.sync import load_remotes
+                        remotes = load_remotes(self.store)
+                        first = parts[1]
+                        match = next((r for r in remotes if r.name.lower() == first.lower()), None)
+                        new_name = " ".join(parts[2:])
+                        if match:
+                            cmd.extend(["rename", match.name, new_name])
+                            self._log_event(f"renaming '{match.name}' → '{new_name}'")
+                        elif self._peer_name:
+                            # First word isn't a remote → treat all as new name
+                            full = " ".join(parts[1:])
+                            cmd.extend(["rename", self._peer_name, full])
+                            self._log_event(f"renaming '{self._peer_name}' → '{full}'")
+                        else:
+                            self._status(f"remote '{first}' not found — use :remote rename <old> <new>")
+                            return
                 else:
                     cmd.extend(parts)
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
