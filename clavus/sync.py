@@ -877,7 +877,7 @@ def pull_from_remote(store: BlobStore, proj: ClavusProject, remote: Remote, outp
         remotes = load_remotes(store)
         for r in remotes:
             if r.url.rstrip("/") == remote.url.rstrip("/"):
-                r.last_head = proj.head
+                r.last_head = remote.last_head
                 r.last_sync = remote.last_sync
                 break
         save_remotes(store, remotes)
