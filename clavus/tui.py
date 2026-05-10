@@ -168,8 +168,6 @@ class ClavusApp(App):
     #footer-status {{ color: {C['fg']}; }}
     #footer-hint {{ color: {C['muted']}; text-align: right; }}
     #footer-stats {{ display: none; }}
-    #share-banner {{ display: none; padding: 0 1; background: {C['surface']}; color: {C['dim']}; height: 1; text-style: bold; }}
-    #join-banner {{ display: none; padding: 0 1; background: {C['surface']}; color: {C['yellow']}; height: 1; text-style: bold; }}
     #footer-input {{ display: none; width: 100%; height: 3; background: {C['bg']}; border: solid {C['accent']}; color: {C['fg']}; padding: 0 1; }}
     #footer.input-mode #footer-input {{ display: block; }}
     #footer.input-mode #footer-status {{ display: none; }}
@@ -252,8 +250,6 @@ class ClavusApp(App):
         with Container(id="main"):
             yield Static("clavus", id="header-title")
             yield Container(
-                Static("", id="share-banner"),
-                Static("", id="join-banner"),
                 Container(ListView(id="clv"), id="cues-list"),
                 Container(
                     Static(" History", id="history-label"),
@@ -277,7 +273,6 @@ class ClavusApp(App):
         self._update_header()
         self._update_footer()
         self._update_footer_hint()
-        self._update_share_banner()
         self._update_welcome()
         self._connect()
         # Periodic health probe — re-check relay reachability every 15s
@@ -351,15 +346,6 @@ class ClavusApp(App):
         if self._input_mode:
             self._hide_input()
             self._focus_cues()
-        else:
-            # Dismiss any visible banner
-            for bid in ("share-banner", "join-banner"):
-                try:
-                    banner = self.query_one(f"#{bid}", Static)
-                    if banner.styles.display != "none":
-                        banner.styles.display = "none"
-                except NoMatches:
-                    pass
 
     # ─── Command mode ──────────────────────────────────────────────────
 
@@ -2067,15 +2053,11 @@ class ClavusApp(App):
             widget = self.query_one("#header-title", Static)
             widget.update(f"[bold {C['accent']}]clavus[/]{proj}{peer}{sync}")
             widget.refresh()
-            # Also update the history label with snap age
-            self._update_history_label()
-            # Keep footer in sync — start/stop spinner based on sync activity
+            # Manage spinner based on sync activity (header-only, no footer cascade)
             if self._sync_status:
                 self._start_spinner()
             else:
                 self._stop_spinner()
-            self._update_footer()
-            self._update_share_banner()
         except NoMatches:
             pass
 
@@ -2149,20 +2131,6 @@ class ClavusApp(App):
             cues_list.styles.display = "block"
             history.styles.display = "block"
 
-    def _update_share_banner(self):
-        """Show relay sharing status in the banner above the cue list."""
-        try:
-            banner = self.query_one("#share-banner", Static)
-        except NoMatches:
-            return
-        if self._peer_name and self._peer_reachable:
-            parts = [f"🎹  relay: [{C['accent']}]{self._peer_name}[/]"]
-            if self._last_sync:
-                parts.append(f"[{C['dim']}]· last sync: {self._last_sync}[/]")
-            banner.update("  ".join(parts))
-            banner.styles.display = "block"
-        else:
-            banner.styles.display = "none"
 
     BRAILLE = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
