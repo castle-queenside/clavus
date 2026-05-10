@@ -2725,8 +2725,11 @@ def cmd_open(args: argparse.Namespace) -> None:
         out_path = als_project / f"{project_name}.als"
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    # Create Samples/ subfolder so Ableton finds it immediately
+    # Create Ableton project folder scaffolding so Ableton recognizes
+    # this as a valid project folder and doesn't auto-create nested copies
     (out_path.parent / "Samples").mkdir(exist_ok=True)
+    (out_path.parent / "Backup").mkdir(exist_ok=True)
+    (out_path.parent / "Ableton Project Info").mkdir(exist_ok=True)
 
     # Materialize audio samples into the project folder first (so they exist)
     sample_written = 0

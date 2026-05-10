@@ -581,6 +581,11 @@ def pull_snapshot_blobs(
                     als_dir = base_dir / f"{project_name} Project"
                     out = als_dir / f"{project_name}.als"
                     out.parent.mkdir(parents=True, exist_ok=True)
+                    # Create Ableton project folder scaffolding so Ableton
+                    # recognizes this as a valid project folder
+                    (als_dir / "Samples").mkdir(exist_ok=True)
+                    (als_dir / "Backup").mkdir(exist_ok=True)
+                    (als_dir / "Ableton Project Info").mkdir(exist_ok=True)
 
                     # Materialize samples first — use .als RelativePath for correct dir structure
                     if snap.sample_hashes:

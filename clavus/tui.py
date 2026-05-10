@@ -662,10 +662,13 @@ class ClavusApp(App):
         als_dir = proj_dir / f"{self.project} Project"
         out = als_dir / f"{self.project}.als"
         out.parent.mkdir(parents=True, exist_ok=True)
-        # Create Ableton project folder scaffolding so Ableton doesn't
-        # warn about "outside project" on first save
+        # Create Ableton project folder scaffolding so Ableton recognizes
+        # this as a valid project folder and doesn't auto-create nested copies.
+        # Ableton checks for: * Project/ folder name + Ableton Project Info/
         (als_dir / "Samples").mkdir(exist_ok=True)
         (als_dir / "Backup").mkdir(exist_ok=True)
+        proj_info = als_dir / "Ableton Project Info"
+        proj_info.mkdir(exist_ok=True)
         out.write_bytes(raw)
 
         # Update root_als so future snapshots find the right file
