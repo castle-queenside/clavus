@@ -655,16 +655,11 @@ class ClavusApp(App):
 
         # Write to Ableton project folder convention:
         # Ableton expects "Song.als" inside "Song Project/" subfolder.
-        # If we write flat, Ableton auto-creates the subfolder with a COPY
-        # and saves there instead — so snapshots see the stale flat file.
-        # Write into the proper structure and update root_als to match.
-        from pathlib import Path
-        base = Path(proj.root_als).parent  # e.g. Projects/On Your Feet/
-        # If root_als already points into a Project subfolder, don't double-nest
-        if base.name.endswith(" Project"):
-            als_dir = base
-        else:
-            als_dir = base / f"{self.project} Project"
+        # Always compute from projects_dir — NEVER derive from root_als
+        # (prevents infinite nesting when root_als was set by a prior open).
+        from clavus.helpers import get_projects_dir
+        proj_dir = get_projects_dir() / self.project
+        als_dir = proj_dir / f"{self.project} Project"
         out = als_dir / f"{self.project}.als"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(raw)
