@@ -288,6 +288,8 @@ class ClavusApp(App):
         if time.time() - self._input_debounce < 0.15:
             self._log_event(f"input blocked: debounce ({mode})")
             return  # within 150ms of dismiss, ignore double-tap
+        # Remember which pane had focus so we can restore it after submit
+        self._pre_input_focus = self._focused_list_view()
         self._input_mode = mode
         footer = self.query_one("#footer")
         inp = self.query_one("#footer-input", Input)
@@ -301,6 +303,16 @@ class ClavusApp(App):
         self._input_debounce = time.time()  # block double-tap after dismiss
         self.query_one("#footer").remove_class("input-mode")
         self.call_after_refresh(self._update_footer)
+        # Restore focus to whichever pane had it before the input appeared
+        prev = getattr(self, '_pre_input_focus', None)
+        if prev is not None:
+            try:
+                prev.focus()
+            except Exception:
+                self._focus_cues()
+            self._pre_input_focus = None
+        else:
+            self._focus_cues()
 
     def on_input_submitted(self, event: Input.Submitted):
         event.stop()
