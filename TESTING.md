@@ -77,8 +77,8 @@ Living test matrix. Mark ✅ (pass), ❌ (fail), ⚠️ (flake), 🔲 (untested)
 |---|------|:---:|:---:|-------|
 | E1 | Empty project (no snapshots) → snapshot → push | 🔲 | 🔲 | |
 | E2 | Empty relay → join → "No projects found" message is clear | 🔲 | 🔲 | |
-| E3 | Pull with no remotes configured → clear error | 🔲 | 🔲 | |
-| E4 | Push with no remotes → clear error | 🔲 | 🔲 | |
+| E3 | Pull with no remotes configured → clear error | ✅ 5/11 | 🔲 | ✗ in header + footer error |
+| E4 | Push with no remotes → clear error | ✅ 5/11 | 🔲 | ✗ in header + footer error |
 | E5 | Corrupted .als file → snapshot fails gracefully | 🔲 | 🔲 | |
 | E6 | Missing Ableton → `clavus open` fails gracefully | 🔲 | 🔲 | |
 | E7 | Very large .als (200+ tracks, 10MB+) → snapshot performance | 🔲 | 🔲 | |
