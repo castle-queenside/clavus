@@ -680,7 +680,7 @@ def _snapshots_to_dicts(store: BlobStore, proj: ClavusProject) -> list[dict]:
     return history
 
 
-def push_to_remote(store: BlobStore, proj: ClavusProject, remote: Remote) -> dict:
+def push_to_remote(store: BlobStore, proj: ClavusProject, remote: Remote, force: bool = False) -> dict:
     """Push all data to a remote. Returns summary.
 
     ORDER MATTERS: snapshots → blobs → cues.
@@ -704,7 +704,7 @@ def push_to_remote(store: BlobStore, proj: ClavusProject, remote: Remote) -> dic
         snap_data = _snapshots_to_dicts(store, proj)
         print(f"  📸 Pushing {len(snap_data)} snapshot(s)...")
         ok, conflict, relay_head = client.push_snapshots(proj.name, snap_data,
-                                              expected_parent=remote.last_head)
+                                              expected_parent=None if force else remote.last_head)
         if snap_data:
             result["snapshots"] = len(snap_data) if ok else 0
         if conflict:

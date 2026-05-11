@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; color: #1a1a1a; line-height: 1.5; }
+  h1 { border-bottom: 2px solid #1a9e9e; padding-bottom: 8px; }
+  h2 { color: #1a9e9e; margin-top: 32px; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13px; }
+  th { background: #1a9e9e; color: white; padding: 6px 8px; text-align: left; }
+  td { padding: 5px 8px; border-bottom: 1px solid #e0e0e0; }
+  tr:nth-child(even) { background: #f5f5f5; }
+  code { background: #eee; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+  pre { background: #f5f5f5; padding: 12px; border-radius: 6px; overflow-x: auto; }
+  hr { border: none; border-top: 1px solid #ddd; margin: 30px 0; }
+  .legend { font-size: 13px; color: #666; margin-top: 30px; }
+</style>
+</head>
+<body>
+<h1>Testing — Clavus</h1>
+<p>Living test matrix. Mark ✅ (pass), ❌ (fail), ⚠️ (flake), 🔲 (untested). Add date + notes.</p>
+<h2>Collaboration (two-machine)</h2>
+<p>| # | Test | Mac↔Win | Win↔Win | Mac↔Mac | Notes |
+|---|------|:---:|:---:|:---:|-------|
+| C1 | Push snapshots → peer pulls | 🔲 | 🔲 | 🔲 | |
+| C2 | Peer pushes → you pull | 🔲 | 🔲 | 🔲 | |
+| C3 | Both edit same cue → push/pull → ⚠ appears | 🔲 | 🔲 | 🔲 | |
+| C4 | Resolve cue conflict with <code>!</code> → push → peer pulls resolved | 🔲 | 🔲 | 🔲 | |
+| C5 | Both edit same snapshot message → ⚠ appears on snap | 🔲 | 🔲 | 🔲 | New feature — never live-tested |
+| C6 | Resolve snapshot message conflict with <code>!</code> | 🔲 | 🔲 | 🔲 | New feature |
+| C7 | Peer pushes snap → you <code>o</code> to open in Ableton | 🔲 | 🔲 | 🔲 | Cross-machine open |
+| C8 | Peer pushes snap → you <code>T</code> restore → .als lands correctly | 🔲 | 🔲 | 🔲 | |
+| C9 | Stem import → push → peer pulls → WAV appears | 🔲 | 🔲 | 🔲 | |
+| C10 | Stem push/pull dedup (same WAV doesn't transfer twice) | 🔲 | 🔲 | 🔲 | |
+| C11 | Push → peer edits → peer pushes → you pull (roundtrip) | 🔲 | 🔲 | 🔲 | Full cycle |
+| C12 | Rapid push/edit/push (optimistic locking: 409 rejection) | 🔲 | 🔲 | 🔲 | |
+| C13 | Network drop mid-push → retry → clean state | 🔲 | 🔲 | 🔲 | |
+| C14 | Relay restart while clients connected → clients recover | 🔲 | 🔲 | 🔲 | |
+| C15 | Cross-account Tailscale (shared node, MagicDNS) | 🔲 | 🔲 | 🔲 | Steven session partially validated |</p>
+<h2>TUI</h2>
+<p>| # | Test | macOS | Windows | Notes |
+|---|------|:---:|:---:|-------|
+| T1 | <code>c</code> new cue → appears in list → Ableton marker injection | 🔲 | 🔲 | |
+| T2 | <code>C</code> snapshot → history updates | 🔲 | 🔲 | |
+| T3 | <code>S</code> snapshot + auto-push | 🔲 | 🔲 | |
+| T4 | <code>e</code> edit cue text → persists | 🔲 | 🔲 | |
+| T5 | <code>e</code> edit snapshot message → persists after reload | 🔲 | 🔲 | Fixed May 2026 (hash truncation) |
+| T6 | <code>!</code> resolve cue conflict (ConflictScreen modal) | 🔲 | 🔲 | |
+| T7 | <code>!</code> resolve snapshot message conflict (SnapConflictScreen) | 🔲 | 🔲 | New feature |
+| T8 | <code>o</code> open HEAD in Ableton | 🔲 | 🔲 | |
+| T9 | <code>o</code> from history pane → open selected snapshot | 🔲 | 🔲 | |
+| T10 | <code>T</code> restore to snapshot | 🔲 | 🔲 | |
+| T11 | <code>d</code> diff selected snapshot | 🔲 | 🔲 | |
+| T12 | <code>p</code> pull → auto-snapshot → history updates | 🔲 | 🔲 | |
+| T13 | <code>P</code> push → relay receives | 🔲 | 🔲 | |
+| T14 | <code>Tab</code> switch cues ↔ history pane | 🔲 | 🔲 | |
+| T15 | <code>j</code>/<code>k</code> navigation, scrolling | 🔲 | 🔲 | |
+| T16 | <code>?</code> help screen (all bindings visible) | 🔲 | 🔲 | |
+| T17 | <code>:</code> command mode → <code>:snapshot msg</code>, <code>:pull</code>, <code>:push</code> | 🔲 | 🔲 | |
+| T18 | <code>:project &lt;name&gt;</code> switch projects → cues/history reload | 🔲 | 🔲 | |
+| T19 | <code>:init &lt;path&gt;</code> from TUI → project loads | 🔲 | 🔲 | |
+| T20 | <code>:browse</code> navigation → <code>:init</code> from browser | 🔲 | 🔲 | |
+| T21 | Header dot: green ● (connected), yellow ○ (remote, no data), dim ○ (no remote) | 🔲 | 🔲 | |
+| T22 | Freeze detection warning on <code>C</code> | 🔲 | 🔲 | |
+| T23 | Long cue text / snapshot message → no truncation crash | 🔲 | 🔲 | |
+| T24 | TUI survives corrupt meta file (orphaned 10-char hash) | 🔲 | 🔲 | Fixed May 2026 (load_snapshot resilience) |</p>
+<h2>CLI</h2>
+<p>| # | Test | macOS | Windows | Notes |
+|---|------|:---:|:---:|-------|
+| L1 | <code>clavus setup</code> wizard | 🔲 | 🔲 | |
+| L2 | <code>clavus init &lt;path&gt;</code> → project created | 🔲 | 🔲 | |
+| L3 | <code>clavus tui</code> opens dashboard | 🔲 | 🔲 | |
+| L4 | <code>clavus share</code> starts relay | 🔲 | 🔲 | |
+| L5 | <code>clavus join &lt;url&gt;</code> adds remote + pulls | 🔲 | 🔲 | |
+| L6 | <code>clavus find --tailscale</code> discovers peers | 🔲 | 🔲 | |
+| L7 | <code>clavus remote add/list/remove</code> | 🔲 | 🔲 | |
+| L8 | <code>clavus push</code> / <code>clavus pull</code> | 🔲 | 🔲 | |
+| L9 | <code>clavus snapshot &quot;msg&quot;</code> | 🔲 | 🔲 | |
+| L10 | <code>clavus backup</code> → <code>clavus backups</code> → <code>clavus restore-store</code> | 🔲 | 🔲 | |
+| L11 | <code>clavus repair</code> fixes corrupted index | 🔲 | 🔲 | |
+| L12 | <code>clavus doctor</code> health check | 🔲 | 🔲 | |
+| L13 | <code>clavus stem import/push/pull/list</code> | 🔲 | 🔲 | |
+| L14 | <code>clavus open</code> launches Ableton with HEAD | 🔲 | 🔲 | |
+| L15 | <code>clavus restore &lt;hash&gt;</code> restores snapshot | 🔲 | 🔲 | |</p>
+<h2>Edge Cases &amp; Error Handling</h2>
+<p>| # | Test | macOS | Windows | Notes |
+|---|------|:---:|:---:|-------|
+| E1 | Empty project (no snapshots) → snapshot → push | 🔲 | 🔲 | |
+| E2 | Empty relay → join → &quot;No projects found&quot; message is clear | 🔲 | 🔲 | |
+| E3 | Pull with no remotes configured → clear error | 🔲 | 🔲 | |
+| E4 | Push with no remotes → clear error | 🔲 | 🔲 | |
+| E5 | Corrupted .als file → snapshot fails gracefully | 🔲 | 🔲 | |
+| E6 | Missing Ableton → <code>clavus open</code> fails gracefully | 🔲 | 🔲 | |
+| E7 | Very large .als (200+ tracks, 10MB+) → snapshot performance | 🔲 | 🔲 | |
+| E8 | Project with non-ASCII characters in name/path | 🔲 | 🔲 | |
+| E9 | Multiple remotes → push to all, pull from all | 🔲 | 🔲 | |
+| E10 | <code>clavus share</code> port conflict → clear error | 🔲 | 🔲 | |</p>
+<h2>Platform-Specific</h2>
+<p>| # | Test | Status | Notes |
+|---|------|:---:|-------|
+| P1 | Windows: TUI renders correctly (Windows Terminal) | 🔲 | |
+| P2 | Windows: <code>os.startfile()</code> opens .als in Ableton | 🔲 | |
+| P3 | Windows: OneDrive Files On-Demand → .als accessible | 🔲 | |
+| P4 | Windows: <code>py -m pip install -e .</code> works from fresh clone | 🔲 | |
+| P5 | macOS: <code>open</code> command launches Ableton | 🔲 | |
+| P6 | macOS: <code>tailscale serve</code> survives sleep/wake | 🔲 | |
+| P7 | Linux: install + <code>clavus tui</code> runs (no DAW needed) | 🔲 | |
+| P8 | Cross-platform: Mac snapshot → Windows restore → opens in Ableton | 🔲 | |
+| P9 | Cross-platform: Windows snapshot → Mac restore → opens in Ableton | 🔲 | |</p>
+<h2>Test Sessions</h2>
+<p>| Date | Who | Platform | Tests run | Results |
+|------|-----|----------|-----------|---------|
+| | | | | |</p>
+<hr />
+<p><strong>Legend:</strong> ✅ Pass  ❌ Fail  ⚠️ Flake / intermittent  🔲 Untested</p>
+<p><strong>How to use:</strong> Before a release, run through 🔲 items. Mark ✅/❌ with date. File bugs for ❌. After each test session, add a row to Test Sessions.</p>
+
+</body>
+</html>

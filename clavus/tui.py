@@ -198,6 +198,7 @@ class ClavusApp(App):
         Binding("d", "diff", "Diff"),
         Binding("p", "pull", "Pull"),
         Binding("P", "push", "Push"),
+        Binding("F", "force_push", "Force Push", show=False),
         Binding("o", "open_selected_or_head", "Open"),
         Binding("e", "edit_item", "Edit"),
         Binding("tab", "focus_next_pane", "Pane"),
@@ -503,6 +504,8 @@ class ClavusApp(App):
                 self._connect()  # reload
             else:
                 self.action_pull() if cmd == "pull" else self.action_push()
+        elif cmd == "push!":
+            self.action_force_push()
         elif cmd == "branch":
             self._run_branch(arg)
         elif cmd == "backup":
@@ -1670,6 +1673,17 @@ class ClavusApp(App):
             self._update_header()
             self.refresh()
 
+    async def action_force_push(self):
+        """Force push — skip optimistic lock, overwrite relay state."""
+        self._busy = True
+        self._status("\u23f3 force pushing...")
+        try:
+            await self._do_push(force=True)
+        finally:
+            self._busy = False
+            self._update_header()
+            self.refresh()
+
     @work(exclusive=True)
     async def action_stem_push(self):
         self._status("pushing stems...")
@@ -2149,7 +2163,7 @@ class ClavusApp(App):
             self._log_event(f"\u274c pull error: {e}")
             self._status(f"\u274c pull error: {e}")
 
-    async def _do_push(self):
+    async def _do_push(self, force: bool = False):
         """Push cues + snapshots + blobs to the project's active remote."""
         import asyncio
         import time
@@ -2202,8 +2216,8 @@ class ClavusApp(App):
             self._sync_status = f"\u2b06 {time.strftime('%H:%M')} {remote.name}..."
             self._update_header()
             await asyncio.sleep(0)
-            self._status(f"\u2b06 pushing to {remote.name}...")
-            result = push_to_remote(self.store, proj_index, remote)
+            self._status(f"\u2b06 {'force-' if force else ''}pushing to {remote.name}...")
+            result = push_to_remote(self.store, proj_index, remote, force=force)
             if result.get("error"):
                 self._peer_reachable = False
                 self._last_sync = f"\u2b06 \u2717 {time.strftime('%H:%M')}"
