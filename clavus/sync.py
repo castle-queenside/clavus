@@ -889,7 +889,7 @@ def pull_from_remote(store: BlobStore, proj: ClavusProject, remote: Remote, outp
                 msg += f" — ⚠ {snap_conflicts} message conflict(s)"
             print(msg)
 
-        # Update HEAD to the newest pulled snapshot
+        # Update project HEAD to the newest pulled snapshot
         relay_head = None
         if result["snapshots"] > 0:
             snap_list = data.get("snapshots", [])
@@ -897,17 +897,8 @@ def pull_from_remote(store: BlobStore, proj: ClavusProject, remote: Remote, outp
             newest = max(snap_list, key=lambda s: s.get("timestamp", 0))
             relay_head = newest.get("full_hash", newest.get("hash", ""))
             if relay_head:
-                current_head = store.read_ref("HEAD")
-                current_time = 0
-                if current_head:
-                    old_snap = store.load_snapshot(current_head)
-                    if old_snap:
-                        current_time = old_snap.timestamp
-                newest_time = newest.get("timestamp", 0)
-                if newest_time > current_time or not current_head:
-                    store.update_ref("HEAD", relay_head)
-                    proj.head = relay_head
-                    store.set_index(proj)
+                proj.head = relay_head
+                store.set_index(proj)
 
         # last_head MUST track relay HEAD for optimistic lock, not local HEAD
         remote.last_head = relay_head if relay_head else proj.head
