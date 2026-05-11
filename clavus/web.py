@@ -1120,7 +1120,9 @@ async def sync_push_snapshots(body: SyncPushSnapshotsBody,
     """Push (import) snapshots from a remote peer."""
     lock = _get_project_lock(name)
     with lock:
-        return _sync_push_snapshots_impl(body, name)
+        result = _sync_push_snapshots_impl(body, name)
+        print(f"  [relay] push-snapshots: force={body.force} expected_parent={body.expected_parent[:10] if body.expected_parent else 'none'} imported={result.get('imported',0)}")
+        return result
 
 
 def _sync_push_snapshots_impl(body: SyncPushSnapshotsBody, name: str):
