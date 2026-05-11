@@ -2171,6 +2171,29 @@ class ClavusApp(App):
                 await asyncio.sleep(0)
                 self._status(f"\u274c remote '{self._peer_name}' not found — use :remotes")
                 return
+            # Auto-snapshot local changes before pushing (conflict resolution, cue edits, etc.)
+            # This ensures HEAD matches what we're about to send.
+            try:
+                als_path = Path(proj_index.root_als)
+                if als_path.exists():
+                    raw_als = als_path.read_bytes()
+                    current_hash = hashlib.sha256(raw_als).hexdigest()
+                    if current_hash != (proj_index.head or ""):
+                        from clavus import parse_als
+                        project = parse_als(als_path)
+                        if project:
+                            snap = self.store.save_snapshot(
+                                project,
+                                message="auto-snapshot before push",
+                                parent=proj_index.head,
+                            )
+                            if snap.hash != proj_index.head:
+                                self.store.update_ref("HEAD", snap.hash)
+                                proj_index.head = snap.hash
+                                self.store.set_index(proj_index)
+                                self._log_event(f"● auto-snapshot {snap.hash[:8]} (local changes saved)")
+            except Exception:
+                pass  # best-effort — don't block push on snapshot failure
             self._sync_status = f"\u2b06 {time.strftime('%H:%M')} {remote.name}..."
             self._update_header()
             await asyncio.sleep(0)
