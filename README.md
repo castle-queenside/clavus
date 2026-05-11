@@ -125,9 +125,6 @@ Both people edited it. Press `!` to pick your version or theirs. Push after.
 **"Frozen track warning."**  
 Frozen tracks crash Ableton cross-platform. Unfreeze before snapshotting. Pass `--allow-frozen` if everyone's on the same OS.
 
-**"Windows TUI looks weird."**  
-Use Windows Terminal (Microsoft Store). Old conhost has rendering issues.
-
 **"How do I update?"**  
 `cd clavus && git pull && pip install -e .`
 
