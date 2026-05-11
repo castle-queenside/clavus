@@ -2132,6 +2132,11 @@ class ClavusApp(App):
             asyncio.create_task(self._delayed_clear_sync())
             await asyncio.sleep(0)
             self._log_event(f"\u2b07 pulled from {remote.name}: {len(self.cues)} cues, {len(self.snaps)} snapshots")
+            # Reload the remote to get updated last_head from pull
+            remotes = load_remotes(self.store)
+            updated = next((r for r in remotes if r.name == remote.name), None)
+            if updated:
+                self._log_event(f"  last_head now: {updated.last_head[:10] if updated.last_head else 'none'}")
             # Refresh from disk
             if self.project:
                 self._load_cues_from_disk()
@@ -2208,7 +2213,7 @@ class ClavusApp(App):
                 err = result['error']
                 if 'pull first' in err.lower() or 'conflict' in err.lower():
                     self._status(f"⚠️ conflict — press p to pull, then P to push")
-                    self._log_event(f"⚠️ {err} — press p to pull, then P to push")
+                    self._log_event(f"⚠️ push conflict: local_head={proj_index.head[:10] if proj_index.head else 'none'} remote_last_head={remote.last_head[:10] if remote.last_head else 'none'} — {err}")
                 else:
                     self._status(f"❌ push failed: {err[:60]}")
                     self._log_event(f"push error: {err}")
