@@ -175,6 +175,9 @@ class SyncClient:
         if force:
             body["force"] = True
 
+        snap_count = len(snapshots)
+        print(f"  [client] push_snapshots: force={force} expected_parent={expected_parent[:10] if expected_parent else 'none'} snaps={snap_count} body_keys={list(body.keys())}")
+
         r, _ = self._retry(
             lambda: self.client.post(
                 f"{self.base_url}/api/sync/push-snapshots",
