@@ -284,10 +284,10 @@ class ClavusApp(App):
         self._header_title = self.query_one("#header-title", Static)
         self._footer_stats = self.query_one("#footer-status", Static)
         self._update_header()
+        self._connect()  # load project FIRST — welcome depends on project state
         self._update_footer()
         self._update_footer_hint()
-        self._update_welcome()
-        self._connect()
+        self._update_welcome()  # safety: hide welcome if project auto-loaded
         # Periodic health probe — re-check relay reachability every 15s
         self.set_interval(15.0, self._probe_reachability)
 
