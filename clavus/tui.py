@@ -963,7 +963,6 @@ class ClavusApp(App):
                 self._log_event(f"auto-push: {snap_hash[:8]}")
                 asyncio.create_task(self._do_push())
         # Reload snapshots from disk and refresh UI
-        self._sync_status = ""
         self._load_snapshots_from_disk()
         self._update_header()
         self._render()
