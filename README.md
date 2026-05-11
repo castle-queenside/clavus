@@ -1,8 +1,8 @@
-# Clavus — Ableton Live Project Collaboration
+# Clavus — DAW Project Versioning & Collaboration
 
-**Version:** 0.8.0-beta  **Platforms:** macOS · Windows · Linux
+**Version:** 0.8.0-beta  **Platforms:** macOS · Windows · Linux · **DAWs:** Ableton (Reaper, Bitwig coming)
 
-Git for your `.als` files. Snapshots, timeline-anchored cues, push/pull sync over Tailscale, and a keyboard-driven terminal dashboard. No cloud, no plugins, no accounts.
+Save points that travel. Snapshots, timeline-anchored cues, push/pull sync over Tailscale, and a keyboard-driven terminal dashboard. No cloud, no plugins, no accounts. Works solo. Works with your crew.
 
 ## Quick Start
 
@@ -18,7 +18,7 @@ clavus tui                  # open the dashboard
 
 ### Solo
 
-Just you, your `.als`, and the TUI. Snapshots, cues, diffs, and restores all work locally with zero setup. Great for version control and leaving yourself notes at specific timeline positions.
+Just you, your project, and the TUI. Snapshots, cues, diffs, and restores all work locally with zero setup. Great for leaving yourself notes at specific timeline positions and rolling back when an idea doesn't land.
 
 ### Collaborate
 
@@ -52,13 +52,13 @@ clavus pull
 clavus tui
 ```
 
-**Daily:** `p` to pull, work in Ableton, `C` to snapshot, `P` to push.  
+**Daily:** `p` to pull, work in your DAW, `C` to snapshot, `P` to push.  
 Full networking details: `references/tailscale-serve-relay.md`
 
 ## Features
 
-- **Snapshots** — content-addressed checkpoints with track/device/clip diffs
-- **Cues** — threaded timeline-pinned comments, injected as Ableton markers
+- **Snapshots** — content-addressed checkpoints with diffs (tracks, devices, clips, markers)
+- **Cues** — threaded timeline-pinned comments, injected as DAW markers
 - **Sync** — push/pull over Tailscale with optimistic locking (409 conflict protection)
 - **Conflict resolution** — ⚠ warns on concurrent edits, `!` resolves them
 - **Restore** — roll back to any snapshot
@@ -81,7 +81,7 @@ Full networking details: `references/tailscale-serve-relay.md`
 | `!` | Resolve sync conflict |
 | `T` | Restore snapshot |
 | `d` | Diff snapshot |
-| `o` | Open in Ableton |
+| `o` | Open project in DAW |
 | `p` | Pull (auto-snapshots first) |
 | `P` | Push |
 | `U` | Push stems |
@@ -110,6 +110,25 @@ clavus repair                  # fix corrupted index (auto-restores from .bak)
 ```
 
 Rotating index backups run automatically before every write. Full daily backups too.
+
+## Roadmap
+
+**v0.9 — First non-Ableton DAW**
+- Reaper adapter (`.rpp` — plain text, markers map directly to cue positions)
+- DAW-agnostic project detection (no more hardcoded `.als` assumptions)
+- Linux end-to-end testing (Reaper + Bitwig both run natively)
+
+**v1.0 — Multi-DAW + polish**
+- Bitwig adapter (`.bwproject`)
+- Phone dashboard companion (tiny HTTP server for monitoring from your phone)
+- Stem sync hardening (partial transfers, resume)
+- Auto-snapshot daemon refinements (configurable intervals, smarter change detection)
+
+**Ideas for later**
+- FL Studio adapter
+- Logic Pro adapter
+- Web-based diff viewer for snapshots
+- MIDI Remote Script integration (control Clavus from your controller)
 
 ## FAQ
 
