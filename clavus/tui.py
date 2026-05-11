@@ -1722,15 +1722,18 @@ class ClavusApp(App):
                 result = pull_from_remote(self.store, proj_data, remote)
                 blob_count = pull_snapshot_blobs(self.store, proj_data, remote)
                 parts = []
+                if result.get("error"):
+                    parts.append(f"err: {result['error'][:30]}")
+                    self._log_event(f"⬇ {pname}: {result['error']}")
                 if result.get("cues"): parts.append(f"{result['cues']}c")
                 if result.get("snapshots"): parts.append(f"{result['snapshots']}s")
                 if blob_count: parts.append(f"{blob_count}b")
                 summary = " ".join(parts) if parts else "up to date"
-                self._log_event(f"\u2b07 {pname}: {summary}")
+                self._log_event(f"⬇ {pname}: {summary}")
                 pulled += 1
-                self._sync_status = f"\u2b07 {time.strftime('%H:%M')} {pname}  {summary}"
+                self._sync_status = f"⬇ {time.strftime('%H:%M')} {pname}  {summary}"
                 self._update_header()
-                await asyncio.sleep(0)
+                await asyncio.sleep(0.5)  # let user see each project's result
             
             self._status(f"\u2b07 pulled {pulled} project(s) from {remote.name}")
             self._log_event(f"\u2b07 pull-all: {pulled} project(s)")
