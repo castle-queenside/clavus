@@ -1024,16 +1024,17 @@ class ClavusApp(App):
         idx = self._get_history_idx()
         snap = self.snaps[idx]
         old_msg = snap.message
-        snap.message = text
-        # Persist to disk
+        # Persist to disk — _load_snapshots_from_disk will pick it up
         try:
             meta_dir = self.store.objects_dir / snap.hash[:2]
             meta_path = meta_dir / f"{snap.hash}.meta"
             if meta_path.exists():
-                import json
                 meta = json.loads(meta_path.read_text())
-                meta["message"] = text
-                meta_path.write_text(json.dumps(meta, indent=2, default=str))
+            else:
+                meta = {}
+            meta["message"] = text
+            meta_dir.mkdir(parents=True, exist_ok=True)
+            meta_path.write_text(json.dumps(meta, indent=2, default=str))
             self._load_snapshots_from_disk()
             self._render()
             self._status(f"snapshot renamed: '{text[:40]}'")
@@ -2128,11 +2129,11 @@ class ClavusApp(App):
         try:
             # Project name
             proj = f"  [white]{self.project}[/]" if self.project else ""
-            # Connection dot + remote
+            # Connection dot — green = reachable, yellow = offline
             if self._peer_name and self._peer_reachable:
-                peer = f"  [bold {C['green']}]\u25cf[/] {self._peer_name}"
+                peer = f"  [bold {C['green']}]\u25cf[/]"
             elif self._peer_name:
-                peer = f"  [{C['yellow']}]\u25cb[/] {self._peer_name}"
+                peer = f"  [{C['yellow']}]\u25cb[/]"
             else:
                 peer = ""
             # Sync activity — spinner during, timestamp after
