@@ -44,9 +44,9 @@ Living test matrix. Mark ✅ (pass), ❌ (fail), ⚠️ (flake), 🔲 (untested)
 | T16 | `?` help screen (all bindings visible) | ✅ 5/10 | ✅ 5/11 | |
 | T17 | `:` command mode → `:snapshot msg`, `:pull`, `:push` | ✅ 5/10 | ✅ 5/11 | |
 | T18 | `:project <name>` switch projects → cues/history reload | ✅ 5/10 | ✅ 5/11 | |
-| T19 | `:init <path>` from TUI → project loads | ✅ 5/10 | 🔲 | |
+| T19 | `:init <path>` from TUI → project loads | ✅ 5/10 | ✅ 5/11 | |
 | ~~T20~~ | ~~`:browse`~~ | ~~removed~~ | ~~removed~~ | Scrapped — Finder paste + `:init` is faster |
-| T21 | Header dot: green ● (connected), yellow ○ (remote, no data), dim ○ (no remote) | ✅ 5/10 | 🔲 | |
+| T21 | Header dot: green ● (connected), yellow ○ (remote, no data), dim ○ (no remote) | ✅ 5/10 | ✅ 5/11 | |
 | T22 | Freeze detection warning on `S` | ✅ 5/10 | 🔲 | Soft warning added: ⚠️ N frozen tracks |
 | T23 | Long cue text / snapshot message → no truncation crash | ✅ 5/10 | 🔲 | Graceful cutoff |
 | T24 | TUI survives corrupt meta file (orphaned 10-char hash) | 🔲 | 🔲 | |
