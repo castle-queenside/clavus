@@ -1743,11 +1743,19 @@ class ClavusApp(App):
                 
                 await asyncio.sleep(0.3)
             
-            # Show summary that sticks
-            summary = f"⬇ pull-all done: " + " · ".join(msgs[:5])
+            # Show summary that sticks (bypass toast auto-clear)
+            summary = " · ".join(msgs[:5])
             if len(msgs) > 5:
                 summary += f" · +{len(msgs)-5} more"
-            self._status(summary)
+            # Stop old toast timer but keep reference so _update_footer guard holds
+            if hasattr(self, '_toast_timer') and self._toast_timer is not None:
+                self._toast_timer.stop()
+            # Set a truthy sentinel so _update_footer() skips
+            self._toast_timer = object()
+            w = self._footer_stats
+            if w is not None:
+                w.update(f"[{C['dim']}]⬇ pull-all done: {summary}[/]")
+                w.refresh()
             self._log_event(f"pull-all: {summary}")
         except Exception as e:
             self._status(f"❌ pull-all error: {e}")
@@ -2456,7 +2464,10 @@ class ClavusApp(App):
             w.refresh()
         # Cancel any pending restore, then schedule new one
         if hasattr(self, "_toast_timer") and self._toast_timer is not None:
-            self._toast_timer.stop()
+            try:
+                self._toast_timer.stop()
+            except AttributeError:
+                pass  # sentinel object, not a real timer
         self._toast_timer = self.set_timer(duration, lambda: self._restore_footer())
 
     def _restore_footer(self):
