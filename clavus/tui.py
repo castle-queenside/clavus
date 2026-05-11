@@ -209,6 +209,7 @@ class ClavusApp(App):
         Binding("?", "help", "Help", show=False),
         Binding("h", "help", "Help", show=False),
         Binding("escape", "cancel_input", "Cancel input", show=False),
+        Binding("enter", "select_item", "Select", show=False),
     ]
 
     def __init__(self, url: str = ""):
@@ -226,6 +227,8 @@ class ClavusApp(App):
         self._input_mode: str = ""
         self._input_debounce: float = 0.0  # unix ts after last _hide_input
         self._pending_cue_text: str = ""
+        self._project_picker_active: bool = False
+        self._project_list: list = []  # project objects for picker
         self._relay_proc = None
         self._busy: bool = False
         self._last_sync: str = ""     # "⬆ ✓ 12:34" or "⬇ ✓ 12:34" — last completed sync
@@ -368,6 +371,25 @@ class ClavusApp(App):
         if self._input_mode:
             self._hide_input()
             self._focus_cues()
+        elif self._project_picker_active:
+            self._cancel_project_picker()
+
+    def action_select_item(self):
+        """Enter key — switch to highlighted project in picker mode."""
+        if not self._project_picker_active:
+            return
+        lv = self.query_one("#clv", ListView)
+        if lv.index is not None and lv.index < len(self._project_list):
+            proj = self._project_list[lv.index]
+            self._cancel_project_picker()
+            self._run_switch_project(proj.name)
+
+    def _cancel_project_picker(self):
+        """Exit project picker, restore normal cues list."""
+        self._project_picker_active = False
+        self._project_list = []
+        self._update_footer()
+        self._render()  # rebuild cues list
 
     # ─── Command mode ──────────────────────────────────────────────────
 
@@ -387,7 +409,8 @@ class ClavusApp(App):
         if cmd == "project" and arg:
             self._run_switch_project(arg)
         elif cmd == "projects":
-            self._run_list_projects()
+            import asyncio
+            asyncio.create_task(self._run_list_projects())
         elif cmd == "name" and arg:
             self.author = arg
             self._save_config()
@@ -496,34 +519,33 @@ class ClavusApp(App):
         if not projects:
             self._status("no projects found  —  run :init <path> to add one")
             return
-        lines = []
+        self._project_list = projects
+        self._project_picker_active = True
+        lv = self.query_one("#clv", ListView)
+        lv.clear()
         for p in projects:
-            name = p.name
             head = p.head or ""
-            branch = p.branch or "main"
-            active = " ◀" if name == self.project else ""
-            lines.append(f"  {name}  @ {head[:12] if head else '(no snaps)':12s}  [{branch}]{active}")
-        msg = "\n".join(lines)
-        # Show as a temporary log entry so it's visible above the footer
-        try:
-            lv = self.query_one("#clv", ListView)
-            lv.mount(ListItem(Label(msg, classes="project-list")), before=0)
-            self._status("")
-            self.set_timer(3.0, lambda: self._clear_project_list())
-        except NoMatches:
-            self._status(msg)
-        self._show_input("switch_proj", "project name to switch:")
+            active = " ◀" if p.name == self.project else ""
+            line = f"  {p.name}  @ {head[:12] if head else '(no snaps)':12s}{active}"
+            lv.append(ListItem(Label(line, classes="project-picker-item")))
+        # Footer hint
+        self._footer_toast(f"[{C['accent']}]pick a project → enter   [{C['dim']}]esc to cancel[/]", 10.0)
+        self._update_footer_hint()
 
     def _clear_project_list(self):
         try:
             lv = self.query_one("#clv", ListView)
             for c in list(lv.children):
-                # Check if this ListItem contains a project-list label
-                try:
-                    inner = c.query_one(".project-list")
+                # Direct Label with project-list class, or ListItem containing one
+                is_project = hasattr(c, "classes") and "project-list" in c.classes
+                if not is_project and hasattr(c, "query_one"):
+                    try:
+                        c.query_one(".project-list")
+                        is_project = True
+                    except NoMatches:
+                        pass
+                if is_project:
                     c.remove()
-                except NoMatches:
-                    pass
         except NoMatches:
             pass
 
@@ -2190,16 +2212,20 @@ class ClavusApp(App):
     def _update_footer_hint(self):
         """Context-aware hint: shows relevant keys for the focused pane."""
         hint = "? help"
-        try:
-            hlv = self.query_one("#hlv", ListView)
-            if hlv.has_focus:
-                hint = "S snap  T restore  e edit  o open  d diff  ? help"
-            else:
-                clv = self.query_one("#clv", ListView)
-                if clv.has_focus:
-                    hint = "c cue  r reply  e edit  a assign  o open  S snap  p pull  T history  ? help"
-        except NoMatches:
-            pass
+        # Project picker mode
+        if self._project_picker_active:
+            hint = "enter select  esc cancel  j/k navigate  ? help"
+        else:
+            try:
+                hlv = self.query_one("#hlv", ListView)
+                if hlv.has_focus:
+                    hint = "S snap  T restore  e edit  o open  d diff  ? help"
+                else:
+                    clv = self.query_one("#clv", ListView)
+                    if clv.has_focus:
+                        hint = "c cue  r reply  e edit  a assign  o open  S snap  p pull  T history  ? help"
+            except NoMatches:
+                pass
         try:
             self.query_one("#footer-hint", Static).update(hint)
         except NoMatches:
