@@ -925,29 +925,35 @@ class ClavusApp(App):
         try:
             from clavus.cli import create_snapshot
             snap_hash, logs = create_snapshot(message, allow_frozen=True)
-            self._sync_status = ""
             for line in logs:
                 self._log_event(line)
             if snap_hash:
                 self._status(f"📸 {snap_hash[:10]} — '{message}'")
+                self._sync_status = "📸 snap ✓"
+                # Auto-clear header result after 4s
+                status_text = "📸 snap ✓"
+                asyncio.create_task(self._delayed_clear_snapshot_status(status_text))
             else:
-                # Surface the actual reason so it's visible even if log entries expire
+                # Surface the actual reason — show in header AND footer with longer timeout
                 reason = "no changes or error"
                 for line in logs:
                     if "No changes" in line:
                         reason = "no changes — save project first"
                         break
                     elif "frozen" in line:
-                        reason = f"frozen tracks — unfreeze first"
+                        reason = "frozen tracks — unfreeze first"
                         break
                     elif ".als file not found" in line:
                         reason = ".als missing — open & save in Ableton first"
                         break
+                self._sync_status = f"📸 skipped: {reason}"
                 self._status(f"📸 skipped: {reason}")
+                asyncio.create_task(self._delayed_clear_snapshot_status(self._sync_status))
         except Exception as e:
-            self._sync_status = ""
+            self._sync_status = "📸 error"
             self._status(f"snapshot error: {e}")
             self._log_event(f"snapshot error: {e}")
+            asyncio.create_task(self._delayed_clear_snapshot_status("📸 error"))
         # Auto-push snapshot to relay if connected (debounced to avoid flooding)
         if snap_hash and self._peer_reachable:
             now = time.time()
@@ -2110,6 +2116,15 @@ class ClavusApp(App):
         await asyncio.sleep(1.5)
         self._sync_status = ""
         self._update_header()
+
+    async def _delayed_clear_snapshot_status(self, expected: str = ""):
+        """Keep snapshot result visible in header for 4s."""
+        await asyncio.sleep(4)
+        # Only clear if the header still shows this snapshot's result
+        # (prevents clearing a newer snapshot's status)
+        if self._sync_status and (not expected or self._sync_status == expected):
+            self._sync_status = ""
+            self._update_header()
 
     def _update_header(self):
         """Header: clavus logo, project, connection dot + remote, sync activity."""
