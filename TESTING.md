@@ -35,7 +35,7 @@ Living test matrix. Mark ✅ (pass), ❌ (fail), ⚠️ (flake), 🔲 (untested)
 | T7 | `!` resolve snapshot message conflict (SnapConflictScreen) | 🔲 | 🔲 | |
 | T8 | `o` open HEAD in Ableton | ✅ 5/10 | ✅ 5/11 | |
 | T9 | `o` from history pane → open selected snapshot | ✅ 5/10 | ✅ 5/11 | |
-| T10 | `T` restore to snapshot | ✅ 5/10 | 🔲 | Destructive edits reverted! |
+| T10 | `T` restore to snapshot | ✅ 5/10 | ✅ 5/11 | |
 | T11 | `d` diff selected snapshot | ✅ 5/10 | ✅ 5/11 | |
 | T12 | `p` pull → auto-snapshot → history updates | ✅ 5/10 | ✅ 5/11 | |
 | T13 | `P` push → relay receives | ✅ 5/10 | ✅ 5/11 | |
@@ -48,7 +48,7 @@ Living test matrix. Mark ✅ (pass), ❌ (fail), ⚠️ (flake), 🔲 (untested)
 | ~~T20~~ | ~~`:browse`~~ | ~~removed~~ | ~~removed~~ | Scrapped — Finder paste + `:init` is faster |
 | T21 | Header dot: green ● (connected), yellow ○ (remote, no data), dim ○ (no remote) | ✅ 5/10 | ✅ 5/11 | |
 | T22 | Freeze detection warning on `S` | ✅ 5/10 | 🔲 | Soft warning added: ⚠️ N frozen tracks |
-| T23 | Long cue text / snapshot message → no truncation crash | ✅ 5/10 | 🔲 | Graceful cutoff |
+| T23 | Long cue text / snapshot message → no truncation crash | ✅ 5/10 | ✅ 5/11 | |
 | T24 | TUI survives corrupt meta file (orphaned 10-char hash) | 🔲 | 🔲 | |
 | T25 | `:projects` picker — j/k navigate, enter select, esc cancel | ✅ 5/11 | ✅ 5/11 | |
 | T26 | `:remotes` picker — per-project remote scoping | ✅ 5/11 | ✅ 5/11 | Push/pull uses selected remote only |
