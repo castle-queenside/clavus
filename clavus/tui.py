@@ -524,10 +524,12 @@ class ClavusApp(App):
 
     @work(exclusive=False)
     async def _run_init_project(self, path: str):
-        """Import a project from a filesystem path — in-process, no subprocess."""
+        """Import a project from a filesystem path — background worker so UI stays alive."""
         # Defensive: strip quotes that may have leaked through
         if path and len(path) >= 2 and path[0] in ('"', "'") and path[0] == path[-1]:
             path = path[1:-1]
+        self._sync_status = "importing project..."
+        self._update_header()
         self._status(f"importing {path}...")
         try:
             from clavus.cli import init_project
@@ -535,12 +537,19 @@ class ClavusApp(App):
             for line in logs:
                 self._log_event(line)
             if name is None:
+                self._sync_status = ""
+                self._update_header()
                 self._status("init failed — see log")
                 return
-            self._status(f"imported: {name}")
+            self._sync_status = ""
+            self._update_header()
+            self._footer_toast(f"[{C['green']}]✓ imported: {name}[/] — loading...", 5.0)
+            self._log_event(f"✓ project '{name}' ready")
             # Reload from disk
             self._connect()
         except Exception as e:
+            self._sync_status = ""
+            self._update_header()
             self._log_event(f"init error: {e}")
 
     @work(exclusive=False)
