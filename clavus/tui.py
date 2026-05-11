@@ -2215,7 +2215,12 @@ class ClavusApp(App):
         # Cancel any pending restore, then schedule new one
         if hasattr(self, "_toast_timer") and self._toast_timer is not None:
             self._toast_timer.stop()
-        self._toast_timer = self.set_timer(duration, lambda: self._update_footer())
+        self._toast_timer = self.set_timer(duration, lambda: self._restore_footer())
+
+    def _restore_footer(self):
+        """Clear toast timer and restore footer to default state."""
+        self._toast_timer = None
+        self._update_footer()
 
     def _status(self, msg: str):
         """Short footer toast — auto-clears after 3s."""
@@ -2297,6 +2302,9 @@ class ClavusApp(App):
 
     def _update_footer(self):
         """Footer: project state — cues, snapshots. Sync activity lives in header."""
+        # Don't clobber active toasts — _restore_footer will handle it when ready
+        if hasattr(self, '_toast_timer') and self._toast_timer is not None:
+            return
         try:
             status = self.query_one("#footer-status", Static)
             if not self.project:
