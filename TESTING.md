@@ -53,7 +53,8 @@ Living test matrix. Mark ✅ (pass), ❌ (fail), ⚠️ (flake), 🔲 (untested)
 | T25 | `:projects` picker — j/k navigate, enter select, esc cancel | ✅ 5/11 | ✅ 5/11 | |
 | T26 | `:remotes` picker — per-project remote scoping | ✅ 5/11 | ✅ 5/11 | Push/pull uses selected remote only |
 | T27 | `:inject` → cues land as Ableton markers → auto-snapshot | ✅ 5/11 | ✅ 5/11 | |
-| T28 | `:push!` force push — skips lock, overwrites relay HEAD | ✅ 5/11 | ✅ 5/11 | Break-glass, command-only (no keybinding) |
+| T28 | `:push!` force push — skips lock, overwrites relay HEAD | ✅ 5/11 | ✅ 5/11 | Fixed 5/11 eve: was async without @work — never executed |
+| T29 | `:pull-all` — pull all projects from active remote | ✅ 5/11 Mac | ❌ 5/11 Win | Runs but error invisible (CSS display:none race). Works from Mac Python script. |
 
 ## CLI
 
@@ -111,6 +112,7 @@ Living test matrix. Mark ✅ (pass), ❌ (fail), ⚠️ (flake), 🔲 (untested)
 | 5/10/26 | Chris + Hermes | macOS | T1-T5, T8-T19, T21-T23, L2-L3, L12, P5 | 25+ ✅. Bugs fixed: assign/unassign fingerprint, missing Path import, 10-char hash → full_hash in diff, 📸→● emoji purge, ⧩ logo restored, inject→auto-snapshot, freeze soft warning, archive/delete prefill. Spinner animation fixed. |
 | 5/11/26 | Chris + Hermes | macOS | :projects picker, :remotes picker, L5 (join), E1 (no .als), L4 (share relay) | :projects j/k/enter switcher done. :remotes picker + per-project remote scoping. :browse scrapped — Finder paste + :init faster. :init now strips quotes/tilde/Finder paste. Push/pull uses single active remote per project. 7+ crashes fixed (debounce, fingerprint, stale index on pickers, sync_url compat). 43 total ✅. |
 | 5/11/26 | Chris + Hermes | Windows | T1, T3, T12, T13, T15, T18, T25-T28, P1 | Windows TUI confirmed: c, S, p, P, j/k, :project, :projects, :remotes, :inject, :push! all working. Force push deadlock fixed — relay now updates HEAD on force push even when snapshots already exist. F binding removed, :push! is break-glass command-only. |
+| 5/11/26 eve | Chris + Hermes | Mac+Win | :pull-all, :push!, push conflict bugs | **:push! was never executing** — `async` without `@work`, same bug as :pull-all. Fixed. **Cross-project push conflicts** — `last_head` was per-remote global, switching projects caused 409. Fixed: `ClavusProject.last_remote_head`. **:pull-all error invisible on Windows** — 6 attempted fixes (30s timer, sentinel, _sticky_error, direct widget.write, forced refresh). Root cause appears to be CSS `display:none` still active when @work worker writes to #footer-status. Error text lands in hidden widget. Needs modal/log-file approach. 7 commits. |
 
 ---
 
