@@ -1414,8 +1414,8 @@ def cmd_share(args: argparse.Namespace) -> None:
     print()
 
     # ── Auto-configure localhost remote so you can pull your own relay ──
-    from clavus.store import BlobStore, Remote as RemoteConfig
-    from clavus.sync import load_remotes, save_remotes
+    from clavus.store import BlobStore
+    from clavus.sync import load_remotes, save_remotes, Remote as RemoteConfig
     store = BlobStore()
     remotes = load_remotes(store)
     localhost_url = f"http://localhost:{port}"
