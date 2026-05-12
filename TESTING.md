@@ -49,7 +49,7 @@ Living test matrix. Mark ✅ (pass), ❌ (fail), ⚠️ (flake), 🔲 (untested)
 | T21 | Header dot: green ● (connected), yellow ○ (remote, no data), dim ○ (no remote) | ✅ 5/10 | ✅ 5/11 | |
 | T22 | Freeze detection warning on `S` | ✅ 5/10 | ✅ 5/11 | :freeze toggle — warn (default) or block |
 | T23 | Long cue text / snapshot message → no truncation crash | ✅ 5/10 | ✅ 5/11 | |
-| T24 | TUI survives corrupt meta file (orphaned 10-char hash) | 🔲 | 🔲 | |
+| T24 | TUI survives corrupt meta file (orphaned 10-char hash) | ✅ 5/11 | 🔲 | Cycle detection + missing snap + self-referencing parent guards |
 | T25 | `:projects` picker — j/k navigate, enter select, esc cancel | ✅ 5/11 | ✅ 5/11 | |
 | T26 | `:remotes` picker — per-project remote scoping | ✅ 5/11 | ✅ 5/11 | Push/pull uses selected remote only |
 | T27 | `:inject` → cues land as Ableton markers → auto-snapshot | ✅ 5/11 | ✅ 5/11 | |
@@ -72,15 +72,15 @@ Living test matrix. Mark ✅ (pass), ❌ (fail), ⚠️ (flake), 🔲 (untested)
 | L10 | `clavus backup` → `clavus backups` → `clavus restore-store` | ✅ 5/11 | 🔲 | 4 backups, 182MB latest |
 | L11 | `clavus repair` fixes corrupted index | ✅ 5/11 | ✅ 5/11 | |
 | L12 | `clavus doctor` health check | ✅ 5/11 | ✅ 5/11 | |
-| L13 | `clavus stem import/push/pull/list` | 🔲 | 🔲 | |
+| L13 | `clavus stem import/push/pull/list` | ✅ 5/11 | 🔲 | Import, list, push all ✅ |
 | L14 | `clavus open` launches Ableton with HEAD | ✅ 5/11 | ✅ 5/11 | |
-| L15 | `clavus restore <hash>` restores snapshot | 🔲 | 🔲 | |
+| L15 | `clavus restore <hash>` restores snapshot | ✅ 5/11 | 🔲 | Restore from hash + HEAD both ✅ |
 
 ## Edge Cases & Error Handling
 
 | # | Test | macOS | Windows | Notes |
 |---|------|:---:|:---:|-------|
-| E1 | Empty project (no snapshots) → snapshot → push | 🔲 | 🔲 | |
+| E1 | Empty project (no snapshots) → snapshot → push | ✅ 5/11 | 🔲 | Init→auto-snap→push(409)→pull→push ✅ |
 | E2 | Empty relay → push/pull → clear error message | ✅ 5/11 | ✅ 5/11 | |
 | E3 | Pull with no remotes configured → clear error | ✅ 5/11 | ✅ 5/11 | ✗ in header + footer error |
 | E4 | Push with no remotes → clear error | ✅ 5/11 | ✅ 5/11 | ✗ in header + footer error |
