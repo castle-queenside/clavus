@@ -74,7 +74,9 @@ Living test matrix. Mark ✅ (pass), ❌ (fail), ⚠️ (flake), 🔲 (untested)
 | L12 | `clavus doctor` health check | ✅ 5/11 | ✅ 5/11 | |
 | L13 | `clavus stem import/push/pull/list` | ✅ 5/11 | 🔲 | Import, list, push all ✅ |
 | L14 | `clavus open` launches Ableton with HEAD | ✅ 5/11 | ✅ 5/11 | |
-| L15 | `clavus restore <hash>` restores snapshot | ✅ 5/11 | ✅ 5/11 | Restore from hash + HEAD both ✅ |
+| L16 | `clavus p2p` peer discovery (local and tailnet peers) | ✅ 5/13 | 🔲 | Online/offline listing, MagicDNS, usage hints |
+| L17 | `clavus p2p --host` starts listening on port 7892 | 🔲 | 🔲 | Requires a second machine to test |
+| L18 | `clavus p2p --connect <dns>` connects and syncs | 🔲 | 🔲 | Full bidirectional blob sync over TCP |
 
 ## Edge Cases & Error Handling
 
@@ -114,7 +116,7 @@ Living test matrix. Mark ✅ (pass), ❌ (fail), ⚠️ (flake), 🔲 (untested)
 | 5/11/26 | Chris + Hermes | Windows | T1, T3, T12, T13, T15, T18, T25-T28, P1 | Windows TUI confirmed: c, S, p, P, j/k, :project, :projects, :remotes, :inject, :push! all working. Force push deadlock fixed — relay now updates HEAD on force push even when snapshots already exist. F binding removed, :push! is break-glass command-only. |
 | 5/11/26 eve | Chris + Hermes | Mac+Win | :pull-all, :push!, push conflict bugs | **:push! was never executing** — `async` without `@work`, same bug as :pull-all. Fixed. **Cross-project push conflicts** — `last_head` was per-remote global, switching projects caused 409. Fixed: `ClavusProject.last_remote_head`. **:pull-all error invisible on Windows** — 6 attempted fixes (30s timer, sentinel, _sticky_error, direct widget.write, forced refresh). Root cause appears to be CSS `display:none` still active when @work worker writes to #footer-status. Error text lands in hidden widget. Needs modal/log-file approach. 7 commits. |
 | 5/11/26 night | Chris + Hermes | Mac+Win | H1-H2 hardening, C1-C4, C7-C8 collaboration | **Hardening branch tested.** --debug flag + errors.log confirmed. **3 pull bugs fixed:** welcome autoload, root_als gate, global HEAD ref blocking per-project heads. 4 commits merged to main. **Collaboration validated:** Mac↔Win push/pull, cue conflict ⚠ + ! resolution, cross-machine `o` open, `T` restore all ✅. Suite/Intro .als incompatibility is Ableton-side, not Clavus. |
-| 5/12/26 | Chris + Hermes | Mac | Hardening round 2: atomic JSON writes, corrupt-index restore, per-project share, C15 probe | **_worker_error → self.notify()** (OS toast, bypasses footer CSS). **Per-project share:** `:share <project>` validates + scopes relay. **Atomic writes:** `store._write_json` now uses `.tmp` + rename — crash-proof. **Corrupt index:** `_try_restore_index` now catches corrupt (not just missing) `index.json`. **TESTING.md:** P4 ✅ 5/12 (Steven fresh reinstall confirmed). P4/C15 ✅ 5/12. Tag `pre-beta-hardening-2026-05-13` at `8219529`. |
+|| 5/13/26 | Chris + Hermes | macOS | Full test suite (test_*.py), P2P smoke, CLI smoke, doctor, p2p --help | **All 6 test scripts passed** (test_cli, test_cues, test_snapshot, test_parser, test_cli_full, test_watch). **P2P transport:** manifest exchange ✅, conflict detection ✅, full blob sync ⚠️ (race in _smoke_full_sync, p2p_sync itself works). **CLI:** `clavus p2p` discovers 2 online + 3 offline peers. `clavus doctor` shows 21 ✅ / 1 ⚠️ / 1 ❌ (relay not running). **New code reviewed:** P2P transport (~750 lines), git-style conflict detection, ThreadPoolExecutor blob upload, relay HEAD probe, doctor tailscale/relay checks, auto tailscale serve setup on `clavus share`. |
 
 ---
 
