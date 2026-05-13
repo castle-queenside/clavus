@@ -187,71 +187,159 @@ def cmd_repair(args: argparse.Namespace) -> None:
 def cmd_doctor(args: argparse.Namespace) -> None:
     """Diagnose Clavus store health — read-only check."""
     from clavus.store import BlobStore
+    from clavus.sync import load_remotes, Remote
     from pathlib import Path
     import json
+    import socket
+    import urllib.request
+    import urllib.error
+    import urllib.parse
 
     store = BlobStore()
+    ok: list[str] = []
+    warn: list[str] = []
+    fail: list[str] = []
+
+    def check(label: str, cond: bool, detail: str = "") -> None:
+        sym = "✅" if cond else "❌"
+        msg = f"  {sym} {label}"
+        if detail:
+            msg += f" — {detail}"
+        if cond:
+            ok.append(msg)
+        else:
+            fail.append(msg)
+
+    def warn_check(label: str, detail: str = "") -> None:
+        msg = f"  ⚠️  {label}"
+        if detail:
+            msg += f" — {detail}"
+        warn.append(msg)
+
     print(f"🔍 Clavus Doctor")
     print(f"   Store: {store.root}")
     print()
 
-    # 1. Check index
+    # 1. Index JSON integrity
+    print("  index.json:")
     if not store.index_path.exists():
-        print(f"  ❌ index.json: MISSING")
+        check("index.json exists", False, "file missing")
     else:
         try:
             data = json.loads(store.index_path.read_text())
-            projects = [k for k in data if k != "_last_project"]
-            last = data.get("_last_project", "(none)")
-            print(f"  ✅ index.json: {len(projects)} project(s), last: {last}")
-            for name in projects:
-                p = data.get(name)
-                if not p or not isinstance(p, dict):
-                    print(f"    ⚠️  {name}  — corrupt entry (null), needs repair")
-                    continue
-                als = p.get("root_als", "")
-                als_ok = "✅" if (als and Path(als).exists()) else "⚠️"
-                head = (p.get("head") or "")[:12] or "(none)"
-                print(f"    {als_ok} {name}  @ {head}  {als[:50] if als else '(no path)'}")
+            if not isinstance(data, dict):
+                check("index.json valid", False, "not a dict")
+            else:
+                projects = [k for k in data if k != "_last_project"]
+                last = data.get("_last_project", "(none)")
+                check("index.json valid", True, f"{len(projects)} project(s), last: {last}")
+                for name in projects:
+                    p = data.get(name)
+                    if not p or not isinstance(p, dict):
+                        warn_check(f"  {name}", "corrupt entry (null)")
+                        continue
+                    als = p.get("root_als", "")
+                    als_ok = Path(als).exists() if als else False
+                    head = (p.get("head") or "")[:12] or "(none)"
+                    sym = "✅" if als_ok else "⚠️"
+                    status = "file found" if als_ok else "file missing"
+                    (ok if als_ok else warn).append(f"  {sym} {name}  @ {head}  {als[:50] if als else '(no path)'}  [{status}]")
         except (json.JSONDecodeError, OSError) as e:
-            print(f"  ❌ index.json: CORRUPT — {e}")
+            check("index.json valid", False, str(e))
 
-    # 2. Check backups
+    # 2. Backup files
+    print("  backups:")
     backups = store.list_backups()
     if backups:
-        print(f"  ✅ Backups: {len(backups)} available (latest: {backups[0].name})")
+        check("backups available", True, f"{len(backups)} — latest: {backups[0].name}")
     else:
-        print(f"  ⚠️  No backups — run 'clavus backup' to create one")
+        warn_check("backups", "none available — run 'clavus backup'")
 
-    # 3. Check refs
+    # 3. HEAD ref
+    print("  refs:")
     head = store.read_ref("HEAD")
     if head:
-        print(f"  ✅ HEAD: {head[:16]}...")
+        check("HEAD ref", True, head[:16] + "...")
     else:
-        print(f"  ⚠️  No HEAD ref")
+        warn_check("HEAD ref", "none set")
 
-    # 4. Check objects
+    # 4. Blob directory structure
+    print("  blobs:")
     obj_count = sum(1 for f in store.objects_dir.rglob("*") if f.is_file())
-    print(f"  ✅ Objects: {obj_count} blob(s)")
+    check("objects directory", store.objects_dir.exists(), f"{obj_count} blob(s)")
+    # Check subdir structure (first 2 chars)
+    subdirs = list(store.objects_dir.glob("*"))
+    if subdirs:
+        valid_sub = all(f.is_dir() and len(f.name) == 2 for f in subdirs)
+        check("blob subdirectory scheme", valid_sub, f"{len(subdirs)} subdir(s)")
+    elif obj_count > 0:
+        warn_check("blob subdirs", "objects exist but no subdirs found")
 
-    # 5. Check cues
+    # 5. Cues
+    print("  cues:")
     cues_root = store.root / "cues"
     if cues_root.exists():
         cue_count = sum(1 for f in cues_root.rglob("*.json"))
-        print(f"  ✅ Cues: {cue_count} file(s)")
+        check("cues directory", True, f"{cue_count} file(s)")
     else:
-        print(f"  ⚠️  No cues directory")
+        warn_check("cues directory", "none")
 
+    # 6. Remotes — connectivity
+    print("  remotes:")
+    try:
+        remotes = load_remotes(store)
+    except Exception as e:
+        warn_check("remotes", f"could not load: {e}")
+        remotes = []
+    if not remotes:
+        warn_check("remotes", "none configured")
+    for remote in remotes:
+        url = remote.url.rstrip("/")
+        ping_ok = False
+        try:
+            # Fast ping: just the root URL with a short timeout
+            req = urllib.request.Request(url, method="HEAD")
+            urllib.request.urlopen(req, timeout=5)
+            ping_ok = True
+        except (urllib.error.URLError, socket.timeout, OSError):
+            pass
+        # Extract host for display
+        try:
+            host = urllib.parse.urlparse(url).netloc
+        except Exception:
+            host = url
+        check(f"remote '{remote.name}' ({host})", ping_ok, "reachable" if ping_ok else "unreachable")
+
+    # 7. Tailscale MagicDNS — resolve each remote's hostname
+    print("  network:")
+    for remote in remotes:
+        try:
+            parsed = urllib.parse.urlparse(remote.url)
+            if parsed.netloc:
+                addr = socket.gethostbyname(parsed.netloc)
+                ok.append(f"  ✅ '{parsed.netloc}' — {addr}")
+        except socket.gaierror:
+            try:
+                parsed = urllib.parse.urlparse(remote.url)
+                warn.append(f"  ⚠️  '{parsed.netloc}' — could not resolve")
+            except Exception:
+                warn.append(f"  ⚠️  remote '{remote.name}' — could not parse URL")
+
+    # Summary
     print()
-    if args.verbose:
-        print(f"  Backups:")
-        for b in backups[:5]:
-            size = b.stat().st_size / 1024
-            print(f"    {b.name}  ({size:.0f} KB)")
-        print()
-    print(f"  💡 Run 'clavus backup' to create a full backup")
-    print(f"  💡 Run 'clavus repair' to recover from corruption")
-    print(f"  💡 Run 'clavus restore-store' to restore from backup")
+    print(f"  Summary: {len(ok)} ✅  {len(warn)} ⚠️  {len(fail)} ❌")
+    for line in fail:
+        print(line)
+    for line in warn:
+        print(line)
+    print()
+    if fail:
+        print(f"  💡 Run 'clavus repair' to recover from corruption")
+        print(f"  💡 Run 'clavus restore-store' to restore from backup")
+    elif warn:
+        print(f"  💡 Run 'clavus backup' to create a full backup")
+    else:
+        print(f"  💡 Everything looks good!")
 
 
 def cmd_help(args: argparse.Namespace) -> None:

@@ -119,6 +119,13 @@ def _show_fatal_error(self, msg: str):
 # - self._peer_reachable (OK — transient, probed on connect)
 # - self._last_sync (OK — cosmetic, display-only)
 # - self._sync_status (OK — transient)
+
+**Relay HEAD race condition — reviewed May 13, 2026:**
+- `push_to_remote` sends `expected_parent = proj.last_remote_head or remote.last_head`
+- On 409 Conflict, the 409 handler auto-updates `proj.last_remote_head` to the relay's actual head, so the next push is clean
+- The only window for overwriting a newer relay HEAD requires: push A sends → push B sends → A gets 409 with B's new head → A auto-assimilates B's head. Correctly handled.
+- `force=True` bypasses the lock intentionally (manual override)
+- **Conclusion: Already handled. No code changes needed.**
 ```
 
 ---
