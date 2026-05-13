@@ -858,6 +858,10 @@ def create_snapshot(message: str, allow_frozen: bool = True) -> tuple[Optional[s
         project, message=message, parent=proj.head, tags=[],
     )
 
+    # Warn if snapshot has no .als backup — it cannot restore
+    if not snap.als_hash:
+        logs.append(f"  ⚠️  Snapshot saved but .als file has no backup — restore will not be possible")
+
     prev = store.load_snapshot(proj.head) if proj.head else None
     if prev and snap.als_hash and snap.als_hash == prev.als_hash:
         logs.append(f"⚠️  No changes — {proj.name}.als is identical to last snapshot")
@@ -1740,16 +1744,33 @@ def cmd_join(args: argparse.Namespace) -> None:
 
     # ── Phase 4: Save Remote ─────────────────────────────────────────
     remotes = load_remotes(store)
-    existing_urls = {r.url for r in remotes}
+    existing_urls = {r.url: r for r in remotes}
     remote_name = host.replace(".", "-")
 
-    if base not in existing_urls:
-        remotes = [r for r in remotes if r.url != base]
-        remotes.append(Remote(name=remote_name, url=base))
-        save_remotes(store, remotes)
-        print(f"    ✅  Saved remote: {remote_name}")
+    if base in existing_urls:
+        existing = existing_urls[base]
+        if existing.name == remote_name:
+            print(f"    📡  Already connected to {remote_name}")
+        else:
+            # Same URL, different name — update name (relay may have rebooted)
+            remotes = [r for r in remotes if r.url != base]
+            remotes.append(Remote(name=remote_name, url=base))
+            save_remotes(store, remotes)
+            print(f"    ✅  Updated remote name: {remote_name}")
     else:
-        print(f"    📡  Remote already configured")
+        if remotes:
+            # Already have a different remote — warn before replacing
+            current = remotes[0]
+            print(f"    ⚠️  You already have a remote configured: {current.name}")
+            print(f"       Replacing it with {remote_name} (single remote at a time).")
+            print()
+            remotes = [Remote(name=remote_name, url=base)]
+            save_remotes(store, remotes)
+            print(f"    ✅  Switched to: {remote_name}")
+        else:
+            remotes.append(Remote(name=remote_name, url=base))
+            save_remotes(store, remotes)
+            print(f"    ✅  Saved remote: {remote_name}")
 
     # ── Phase 5: Pull Existing Projects ──────────────────────────────
     projects = info.get("projects", [])
