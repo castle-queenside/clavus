@@ -244,8 +244,16 @@ class BlobStore:
 
     @staticmethod
     def _write_json(path: Path, data: dict) -> None:
-        """Write JSON data to a file."""
-        path.write_text(json.dumps(data, indent=2, default=str))
+        """Write JSON data to a file atomically via rename.
+
+        Writes to a .tmp file first, then atomically renames to the
+        target. This prevents corruption if the process is killed or
+        crashes mid-write. The .tmp is created in the same directory
+        as the target so the rename is always on the same filesystem.
+        """
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(data, indent=2, default=str))
+        tmp.rename(path)
 
     # ── Snapshot Storage ──
 
@@ -509,7 +517,7 @@ class BlobStore:
         """
         import json, time
 
-        # Level 1: restore from .bak file
+        # Level 1: restore from .bak file (also handles corrupt/truncated index.json)
         for bak_suffix in [".bak", ".bak2", ".bak3"]:
             bak_path = self.index_path.with_suffix(self.index_path.suffix + bak_suffix)
             if bak_path.exists():
@@ -519,10 +527,39 @@ class BlobStore:
                         isinstance(v, dict) and "root_als" in v for v in data.values()
                     ):
                         self._write_json(self.index_path, data)
-                        print(f"⚠️  index.json was missing — restored from {bak_path.name}")
+                        print(f"⚠️  index.json restored from {bak_path.name}")
                         return True
                 except (json.JSONDecodeError, OSError):
                     continue
+
+        # Level 1b: index.json exists but is corrupt — overwrite from .bak if valid
+        if self.index_path.exists():
+            try:
+                data = json.loads(self.index_path.read_text())
+                # Valid if it has the expected structure
+                if isinstance(data, dict) and any(
+                    isinstance(v, dict) and "root_als" in v for v in data.values()
+                ):
+                    pass  # index is valid, no restore needed
+                else:
+                    raise json.JSONDecodeError("index.json missing project data", "", 0)
+            except (json.JSONDecodeError, OSError):
+                # Corrupt — try .bak
+                for bak_suffix in [".bak", ".bak2", ".bak3"]:
+                    bak_path = self.index_path.with_suffix(self.index_path.suffix + bak_suffix)
+                    if bak_path.exists():
+                        try:
+                            data = json.loads(bak_path.read_text())
+                            if isinstance(data, dict) and any(
+                                isinstance(v, dict) and "root_als" in v for v in data.values()
+                            ):
+                                self._write_json(self.index_path, data)
+                                print(f"⚠️  index.json was corrupt — restored from {bak_path.name}")
+                                return True
+                        except (json.JSONDecodeError, OSError):
+                            continue
+                # No valid backup — Level 2 will rebuild from refs
+                print(f"⚠️  index.json is corrupt and no backup found — rebuilding from refs")
 
         # Level 2: reconstruct from refs/ directory
         ref_files = list(self.refs_dir.glob("**/*"))

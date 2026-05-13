@@ -178,6 +178,8 @@ class ClavusApp(App):
     #footer.input-mode #footer-input {{ display: block; }}
     #footer.input-mode #footer-status {{ display: none; }}
     #footer.input-mode #footer-hint {{ display: none; }}
+    /* Worker errors use self.notify() (OS toast) so they are always visible,
+       even when the footer is hidden during command input (input-mode). */
 
     Scrollbar {{ scrollbar-color: #1a9e9e #0f1a20; }}
     Scrollbar > .scrollbar--grabber {{ background: #1a9e9e; }}

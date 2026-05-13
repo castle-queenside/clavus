@@ -98,7 +98,7 @@ Living test matrix. Mark ✅ (pass), ❌ (fail), ⚠️ (flake), 🔲 (untested)
 | P1 | Windows: TUI renders correctly (Windows Terminal) | ✅ 5/11 | |
 | P2 | Windows: `os.startfile()` opens .als in Ableton | ✅ 5/12 | |
 | P3 | Windows: OneDrive Files On-Demand → .als accessible | 🔲 | |
-| P4 | Windows: `py -m pip install -e .` works from fresh clone | 🔲 | |
+| P4 | Windows: `py -m pip install -e .` works from fresh clone | ✅ 5/12 | | Steven 8:52pm reinstall confirmed — all May 12 fixes present; C15 (dead remote timeout) probe already at 10s |
 | P5 | macOS: `open` command launches Ableton | ✅ 5/10 | |
 | P6 | macOS: `tailscale serve` survives sleep/wake | 🔲 | |
 | P7 | Linux: install + `clavus tui` runs (no DAW needed) | 🔲 | |
@@ -114,6 +114,7 @@ Living test matrix. Mark ✅ (pass), ❌ (fail), ⚠️ (flake), 🔲 (untested)
 | 5/11/26 | Chris + Hermes | Windows | T1, T3, T12, T13, T15, T18, T25-T28, P1 | Windows TUI confirmed: c, S, p, P, j/k, :project, :projects, :remotes, :inject, :push! all working. Force push deadlock fixed — relay now updates HEAD on force push even when snapshots already exist. F binding removed, :push! is break-glass command-only. |
 | 5/11/26 eve | Chris + Hermes | Mac+Win | :pull-all, :push!, push conflict bugs | **:push! was never executing** — `async` without `@work`, same bug as :pull-all. Fixed. **Cross-project push conflicts** — `last_head` was per-remote global, switching projects caused 409. Fixed: `ClavusProject.last_remote_head`. **:pull-all error invisible on Windows** — 6 attempted fixes (30s timer, sentinel, _sticky_error, direct widget.write, forced refresh). Root cause appears to be CSS `display:none` still active when @work worker writes to #footer-status. Error text lands in hidden widget. Needs modal/log-file approach. 7 commits. |
 | 5/11/26 night | Chris + Hermes | Mac+Win | H1-H2 hardening, C1-C4, C7-C8 collaboration | **Hardening branch tested.** --debug flag + errors.log confirmed. **3 pull bugs fixed:** welcome autoload, root_als gate, global HEAD ref blocking per-project heads. 4 commits merged to main. **Collaboration validated:** Mac↔Win push/pull, cue conflict ⚠ + ! resolution, cross-machine `o` open, `T` restore all ✅. Suite/Intro .als incompatibility is Ableton-side, not Clavus. |
+| 5/12/26 | Chris + Hermes | Mac | Hardening round 2: atomic JSON writes, corrupt-index restore, per-project share, C15 probe | **_worker_error → self.notify()** (OS toast, bypasses footer CSS). **Per-project share:** `:share <project>` validates + scopes relay. **Atomic writes:** `store._write_json` now uses `.tmp` + rename — crash-proof. **Corrupt index:** `_try_restore_index` now catches corrupt (not just missing) `index.json`. **TESTING.md:** P4 ✅ 5/12 (Steven fresh reinstall confirmed). P4/C15 ✅ 5/12. Tag `pre-beta-hardening-2026-05-13` at `8219529`. |
 
 ---
 
