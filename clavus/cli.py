@@ -1250,7 +1250,7 @@ def cmd_relay(args: argparse.Namespace) -> None:
     port = args.port or cfg.port
     # Check for --bg / --background flag
     if getattr(args, 'background', False) or getattr(args, 'bg', False):
-        import platform, sys, os, time, subprocess
+        import subprocess
         pid_path = Path.home() / '.clavus' / 'relay.pid'
         pid_path.parent.mkdir(parents=True, exist_ok=True)
         
@@ -1457,7 +1457,7 @@ def cmd_share(args: argparse.Namespace) -> None:
 
     # Check for --bg / --background flag
     if getattr(args, 'background', False) or getattr(args, 'bg', False):
-        import platform, sys, os, time, subprocess
+        import subprocess
         pid_path = Path.home() / '.clavus' / 'relay.pid'
         pid_path.parent.mkdir(parents=True, exist_ok=True)
         
