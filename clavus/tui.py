@@ -569,11 +569,41 @@ class ClavusApp(App):
                         capture_output=True, text=True, timeout=60)
                     out = (_p.stdout or "") + (_p.stderr or "")
                     self._log_event(f":p2p-connect {arg} → {out.strip()[:200]}")
-                    # Show the last meaningful line (sync result or error)
+                    # Parse output for a clear summary
                     lines = [l.strip() for l in out.split("\n") if l.strip()]
-                    summary = lines[-1] if lines else "P2P sync complete"
-                    self.notify(summary[:120], timeout=5.0)
-                    self._status(summary[:80])
+                    if "CONFLICT" in out:
+                        self.notify("⚠️ Sync blocked — heads diverged (both modified since last sync)", timeout=6.0, severity="warning")
+                        self._status("⚠️ P2P conflict — sync both via relay first")
+                    elif "Failed to connect" in out:
+                        self.notify("❌ Could not reach peer — host may be offline", timeout=6.0, severity="error")
+                        self._status("❌ P2P connect failed")
+                    elif "Sync result" in out:
+                        import ast
+                        sync_line = next((l for l in lines if l.startswith("Sync result")), "")
+                        sync_text = sync_line.replace("Sync result: ", "")
+                        try:
+                            r = ast.literal_eval(sync_text)
+                            dl = len(r.get("downloaded", []))
+                            ul = len(r.get("uploaded", []))
+                            err = r.get("error", "")
+                            if err:
+                                self.notify(f"⚠️ P2P sync error: {err[:60]}", timeout=6.0, severity="warning")
+                                self._status(f"⚠️ P2P error: {err[:50]}")
+                            elif dl or ul:
+                                self.notify(f"✅ P2P synced — {dl} downloaded, {ul} uploaded", timeout=5.0)
+                                self._status(f"✅ P2P: {dl}↓ {ul}↑")
+                            else:
+                                self.notify("✅ P2P sync — up to date (nothing to transfer)", timeout=4.0)
+                                self._status("✅ P2P: up to date")
+                        except Exception:
+                            self.notify(f"✅ P2P sync complete", timeout=4.0)
+                            self._status("✅ P2P done")
+                    elif "Connected" in out and "Sync result" not in out:
+                        self.notify("✅ Connected to peer — no sync needed", timeout=4.0)
+                        self._status("✅ P2P connected")
+                    else:
+                        self.notify(out.strip()[:100], timeout=5.0)
+                        self._status(out.strip()[:80])
                 except subprocess.TimeoutExpired:
                     self._log_event(f":p2p-connect {arg} TIMEOUT")
                     self.notify("P2P sync timed out after 60s", timeout=5.0, severity="error")
