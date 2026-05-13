@@ -640,7 +640,7 @@ def pull_snapshot_blobs(
                     if snap.sample_hashes:
                         # Extract filename → RelativePath mapping from the original .als
                         import gzip as _gzip, re as _re
-                        _xml = _gzip.decompress(raw).decode("utf-8", errors="replace")
+                        _xml = _gzip.decompress(raw).decode("utf-8", errors="surrogateescape")
                         _als_relpaths: dict[str, str] = {}
                         for _m in _re.finditer(r'<RelativePath\s+Value=\"([^\"]+)\"', _xml):
                             _rp = _m.group(1)
@@ -728,6 +728,64 @@ def _snapshots_to_dicts(store: BlobStore, proj: ClavusProject) -> list[dict]:
         current = snap.parent
     return history
 
+
+
+def materialize_snapshot(store: BlobStore, proj: ClavusProject) -> bool:
+    """Write the .als and materialize sample blobs for the project's HEAD snapshot.
+
+    Call this AFTER pull_snapshot_blobs to ensure blobs are on disk before
+    materialization. Returns True if .als was written.
+    """
+    from clavus.helpers import get_projects_dir
+    try:
+        head = proj.head
+        if not head:
+            return False
+        snap = store.load_snapshot(head)
+        if not snap or not snap.als_hash:
+            return False
+        raw = store.get_object(snap.als_hash)
+        if not raw:
+            return False
+        project_name = proj.name.replace(" ", " ")
+        base_dir = get_projects_dir() / project_name
+        als_dir = base_dir / f"{project_name} Project"
+        out = als_dir / f"{project_name}.als"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        (als_dir / "Samples").mkdir(exist_ok=True)
+        (als_dir / "Backup").mkdir(exist_ok=True)
+        (als_dir / "Ableton Project Info").mkdir(exist_ok=True)
+
+        # Materialize samples
+        if snap.sample_hashes:
+            import gzip as _gzip, re as _re
+            _xml = _gzip.decompress(raw).decode("utf-8", errors="surrogateescape")
+            _als_relpaths: dict[str, str] = {}
+            for _m in _re.finditer(r'<RelativePath\s+Value=\"([^\"]+)\"', _xml):
+                _rp = _m.group(1)
+                _fn = _rp.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+                if _fn not in _als_relpaths:
+                    _als_relpaths[_fn] = _rp
+
+            import os as _os
+            print(f"    \uD83D\uDCC1 Materializing {len(snap.sample_hashes)} sample(s)...")
+            for sh in snap.sample_hashes:
+                fname = store.get_sample_filename(sh)
+                relpath = _als_relpaths.get(fname) or store.get_sample_relpath(sh) or ""
+                if fname and store.has_object(sh):
+                    try:
+                        store.materialize_sample(sh, out.parent, fname, relpath)
+                    except Exception:
+                        pass
+
+        out.write_bytes(raw)
+        proj.root_als = str(out)
+        store.set_index(proj)
+        print(f"    \uD83D\uDCC0 Materialized {project_name}.als" + (f" + {len(snap.sample_hashes)} samples" if snap.sample_hashes else ""))
+        return True
+    except Exception as e:
+        print(f"    \u26A0 Materialization failed: {e}")
+        return False
 
 def push_to_remote(store: BlobStore, proj: ClavusProject, remote: Remote, force: bool = False) -> dict:
     """Push all data to a remote. Returns summary.
