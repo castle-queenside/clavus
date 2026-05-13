@@ -1186,7 +1186,8 @@ def _sync_push_snapshots_impl(body: SyncPushSnapshotsBody, name: str):
     imported = 0
 
     # ── Optimistic lock: reject if relay HEAD has moved since peer last synced ──
-    if body.expected_parent is not None:
+    # Skip conflict check when force=True (admin override)
+    if not body.force and body.expected_parent is not None:
         current_head = store.read_ref("HEAD")
         if current_head and current_head != body.expected_parent:
             who = "unknown"
@@ -1236,9 +1237,15 @@ def _sync_push_snapshots_impl(body: SyncPushSnapshotsBody, name: str):
 
     # Update HEAD: always on force push, or when new snapshots landed
     if body.force or imported > 0:
-        # Find the newest snapshot by timestamp (body order is not reliable)
-        newest = max(body.snapshots, key=lambda s: s.get("timestamp", 0))
-        new_head = newest.get("full_hash", newest.get("hash", ""))
+        if body.snapshots:
+            # Find the newest snapshot by timestamp (body order is not reliable)
+            newest = max(body.snapshots, key=lambda s: s.get("timestamp", 0))
+            new_head = newest.get("full_hash", newest.get("hash", ""))
+        elif body.expected_parent and body.force:
+            # Force push with no snapshots — sync HEAD to match expected_parent
+            new_head = body.expected_parent
+        else:
+            new_head = None
         if new_head:
             if body.force:
                 # Force push: overwrite HEAD unconditionally
