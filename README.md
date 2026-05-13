@@ -40,7 +40,7 @@ Both machines run `clavus share`. Each discovers the other and pushes/pulls dire
 clavus share &                                       # each runs their own relay
 clavus find --tailscale                              # discover each other
 clavus remote add <their-name> http://<their-url>    # add each other
-clavus tui                                           # work + C + P as usual
+clavus tui                                           # work + S + P as usual
 ```
 
 **⚠️ Cross-account?** Share machines + use MagicDNS (see Tailscale note below).
@@ -121,11 +121,12 @@ Full networking details: `references/tailscale-serve-relay.md`
 ## Stems
 
 ```bash
-clavus stem import ~/Samples/kick.wav
+clavus stem import-folder ~/Desktop/Stems/   # import all WAVs in one shot
+clavus stem import kick.wav --track "Kick"    # single file
 clavus stem push
 clavus stem pull
 ```
-TUI: `U` to push, `:stem pull` to pull. Files land in `~/Clavus/Projects/<name>/Stems/`.
+TUI: `U` to push, `:stem pull` to pull. Files land in `~/.clavus/stems/<project>/<hash>/`.
 
 ## Backup
 
@@ -161,7 +162,7 @@ Rotating index backups run automatically before every write. Full daily backups 
 ## FAQ
 
 **"Nothing shows up. It says no project."**  
-Initialize or join: `:init /path/to/project.als`, `:browse` to find one, or `:join http://<url>:7890` then `p` to pull.
+Initialize or join: `:init /path/to/project.als`, or `clavus join http://<url>:7890` then `p` to pull.
 
 **"HEAD has moved — pull first."**  
 Someone else pushed. Press `p` (your work is auto-snapshotted), then push again. Nothing lost.
