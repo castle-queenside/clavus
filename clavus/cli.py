@@ -554,10 +554,9 @@ def cmd_p2p(args: argparse.Namespace) -> None:
             results["sync"] = r
             # Update last_peer_head for this peer
             if peer_head:
-                store.update_ref(f"refs/peers/{args.connect or ts_dns}/head", peer_head)
+                store.update_ref(f"peers/{args.connect or ts_dns}/head", peer_head)
             done = True
             print(f"\n  Sync result: {r}")
-            sock.close()
 
         transport.listen_with_peer_manifest(port, handler)
 
@@ -575,7 +574,7 @@ def cmd_p2p(args: argparse.Namespace) -> None:
     if args.connect:
         peer_dns = args.connect
         port = 7892
-        last_peer_head = store.read_ref(f"refs/peers/{peer_dns}/head")
+        last_peer_head = store.read_ref(f"peers/{peer_dns}/head")
         print(f"\n  Connecting to {peer_dns}:{port}...")
         if last_peer_head:
             print(f"  Peer HEAD (expected): {last_peer_head[:12]}")
@@ -630,7 +629,7 @@ def cmd_p2p(args: argparse.Namespace) -> None:
         # Update last_peer_head on successful sync
         peer_head = getattr(peer_manifest, "head", None)
         if peer_head:
-            store.update_ref(f"refs/peers/{peer_dns}/head", peer_head)
+            store.update_ref(f"peers/{peer_dns}/head", peer_head)
             print(f"\n  Updated peer HEAD: {peer_head[:12]}")
 
         print(f"\n  Sync result: {r}")

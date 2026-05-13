@@ -638,7 +638,7 @@ def _smoke_full_sync():
 
     host = TCPTransport("test-project", host_snapshots, list(host_store._d.keys()), head="head_ab")
     host.listen_with_peer_manifest(7951, handler)
-    time.sleep(0.2)
+    time.sleep(0.5)
 
     client = TCPTransport("test-project", client_snapshots, list(client_store._d.keys()), head="head_bc")
     peer_manifest, sock = client.connect("127.0.0.1", 7951)
