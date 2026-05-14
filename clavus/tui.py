@@ -487,9 +487,9 @@ class ClavusApp(App):
         elif cmd == "init" and arg:
             asyncio.create_task(self._run_init_project(arg))
         elif cmd == "inject":
-            self._run_inject()
+            asyncio.create_task(self._run_inject())
         elif cmd == "restore":
-            self._run_restore(arg)
+            asyncio.create_task(self._run_restore(arg))
         elif cmd == "open":
             self._run_open(arg)
         elif cmd == "setup":
@@ -772,7 +772,6 @@ class ClavusApp(App):
             self._update_header()
             self._log_event(f"init error: {e}")
 
-    @work(exclusive=False)
     async def _run_inject(self):
         """Inject unresolved cues as Ableton markers via CLI subprocess."""
         if not self.project:
@@ -806,7 +805,6 @@ class ClavusApp(App):
         except Exception as e:
             self._status(f"inject error: {e}")
 
-    @work(exclusive=False)
     async def _run_restore(self, hash_str: str = ""):
         """Restore the .als from a snapshot backup via CLI subprocess."""
         if not self.project:
@@ -1476,7 +1474,7 @@ class ClavusApp(App):
             self._status("no cues to inject")
             return
         self._status("injecting cues...")
-        self._run_inject()
+        asyncio.create_task(self._run_inject())
 
     def action_restore_snapshot(self):
         """Restore the most recently selected snapshot from the history pane."""
