@@ -567,7 +567,7 @@ class ClavusApp(App):
                 try:
                     _p = subprocess.run(
                         [sys.executable, "-m", "clavus", "p2p", "--connect", arg],
-                        capture_output=True, text=True, timeout=60)
+                        capture_output=True, text=True, encoding='utf-8', timeout=60)
                     out = (_p.stdout or "") + (_p.stderr or "")
                     self._log_event(f":p2p-connect {arg} → {out.strip()[:200]}")
                     # Parse output for a clear summary
@@ -617,7 +617,7 @@ class ClavusApp(App):
             try:
                 _p = subprocess.run(
                     [sys.executable, "-m", "clavus", "find", "--tailscale"],
-                    capture_output=True, text=True, timeout=15)
+                    capture_output=True, text=True, encoding='utf-8', timeout=15)
                 out = (_p.stdout or "") + (_p.stderr or "")
                 self._log_event(f":find → {out.strip()[:300]}")
                 # Show the actual output to the user
@@ -636,7 +636,7 @@ class ClavusApp(App):
             try:
                 _p = subprocess.run(
                     [sys.executable, "-m", "clavus", "repair"],
-                    capture_output=True, text=True, timeout=30)
+                    capture_output=True, text=True, encoding='utf-8', timeout=30)
                 out = (_p.stdout or "") + (_p.stderr or "")
                 self._log_event(f":repair → {out.strip()[:300]}")
                 self.notify("✅ Store repair complete", timeout=5.0)
@@ -961,7 +961,7 @@ class ClavusApp(App):
         try:
             proc = subprocess.run(
                 [sys.executable, "-m", "clavus", "doctor"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, encoding='utf-8', timeout=10,
             )
             lines = [l.strip() for l in proc.stdout.split("\n") if l.strip()][:8]
             self._status(" | ".join(lines[:3]) if lines else "doctor ran")
@@ -974,7 +974,7 @@ class ClavusApp(App):
         try:
             proc = subprocess.run(
                 [sys.executable, "-m", "clavus", "log"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, encoding='utf-8', timeout=10,
             )
             lines = [l.strip() for l in proc.stdout.split("\n") if l.strip()][:12]
             for line in lines:
@@ -1038,7 +1038,7 @@ class ClavusApp(App):
                             return
                 else:
                     cmd.extend(parts)
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=10)
             out = proc.stdout.strip()
             err = proc.stderr.strip()
             if out:
@@ -1068,7 +1068,7 @@ class ClavusApp(App):
             cmd = [sys.executable, "-m", "clavus", "branch"]
             if action:
                 cmd.append(action)
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=10)
             out = proc.stdout.strip()
             if out:
                 for line in out.split("\n")[:5]:
@@ -1104,7 +1104,7 @@ class ClavusApp(App):
         try:
             proc = subprocess.run(
                 [sys.executable, "-m", "clavus", "backup"],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True, text=True, encoding='utf-8', timeout=30,
             )
             out = proc.stdout.strip().split("\n")
             self._status(out[0] if out else "backup complete")
@@ -1117,7 +1117,7 @@ class ClavusApp(App):
         try:
             proc = subprocess.run(
                 [sys.executable, "-m", "clavus", "backups"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, encoding='utf-8', timeout=10,
             )
             out = proc.stdout.strip()
             lines = [l.strip() for l in out.split("\n") if l.strip()][:5]
@@ -1132,7 +1132,7 @@ class ClavusApp(App):
         if archive_path:
             cmd.append(archive_path)
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=30)
             out = (proc.stdout + proc.stderr).strip().split("\n")[-1][:60]
             self._status(out or "restore complete")
         except Exception as e:
@@ -1762,7 +1762,7 @@ class ClavusApp(App):
             import subprocess, json
             r = subprocess.run(
                 ["tailscale", "status", "--json"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True, text=True, encoding='utf-8', timeout=5,
             )
             if r.returncode == 0:
                 dns = json.loads(r.stdout).get("Self", {}).get("DNSName", "")
@@ -1771,7 +1771,7 @@ class ClavusApp(App):
             # Fallback: raw IP
             r2 = subprocess.run(
                 ["tailscale", "ip", "-4"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True, text=True, encoding='utf-8', timeout=5,
             )
             return r2.stdout.strip() if r2.returncode == 0 else ""
         except Exception:
