@@ -1632,7 +1632,7 @@ class ClavusApp(App):
 
     def action_settings(self):
         """Show settings in status bar."""
-        self._run_config()
+        self._status("settings test — this should appear")
 
     def action_assign(self):
         if self._input_mode or time.time() - self._input_debounce < 0.3:
