@@ -74,6 +74,10 @@ the pull-based `last_remote_head` update was implemented.
    and the relay compares against its stored HEAD which is 12 chars.
    This works because the comparison is string equality — both sides need
    the same format.
+3. ~~TUI inject: @work(exclusive=False) caused UnicodeDecodeError on Windows~~
+   Fixed in adf19af, 2a8b0ed, 20f5fd7 — all pipe decode() calls now use
+   `'utf-8'` with `errors='replace'`; async subprocess env includes
+   `PYTHONIOENCODING=utf-8`; inject auto-snapshots work.
 
 ## How to Verify
 
