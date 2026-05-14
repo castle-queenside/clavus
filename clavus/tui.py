@@ -1631,13 +1631,7 @@ class ClavusApp(App):
 
     def action_settings(self):
         """Show settings screen."""
-        try:
-            screen = SettingsScreen()
-            self.push_screen(screen)
-            self._log_event("settings screen pushed")
-        except Exception as e:
-            self._log_event(f"settings error: {e}")
-            self._status(f"settings error: {e}")
+        self.push_screen(HelpScreen())
 
     def action_assign(self):
         if self._input_mode or time.time() - self._input_debounce < 0.3:
