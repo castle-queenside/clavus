@@ -9,7 +9,7 @@
 
 | # | Test | Who | Status | Notes |
 |---|------|-----|--------|-------|
-| B1 | Fresh install: clone → `pip install -e .` → `clavus setup` works | Both | 🔲 | |
+| B1 | Fresh install: clone → `pip install -e .` → `clavus setup` works | Both | ✅ 5/13 | Mac ✅ (clone to tmp, install, setup all pass) — needs Windows confirm |
 | B2 | Host starts relay: `clavus share` → prints Tailscale URL | Host | ✅ 5/13 | |
 | B3 | Collaborator joins: `clavus join <url>` → projects appear | Steven | ✅ 5/13 | Worked after nuke + reinstall |
 | B4 | Pull: `p` in TUI → snapshots + cues land | Both | ✅ 5/13 | 16 cues, 12 snapshots, 40 blobs ✅ |
