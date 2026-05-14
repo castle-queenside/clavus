@@ -1284,7 +1284,8 @@ def cmd_snapshot(args: argparse.Namespace) -> None:
             sys.exit(1)
 
     # Prompt for message if not provided
-    message = args.message
+    # Support both positional `clavus snapshot "msg"` and `--message`/`-m` flag
+    message = args.message_flag if getattr(args, 'message_flag', None) else args.message
     if not message:
         try:
             message = input("  Snapshot message (or blank to cancel): ").strip()
@@ -3831,6 +3832,8 @@ def main():
     p_snap = subparsers.add_parser("snapshot", help="Create a new snapshot")
     p_snap.add_argument("message", nargs="?", default="",
                         help="Description of what changed (prompts if omitted)")
+    p_snap.add_argument("--message", "-m", dest="message_flag", default=None,
+                        help="Description of what changed (alternative to positional arg)")
     p_snap.add_argument("--tag", "-t", default="", help="Comma-separated tags")
     p_snap.add_argument("--parent", "-p", default=None, help="Override parent snapshot hash")
     p_snap.add_argument("--verbose", "-v", action="store_true", help="Show detailed diff")
