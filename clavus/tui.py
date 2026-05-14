@@ -781,10 +781,12 @@ class ClavusApp(App):
         import asyncio
         self._status("injecting cues into .als...")
         try:
+            _inj_env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
             proc = await asyncio.create_subprocess_exec(
                 sys.executable, "-m", "clavus", "cue-render", "--inject",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=_inj_env,
             )
             raw_out, raw_err = await asyncio.wait_for(proc.communicate(), timeout=30)
             out = raw_out.decode('utf-8', errors='replace').strip()
@@ -812,6 +814,7 @@ class ClavusApp(App):
         import asyncio
         self._status(f"restoring from {'HEAD' if not hash_str else hash_str}...")
         try:
+            _rest_env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
             cmd = [sys.executable, "-m", "clavus", "restore"]
             if hash_str:
                 cmd.append(hash_str)
@@ -819,6 +822,7 @@ class ClavusApp(App):
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=_rest_env,
             )
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
             out = stdout.decode().strip()
@@ -1083,11 +1087,13 @@ class ClavusApp(App):
         """Take a snapshot after inject to save markers to blob store."""
         import asyncio, sys
         try:
+            _snap_env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
             proc = await asyncio.create_subprocess_exec(
                 sys.executable, "-m", "clavus", "snapshot",
                 "injected markers",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=_snap_env,
             )
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
             out = stdout.decode().strip()

@@ -3460,7 +3460,7 @@ def cmd_cue_render(args: argparse.Namespace) -> None:
         from clavus.progress import Spinner, status
         with Spinner("injecting cues into .als..."):
             render_cues_as_markers(unresolved, "", inject_into_als=proj.root_als)
-        status(f"📍 Injected {len(unresolved)} cues into {proj.root_als}")
+        status(f"[INJECT] Injected {len(unresolved)} cues into {proj.root_als}")
         print(f"   Auto-snapshot to save: clavus snapshot \"injected markers\" or use :snapshot in TUI")
     else:
         output = args.output or f"{proj.name}_cues.xml"
