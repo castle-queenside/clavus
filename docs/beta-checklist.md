@@ -16,7 +16,7 @@
 | B5 | Make change in Ableton → `S` snapshot → `P` push → relay receives | Steven | ✅ 5/13 | Chris pushed `71f6a446` from Windows |
 | B6 | Other side pulls → sees the pushed snapshot + samples on disk | Host | ✅ 5/13 | Mac pulled and confirmed new HEAD landed |
 | B7 | Both edit → push/pull → conflict detected → resolve with `!` | Both | ✅ 5/11 | C3-C4 from testing matrix |
-| B8 | Switch projects via `:project <name>` → pull/push works | Both | 🟡 5/13 | Cross-project HEAD bug fixed, needs re-test |
+| B8 | Switch projects via `:project <name>` → pull/push works | Both | ✅ 5/13 | Tested: italovibez→Good2Me→italovibez. All 3 pushes clean, no 409s. Good2Me push landed cross-platform. |
 | B9 | Open project in Ableton with `o` | Both | ✅ 5/11 | |
 | B10 | Cue inject: `:inject` → markers appear in Ableton | Both | ✅ 5/13 | Validated on Windows — auto-snapshot after inject works |
 
