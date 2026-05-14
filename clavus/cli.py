@@ -3009,6 +3009,8 @@ def cmd_find(args: argparse.Namespace) -> None:
 
 def cmd_push(args: argparse.Namespace) -> None:
     """Push cues and snapshots to remotes."""
+    from clavus.progress import Spinner, ProgressBar, status
+
     store, proj = get_store_and_project()
     remotes = load_remotes(store)
 
@@ -3024,57 +3026,60 @@ def cmd_push(args: argparse.Namespace) -> None:
             print(f"❌ Remote '{args.remote}' not found.")
             return
 
+    force = getattr(args, 'force', False)
+    label = "force pushing" if force else "pushing"
+
     # ── Parallel pre-flight: ping all remotes at once, skip dead ones ──
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from clavus.sync import SyncClient
 
     live_remotes = []
     dead_remotes = []
-    with ThreadPoolExecutor(max_workers=len(remotes)) as executor:
-        future_to_remote = {
-            executor.submit(SyncClient(r.url).fast_ping): r
-            for r in remotes
-        }
-        for future in as_completed(future_to_remote):
-            remote = future_to_remote[future]
-            try:
-                if future.result():
-                    live_remotes.append(remote)
-                    print(f"  ✅ {remote.name} reachable")
-                else:
+    with Spinner(f"pinging {len(remotes)} remote(s)..."):
+        with ThreadPoolExecutor(max_workers=len(remotes)) as executor:
+            future_to_remote = {
+                executor.submit(SyncClient(r.url).fast_ping): r
+                for r in remotes
+            }
+            for future in as_completed(future_to_remote):
+                remote = future_to_remote[future]
+                try:
+                    if future.result():
+                        live_remotes.append(remote)
+                    else:
+                        dead_remotes.append(remote)
+                except Exception:
                     dead_remotes.append(remote)
-                    print(f"  ⏭  Skipping '{remote.name}' — unreachable")
-            except Exception:
-                dead_remotes.append(remote)
-                print(f"  ⏭  Skipping '{remote.name}' — unreachable")
 
     for remote in dead_remotes:
-        print(f"📤 Skipping '{remote.name}' ({remote.url}) — unreachable")
+        print(f"  ⏭  Skipping '{remote.name}' — unreachable")
 
     for remote in live_remotes:
-        print(f"📤 Pushing to '{remote.name}' ({remote.url})...")
-        result = push_to_remote(store, proj, remote)
-        parts = []
-        if result["error"]:
-            parts = [f"❌ {result['error']}"]
+        with Spinner(f"{label} to '{remote.name}'..."):
+            result = push_to_remote(store, proj, remote, force=force)
+
+        if result.get("error"):
+            print(f"  ❌ {result['error']}")
         else:
-            parts = [f"✅ {result['cues']} cues, {result['snapshots']} snapshots"]
+            parts = [f"✅ {result.get('cues', 0)} cues, {result.get('snapshots', 0)} snapshots"]
 
             # Push snapshot content blobs + .als backups
-            from clavus.sync import push_snapshot_blobs
-            blob_count = push_snapshot_blobs(store, proj, remote)
-            if blob_count:
-                parts.append(f"{blob_count} blob{'s' if blob_count != 1 else ''}")
+            with Spinner("syncing blobs..."):
+                from clavus.sync import push_snapshot_blobs
+                blob_count = push_snapshot_blobs(store, proj, remote)
+                if blob_count:
+                    parts.append(f"{blob_count} blob{'s' if blob_count != 1 else ''}")
 
             # Push stems for current HEAD
             head = store.read_ref("HEAD")
             stem_store = StemStore(proj.name, store)
             if head and stem_store.get_manifest(head):
-                from clavus.sync import push_stems_to_remote
-                stem_count = push_stems_to_remote(store, proj, remote, stem_store, head)
-                parts.append(f"{stem_count} stem{'s' if stem_count != 1 else ''}")
-        print(f"  {' — '.join(parts)}")
-        print()
+                with Spinner("syncing stems..."):
+                    from clavus.sync import push_stems_to_remote
+                    stem_count = push_stems_to_remote(store, proj, remote, stem_store, head)
+                    parts.append(f"{stem_count} stem{'s' if stem_count != 1 else ''}")
+
+            status(f"  {' — '.join(parts)}")
 
 
 def cmd_pull(args: argparse.Namespace) -> None:
@@ -3106,6 +3111,8 @@ def cmd_pull(args: argparse.Namespace) -> None:
         return
 
     # If no local project, pull from any remote that has projects
+    from clavus.progress import Spinner, ProgressBar, status
+
     if not proj:
         from clavus.sync import SyncClient, pull_from_remote, pull_snapshot_blobs
         from clavus.store import ClavusProject
@@ -3241,26 +3248,24 @@ def cmd_pull(args: argparse.Namespace) -> None:
 
     live_remotes = []
     dead_remotes = []
-    with ThreadPoolExecutor(max_workers=len(remotes)) as executor:
-        future_to_remote = {
-            executor.submit(SyncClient(r.url).fast_ping): r
-            for r in remotes
-        }
-        for future in as_completed(future_to_remote):
-            remote = future_to_remote[future]
-            try:
-                if future.result():
-                    live_remotes.append(remote)
-                    print(f"  ✅ {remote.name} reachable")
-                else:
+    with Spinner(f"pinging {len(remotes)} remote(s)..."):
+        with ThreadPoolExecutor(max_workers=len(remotes)) as executor:
+            future_to_remote = {
+                executor.submit(SyncClient(r.url).fast_ping): r
+                for r in remotes
+            }
+            for future in as_completed(future_to_remote):
+                remote = future_to_remote[future]
+                try:
+                    if future.result():
+                        live_remotes.append(remote)
+                    else:
+                        dead_remotes.append(remote)
+                except Exception:
                     dead_remotes.append(remote)
-                    print(f"  ⏭  Skipping '{remote.name}' — unreachable")
-            except Exception:
-                dead_remotes.append(remote)
-                print(f"  ⏭  Skipping '{remote.name}' — unreachable")
 
     for remote in dead_remotes:
-        print(f"📥 Skipping '{remote.name}' ({remote.url}) — unreachable")
+        print(f"  ⏭  Skipping '{remote.name}' — unreachable")
 
     for remote in live_remotes:
         from clavus.sync import pull_from_remote, pull_snapshot_blobs
@@ -3289,59 +3294,129 @@ def cmd_pull(args: argparse.Namespace) -> None:
         except Exception:
             pass
 
-        print(f"📥 Pulling from '{remote.name}' ({remote.url})...")
-
-        # Fast path: localhost → data's already on disk, just re-read
-        is_localhost = remote.url.startswith("http://localhost") or remote.url.startswith("http://127.0.0.1")
-        if is_localhost:
-            proj_idx = store.get_index(proj.name)
-            if proj_idx:
-                cues_store = CueStore(proj.name, store=store)
-                all_cues = cues_store.list_cues(CueFilter())
-                snap_count = 0
-                current = proj_idx.head
-                seen = set()
-                while current and current not in seen:
-                    seen.add(current)
-                    snap_count += 1
-                    snap = store.load_snapshot(current)
-                    if not snap or snap.parent == current:
-                        break
-                    current = snap.parent
-                print(f"  ✅ {len(all_cues)} cues, {snap_count} snapshots (local)")
-            else:
-                print(f"  ❌ project '{proj.name}' not in local store")
-            continue
-        result = pull_from_remote(store, proj, remote, output_dir=args.output)
+        with Spinner(f"pulling from '{remote.name}'..."):
+            result = pull_from_remote(store, proj, remote, output_dir=args.output)
         parts = []
-        if result["error"]:
+        if result.get("error"):
             parts = [f"❌ {result['error']}"]
         else:
             parts = [f"✅ {result['cues']} cues, {result['snapshots']} snapshots"]
 
             # Pull snapshot content blobs + .als backups
-            from clavus.sync import pull_snapshot_blobs
-            blob_count, failed = pull_snapshot_blobs(store, proj, remote)
-            if blob_count:
-                parts.append(f"{blob_count} blob{'s' if blob_count != 1 else ''}")
-            if failed:
-                parts.append(f"{len(failed)} blob(s) failed")
+            with Spinner("syncing blobs..."):
+                from clavus.sync import pull_snapshot_blobs
+                blob_count, failed = pull_snapshot_blobs(store, proj, remote)
+                if blob_count:
+                    parts.append(f"{blob_count} blob{'s' if blob_count != 1 else ''}")
+                if failed:
+                    parts.append(f"{len(failed)} blob(s) failed")
 
             # Pull stems for current HEAD
             head = store.read_ref("HEAD")
             if head:
-                from clavus.sync import pull_stems_from_remote
-                stem_count = pull_stems_from_remote(store, proj, remote)
-                if stem_count:
-                    parts.append(f"{stem_count} stem{'s' if stem_count != 1 else ''}")
-                    # Materialize after pull
-                    stem_store = StemStore(proj.name, store)
-                    manifest = stem_store.get_manifest(head)
-                    if manifest and manifest.stems:
-                        paths = stem_store.materialize_stems(head)
-                        parts.append(f"materialized {len(paths)} file{'s' if len(paths) != 1 else ''}")
-        print(f"  {' — '.join(parts)}")
-        print()
+                with Spinner("syncing stems..."):
+                    from clavus.sync import pull_stems_from_remote
+                    stem_count = pull_stems_from_remote(store, proj, remote)
+                    if stem_count:
+                        parts.append(f"{stem_count} stem{'s' if stem_count != 1 else ''}")
+                        # Materialize after pull
+                        stem_store = StemStore(proj.name, store)
+                        manifest = stem_store.get_manifest(head)
+                        if manifest and manifest.stems:
+                            paths = stem_store.materialize_stems(head)
+                            parts.append(f"materialized {len(paths)} file{'s' if len(paths) != 1 else ''}")
+        status(f"  {' — '.join(parts)}")
+
+
+def cmd_pull_all(args: argparse.Namespace) -> None:
+    """Pull ALL projects from the active remote."""
+    from clavus.progress import Spinner, status
+
+    from clavus.store import BlobStore as _BS
+    store = _BS()
+    proj = None
+
+    # Try to load current project, but don't fail if none exists
+    try:
+        from clavus.helpers import get_store_and_project
+        import io
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            _, proj = get_store_and_project()
+        except SystemExit:
+            proj = None
+        finally:
+            sys.stdout = old_stdout
+    except Exception:
+        proj = None
+
+    remotes = load_remotes(store)
+
+    if not remotes:
+        print(f"❌ No remotes configured.")
+        print(f"   Add one with: clavus remote add <name> <url>")
+        return
+
+    from clavus.sync import SyncClient, pull_from_remote, pull_snapshot_blobs
+
+    # Find the active remote (or first one)
+    active_remote = None
+    if proj and hasattr(proj, 'active_remote') and proj.active_remote:
+        active_remote = next((r for r in remotes if r.name == proj.active_remote), None)
+    if not active_remote:
+        active_remote = remotes[0] if remotes else None
+    if not active_remote:
+        print("❌ No remote to pull from.")
+        return
+
+    with Spinner(f"fetching projects from '{active_remote.name}'..."):
+        from clavus.sync import SyncClient as _SC
+        _probe = _SC(active_remote.url)
+        try:
+            resp = _probe.client.get(f"{active_remote.url}/api/projects", timeout=10)
+            if resp.status_code != 200:
+                print(f"❌ Remote '{active_remote.name}' unreachable.")
+                return
+            remote_projects = resp.json().get("projects", [])
+        finally:
+            _probe.close()
+
+    pulled = 0
+    skipped = 0
+    for pdata in remote_projects:
+        pname = pdata["name"]
+        existing = store.get_index(pname)
+        if existing:
+            skipped += 1
+            continue
+        with Spinner(f"pulling '{pname}'..."):
+            from clavus.store import ClavusProject
+            _pull_client = SyncClient(active_remote.url)
+            try:
+                resp = _pull_client.client.get(
+                    f"{active_remote.url}/api/sync/pull",
+                    params={"name": pname},
+                    timeout=30,
+                )
+                if resp.status_code != 200:
+                    continue
+                data = resp.json()
+                info = data.get("project", {})
+                new_proj = ClavusProject(
+                    name=pname,
+                    root_als=info.get("root_als", f"~/{pname}/{pname}.als"),
+                    created_at=time.time(),
+                )
+                store.set_index(new_proj)
+                result = pull_from_remote(store, new_proj, active_remote)
+                pull_snapshot_blobs(store, new_proj, active_remote)
+            finally:
+                _pull_client.close()
+        pulled += 1
+        status(f"  ✅ '{pname}' — {result.get('snapshots', 0)} snapshots")
+
+    print(f"  Done: {pulled} pulled, {skipped} already local")
 
 
 def cmd_sync(args: argparse.Namespace) -> None:
@@ -3936,12 +4011,18 @@ def main():
     p_push = subparsers.add_parser("push", help="Push cues/snapshots to remotes")
     p_push.add_argument("remote", nargs="?", default=None,
                         help="Remote name (default: all)")
+    p_push.add_argument("--force", "-f", action="store_true",
+                        help="Force push — skip conflict check, overwrite relay state")
 
     p_pull = subparsers.add_parser("pull", help="Pull cues/snapshots from remotes")
     p_pull.add_argument("remote", nargs="?", default=None,
                         help="Remote name (default: all)")
     p_pull.add_argument("--output", "-o", type=str, default=None,
                         help="Output directory for project folder")
+
+    p_pull_all = subparsers.add_parser("pull-all", help="Pull ALL projects from active remote")
+    p_pull_all.add_argument("remote", nargs="?", default=None,
+                            help="Remote name (default: active remote)")
 
     p_sync = subparsers.add_parser("sync", help="Start auto-sync daemon")
     p_sync.add_argument("--interval", "-i", type=int, default=30,
@@ -4108,6 +4189,7 @@ def main():
         "repair": cmd_repair,
         "push": cmd_push,
         "pull": cmd_pull,
+        "pull-all": cmd_pull_all,
         "sync": cmd_sync,
         "merge": cmd_merge,
         "restore": cmd_restore,
