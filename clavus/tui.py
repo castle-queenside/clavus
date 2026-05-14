@@ -125,7 +125,7 @@ class HelpScreen(Screen):
             yield Static("  p    Pull           P    Push          S    Snapshot")
             yield Static("NAVIGATION", classes="help-section")
             yield Static("  j/↓  Down           k/↑  Up           Tab  Switch pane")
-            yield Static("  Esc  Cancel/Dismiss ?/h  Help         s    Settings")
+            yield Static("  Esc  Cancel/Dismiss ?/h  Help         Ctrl+S  Settings")
             yield Static("COMMANDS (:)", classes="help-section")
             yield Static("  :snapshot <msg>  Create snapshot     :project <name>  Switch project")
             yield Static("  :open [path]     Open in Ableton     :pull / :push    Manual sync")
@@ -230,7 +230,7 @@ class ClavusApp(App):
         Binding("?", "help", "Help", show=False),
         Binding("h", "help", "Help", show=False),
         Binding("escape", "cancel_input", "Cancel input", show=False),
-        Binding("s", "settings", "Settings", show=False, priority=True),
+        Binding("ctrl+s", "settings", "Settings", priority=True),
     ]
 
     def __init__(self, url: str = "", debug: bool = False):
@@ -1631,8 +1631,8 @@ class ClavusApp(App):
         self.push_screen(HelpScreen())
 
     def action_settings(self):
-        """Show settings in status bar."""
-        self._status("settings test — this should appear")
+        """Open help screen (temp)."""
+        self.push_screen(HelpScreen())
 
     def action_assign(self):
         if self._input_mode or time.time() - self._input_debounce < 0.3:
