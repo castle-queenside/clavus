@@ -1,6 +1,6 @@
 # Clavus — DAW Project Versioning & Collaboration
 
-**Version:** 0.9.0-beta · **Platforms:** macOS, Windows, Linux · **DAWs:** Ableton Live (Reaper, Bitwig coming)
+**Version:** 0.1.0-beta · **Platforms:** macOS, Windows, Linux · **DAWs:** Ableton Live (Reaper, Bitwig coming)
 
 Snapshots, timeline-anchored discussion cues, push/pull sync over Tailscale, and a keyboard-driven terminal dashboard. No cloud, no plugins, no accounts. Works solo. Works with your crew.
 

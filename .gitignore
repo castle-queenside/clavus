@@ -15,3 +15,13 @@ clavus/web/app.js
 clavus/web/app.css
 TESTING.html
 TESTING.pdf
+
+# Virtual environments
+.venv/
+venv/
+
+# User data directory (snapshots, projects, sample blobs)
+.clavus/
+
+# Log files
+*.log

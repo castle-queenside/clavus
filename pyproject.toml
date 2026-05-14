@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clavus"
-version = "0.8.0-beta"
+version = "0.1.0-beta"
 description = "Snapshot, sync, and collaborate on Ableton Live projects"
 readme = "README.md"
 license = {text = "MIT"}
