@@ -1165,29 +1165,53 @@ def cmd_init(args: argparse.Namespace) -> None:
 
 def cmd_projects(args: argparse.Namespace) -> None:
     """List all tracked projects."""
+    from rich.console import Console
+    from rich.style import Style
+    c = Console()
+    accent   = Style(color="#1a9e9e", bold=True)
+    green_s = Style(color="#40cc80")
+    red_s   = Style(color="#ff4444")
+    dim_s   = Style(color="#6a9a9a")
+
     store = BlobStore()
     projects = store.list_projects()
     if not projects:
-        print("📁 No Clavus projects found.")
-        print("   Run 'clavus init <path>' to add one.")
+        c.print("┌─────────────────────────────────────────────────┐", style=accent)
+        c.print("│  📁 No Clavus projects found.                   │", style=dim_s)
+        c.print("│     Run 'clavus init <path>' to add one.       │", style=dim_s)
+        c.print("└─────────────────────────────────────────────────┘", style=accent)
         return
 
-    print(f"📁 Clavus projects ({len(projects)}):")
-    print()
-    for p in sorted(projects, key=lambda x: x.name):
-        head_str = f" @ {p.head[:8]}" if p.head else " (no snapshots)"
-        als_exists = "✅" if Path(p.root_als).exists() else "❌"
-        shared_icon = "🌐" if p.shared else "🔒"
-        print(f"  {shared_icon} {p.name:<30} {als_exists} {p.root_als}{head_str}")
-    print()
-    print(f"  Current: {store.read_ref('_last_project') or 'none'}")
+    subhdr = f"│  {'NAME':<30} {'STATUS':<8} {'PATH':<22}  │"
 
-    # Show which is active
+    c.print()
+    c.print(f"  ╭─⬡ CLAVUS PROJECTS ─{'─' * 36}╮", style=accent)
+    c.print(f"  │")
+    c.print(f"  {subhdr}")
+    c.print(f"  │  {'─' * 58 }  │")
+    for p in sorted(projects, key=lambda x: x.name):
+        als_exists_s = green_s if Path(p.root_als).exists() else red_s
+        als_exists_t = "✓" if Path(p.root_als).exists() else "✗"
+        head_str     = f"@{p.head[:8]}" if p.head else "—"
+        shared_icon  = "🌐" if p.shared else "🔒"
+        # Truncate path if needed
+        path = p.root_als
+        if len(path) > 22:
+            path = "…" + path[-(22-1):]
+        c.print(f"  │  {shared_icon} {p.name:<28} ", end="")
+        c.print(als_exists_t, style=als_exists_s, end="")
+        c.print(f"  {path:<22}  │")
+    c.print(f"  │")
+    last_proj = store.read_ref("_last_project") or "none"
     try:
         _, active = get_store_and_project()
-        print(f"  Active: {active.name}")
+        active_name = active.name
     except SystemExit:
-        pass
+        active_name = "—"
+    c.print(f"  │  Current: {last_proj:<28} Active: {active_name:<20}│")
+    c.print(f"  │")
+    c.print(f"  ╰─{'─' * 58 }─╯", style=accent)
+    c.print()
 
 
 def cmd_project(args: argparse.Namespace) -> None:
@@ -1557,35 +1581,66 @@ def cmd_diff(args: argparse.Namespace) -> None:
 
 def cmd_status(args: argparse.Namespace) -> None:
     """Show current project status."""
+    from rich.console import Console
+    from rich.style import Style
+    c = Console()
+    accent   = Style(color="#1a9e9e", bold=True)
+    green_s  = Style(color="#40cc80")
+    red_s    = Style(color="#ff4444")
+    dim_s    = Style(color="#6a9a9a")
+    orange_s = Style(color="#d47030")
+
     store, proj = get_store_and_project()
 
-    als_path = Path(proj.root_als)
+    als_path   = Path(proj.root_als)
     als_exists = als_path.exists()
-    last_snap = store.load_snapshot(proj.head) if proj.head else None
+    last_snap  = store.load_snapshot(proj.head) if proj.head else None
 
-    print(f"📁 '{proj.name}'")
-    print(f"   Path: {proj.root_als}")
-    print(f"   Branch: {proj.branch}")
-    print(f"   Status: {'✅ exists' if als_exists else '❌ missing'}")
-    print()
+    # Box-drawing status card
+    top    = f"  ╭─{'─' * 56}─╮"
+    mid    = f"  │  ⬡ {proj.name:<48} │"
+    path_r = f"  │  Path:   {proj.root_als:<44} │" if len(proj.root_als) <= 44 else f"  │  Path:   …{proj.root_als[-41:]:<44} │"
+    sep    = f"  │  {'─' * 52 }  │"
+
+    c.print()
+    c.print(top, style=accent)
+    c.print(mid, style=accent)
+    c.print(path_r, style=dim_s)
+    c.print(sep, style=accent)
+
+    # Status line
+    status_t = "✓ exists" if als_exists else "✗ missing"
+    status_s = green_s if als_exists else red_s
+    c.print(f"  │  Status: ", end="")
+    c.print(status_t, style=status_s, end="")
+    c.print(f"  {' ' * (44 - len(status_t))}│")
 
     if last_snap:
-        project = None
         if als_exists:
-            project = parse_als(als_path)
-            old_project = store.load_project(last_snap.hash)
-            if old_project and project:
-                diff = diff_projects(old_project, project)
-                print(f"   HEAD: {last_snap.short_hash()} — '{last_snap.message}'")
+            project = store.load_project(last_snap.hash)
+            if project:
+                diff = diff_projects(project, parse_als(str(als_path)))
+                hash_line = f"  │  HEAD:   {last_snap.short_hash()} — '{last_snap.message}'"
+                c.print(f"{hash_line:<63} │")
                 if diff.summary != "No changes":
-                    print(f"   ⚠️  Unsaved changes detected:")
-                    print(f"      {diff.summary}")
+                    c.print(f"  │  ⚠ Unsaved changes detected                            │", style=orange_s)
+                    c.print(f"  │     {diff.summary:<51} │", style=dim_s)
                 else:
-                    print(f"   ✅ Up to date with last snapshot")
+                    c.print("  │  ", end="")
+                    c.print("✓ Up to date with last snapshot", style=green_s)
+                    c.print(" " * 21 + "│")
+            else:
+                c.print(f"  │  HEAD:   {last_snap.short_hash()} — '{last_snap.message}'")
         else:
-            print(f"   HEAD: {last_snap.short_hash()} — '{last_snap.message}'")
+            c.print(f"  │  HEAD:   {last_snap.short_hash()} — '{last_snap.message}'")
     else:
-        print(f"   No snapshots yet.")
+        c.print(f"  │  No snapshots yet.                                       │")
+
+    # Branch + shared
+    c.print(f"  │  Branch: {proj.branch:<47} │")
+    c.print(f"  │  {'🌐 Shared' if proj.shared else '🔒 Private':<53} │")
+    c.print(f"  ╰─{'─' * 56 }─╯", style=accent)
+    c.print()
 
 
 def cmd_watch(args: argparse.Namespace) -> None:
@@ -3910,15 +3965,46 @@ def cmd_stem_push(args: argparse.Namespace) -> None:
             print(f"    ⏭  Skipping — {e}")
 
 
+# ─── CLI Banner ────────────────────────────────────────────────────────────
+
+BANNER_LINES = [
+    "  ┌─⬡────────────────────────────────────────────────────┐",
+    "  │                                                        │",
+    "  │   ██████╗  ██████╗ ██╗   ██╗██╗      ██████╗ ██╗    ██╗  │",
+    "  │   ██╔══██╗██╔═══██╗██║   ██║██║     ██╔═══██╗██║    ██║  │",
+    "  │   ██████╔╝██║   ██║██║   ██║██║     ██║   ██║██║ █╗ ██║  │",
+    "  │   ██╔══██╗██║   ██║██║   ██║██║     ██║   ██║██║███╗██║  │",
+    "  │   ██║  ██║╚██████╔╝╚██████╔╝███████╗╚██████╔╝╚███╔███╔╝  │",
+    "  │   ╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚══════╝ ╚═════╝  ╚══╝╚══╝   │",
+    "  │                                                        │",
+    "  │   snapshot · sync · collaborate on Ableton Live        │",
+    "  └─────────────────────────────────────────────────────────┘",
+]
+
+def print_banner():
+    from rich.console import Console
+    from rich.style import Style
+    c = Console()
+    accent = Style(color="#1a9e9e", bold=True)
+    for line in BANNER_LINES:
+        c.print(line, style=accent)
+
 # ─── Main Entry Point ──────────────────────────────────────────────────
 
 def main():
+    import sys
+    # --no-banner support: check before building argparser to avoid side-effects
+    if "--no-banner" in sys.argv:
+        sys.argv.remove("--no-banner")
+    else:
+        print_banner()
     parser = argparse.ArgumentParser(
         description="Clavus — snapshot, sync, and collaborate on Ableton Live projects.",
         prog="clavus",
     )
     parser.add_argument("--clavus-dir", help="Override clavus storage directory")
     parser.add_argument("--version", action="store_true", help="Show version and exit")
+    parser.add_argument("--no-banner", action="store_true", help=argparse.SUPPRESS)  # hidden, handled above
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # Init

@@ -29,13 +29,30 @@ from textual.screen import Screen, ModalScreen
 from textual.widgets import Static, Input, ListView, ListItem, Label, Button
 from textual.css.query import NoMatches
 
-# ─── Color Palette (CRUX dark) ──────────────────────────────────────────────
+# ─── Color Palette (CRUX dark — shared across TUI) ──────────────────────────
 
 C = {
-    "bg": "#0b1418", "surface": "#0f1a20", "surface2": "#162a34",
-    "border": "#1a3040", "accent": "#1a9e9e", "fg": "#b8c8c8",
-    "dim": "#6a8a8a", "muted": "#3a5a65",
-    "yellow": "#d4a030", "green": "#44cc44", "red": "#ff4444",
+    # Core
+    "bg": "#0b1418",       # near-black blue
+    "surface": "#0f1a20", # card background
+    "surface2": "#162a34", # elevated surface
+    "border": "#1a3040",   # subtle border
+    # Text
+    "fg": "#c8d8d8",       # primary text
+    "dim": "#6a9a9a",     # secondary/muted text
+    "muted": "#3a5a65",    # very subtle
+    # Accent — teal spectrum
+    "accent": "#1a9e9e",   # primary teal
+    "accent2": "#2ac8c8",  # bright teal (highlights)
+    "accent_dim": "#0e7070", # dim teal
+    # Status
+    "green": "#40cc80",    # success / reachable
+    "yellow": "#d4a030",   # warning / offline
+    "orange": "#d47030",   # error / conflict
+    "red": "#ff4444",      # danger
+    # Semantic extras
+    "purple": "#8878d0",   # branch / special
+    "cyan": "#50c8c8",     # info / sync
 }
 
 # ─── Data Models ────────────────────────────────────────────────────────────
@@ -114,26 +131,33 @@ class HelpScreen(Screen):
     ]
 
     def compose(self):
+        # Box-drawing header with double-line border
+        title = f"[bold {C['accent']}]╔{'═' * 20} CLAVUS {'═' * 20}╗[/]"
         with VerticalScroll(id="help-box"):
-            yield Static("CLAVUS — KEY BINDINGS", classes="help-title")
+            yield Static(title, classes="help-title")
+            yield Static("")
             yield Static("CUES & COLLABORATION", classes="help-section")
-            yield Static("  c    New cue        e    Edit         r    Reply")
-            yield Static("  a    Assign         x    Archive      i    Inject markers")
-            yield Static("  R    Resolve        !    Conflict      d    Diff")
-            yield Static("  T    Restore snap   o    Open in Live")
+            yield Static(f"  [{C['accent']}]c[/{C['accent']}]    New cue        [{C['accent']}]e[/{C['accent']}]    Edit         [{C['accent']}]r[/{C['accent']}]    Reply")
+            yield Static(f"  [{C['accent']}]a[/{C['accent']}]    Assign         [{C['accent']}]x[/{C['accent']}]    Archive      [{C['accent']}]i[/{C['accent']}]    Inject markers")
+            yield Static(f"  [{C['accent']}]R[/{C['accent']}]    Resolve        [{C['orange']}]![/{C['orange']}]    Conflict      [{C['accent']}]d[/{C['accent']}]    Diff")
+            yield Static(f"  [{C['accent']}]T[/{C['accent']}]    Restore snap   [{C['accent']}]o[/{C['accent']}]    Open in Live")
+            yield Static("")
             yield Static("SNAPSHOTS & SYNC", classes="help-section")
-            yield Static("  p    Pull           P    Push          S    Snapshot")
+            yield Static(f"  [{C['accent']}]p[/{C['accent']}]    Pull           [{C['accent']}]P[/{C['accent']}]    Push          [{C['accent']}]S[/{C['accent']}]    Snapshot")
+            yield Static("")
             yield Static("NAVIGATION", classes="help-section")
-            yield Static("  j/↓  Down           k/↑  Up           Tab  Switch pane")
-            yield Static("  Esc  Cancel/Dismiss ?/h  Help         s    Settings")
-            yield Static("COMMANDS (:)", classes="help-section")
-            yield Static("  :snapshot <msg>  Create snapshot     :project <name>  Switch project")
-            yield Static("  :open [path]     Open in Ableton     :pull / :push    Manual sync")
-            yield Static("  :stem push/pull  Stem file sync      :init <path>     Init project")
-            yield Static("  :p2p-host        Start P2P host      :p2p-connect <dns>  P2P sync")
-            yield Static("  :find            Discover peers      :repair          Fix store")
-            yield Static("  :remote rename <name>               :remote add <name> <url>")
-            yield Static("[dim]Esc / q / Enter / h — close[/]", classes="help-dim")
+            yield Static(f"  [{C['dim']}]j/↓[/{C['dim']}]  Down           [{C['dim']}]k/↑[/{C['dim']}]  Up           [{C['accent']}]Tab[/{C['accent']}]  Switch pane")
+            yield Static(f"  [{C['dim']}]Esc[/{C['dim']}]  Cancel/Dismiss [{C['accent']}]?/h[/{C['accent']}]  Help         [{C['accent']}]s[/{C['accent']}]    Settings")
+            yield Static("")
+            yield Static("COMMANDS ([dim]:[/])", classes="help-section")
+            yield Static(f"  :snapshot <msg>  Create snapshot     :project <name>  Switch project")
+            yield Static(f"  :open [path]     Open in Ableton     :pull / :push    Manual sync")
+            yield Static(f"  :stem push/pull  Stem file sync      :init <path>     Init project")
+            yield Static(f"  :p2p-host        Start P2P host      :p2p-connect <dns>  P2P sync")
+            yield Static(f"  :find            Discover peers      :repair          Fix store")
+            yield Static(f"  :remote rename <name>               :remote add <name> <url>")
+            yield Static("")
+            yield Static(f"[dim]╚{'═' * 50}╝[/]", classes="help-dim")
 
     def action_dismiss(self):
         self.app.pop_screen()
@@ -142,40 +166,32 @@ class HelpScreen(Screen):
 # ─── Settings Screen ─────────────────────────────────────────────────
 
 class SettingsScreen(ModalScreen):
-    """Settings overlay — identical pattern to CRUX SettingsScreen."""
-
-    _bg = "#0b1418"
-    _surface = "#0f1a20"
-    _fg = "#b8c8c8"
-    _accent = "#1a9e9e"
-    _border = "#1a3040"
-    _dim = "#6a8a8a"
-    _yellow = "#d4a030"
+    """Settings overlay — uses shared C palette."""
 
     CSS = f"""
-    SettingsScreen {{ background: {_bg}; align: center middle; }}
+    SettingsScreen {{ background: {C['bg']}; align: center middle; }}
     #settings-box {{
         width: 70; max-height: 95%;
-        background: {_surface}; border: thick {_accent};
+        background: {C['surface']}; border: thick {C['accent']};
         padding: 0 1;
     }}
     #settings-box Static {{ width: 100%; }}
-    #settings-box .s-title {{ color: {_accent}; text-style: bold; }}
-    #settings-box .s-section {{ color: {_yellow}; text-style: bold; padding-top: 1; }}
-    #settings-box .s-label {{ color: {_dim}; }}
+    #settings-box .s-title {{ color: {C['accent']}; text-style: bold; }}
+    #settings-box .s-section {{ color: {C['yellow']}; text-style: bold; padding-top: 1; }}
+    #settings-box .s-label {{ color: {C['dim']}; }}
     #settings-box Input {{
-        background: {_bg}; color: {_fg};
-        border: solid {_border}; height: 3; min-width: 40;
+        background: {C['bg']}; color: {C['fg']};
+        border: solid {C['border']}; height: 3; min-width: 40;
     }}
-    #settings-box Input:focus {{ border: solid {_accent}; }}
+    #settings-box Input:focus {{ border: solid {C['accent']}; }}
     #settings-box Button {{
-        background: {_surface}; color: {_fg};
-        border: solid {_border}; height: 3; min-width: 12; padding: 0 2;
+        background: {C['surface']}; color: {C['fg']};
+        border: solid {C['border']}; height: 3; min-width: 12; padding: 0 2;
     }}
-    #settings-box Button:hover {{ border: solid {_accent}; }}
-    #settings-box Button.primary {{ background: {_accent}; color: {_bg}; text-style: bold; }}
+    #settings-box Button:hover {{ border: solid {C['accent']}; }}
+    #settings-box Button.primary {{ background: {C['accent']}; color: {C['bg']}; text-style: bold; }}
     #settings-box #s-actions {{ height: 5; margin-top: 1; }}
-    #settings-box #s-result {{ color: {_dim}; height: 1; }}
+    #settings-box #s-result {{ color: {C['dim']}; height: 1; }}
     """
 
     BINDINGS = [
@@ -263,7 +279,13 @@ class ClavusApp(App):
 
     #main {{ layout: grid; grid-size: 1 3; grid-rows: auto 1fr auto; height: 100%; }}
 
-    #header-title {{ color: {C['accent']}; text-style: bold; background: {C['surface']}; padding: 0 1; }}
+    #header-title {{
+        color: {C['fg']};
+        background: {C['surface']};
+        border-bottom: solid {C['accent']};
+        padding: 0 1 0 2;
+        text-style: bold;
+    }}
 
     #content {{ layout: grid; grid-size: 2 1; grid-columns: 5fr 2fr; height: 100%; }}
 
@@ -2919,28 +2941,28 @@ class ClavusApp(App):
             self._update_header()
 
     def _update_header(self):
-        """Header: clavus logo, project, connection dot + remote, sync activity."""
+        """Header: ⬡ hex logo, project, connection dot + remote, sync activity."""
         try:
-            # Project name
-            proj = f"  [white]{self.project}[/]" if self.project else ""
+            # Box-drawing left border + logo
+            logo = f"[bold {C['accent']}]┌─⬡[/]"
+            # Project name — bold white
+            proj = f"  [bold white]{self.project}[/]" if self.project else ""
+            # Separator
+            sep = f"[{C['muted']}]│[/]" if proj else ""
             # Connection dot — green = reachable, yellow = offline
             if self._peer_name and self._peer_reachable:
-                peer = f"  [bold {C['green']}]\u25cf[/]"
+                peer = f"  [bold {C['green']}]●[/]"
             elif self._peer_name:
-                peer = f"  [{C['yellow']}]\u25cb[/]"
+                peer = f"  [{C['yellow']}]○[/]"
             else:
                 peer = ""
             # Sync activity — spinner during, timestamp after
             sync = ""
             if self._sync_status:
                 s = self.BRAILLE[self._spinner_idx % len(self.BRAILLE)]
-                # Build progress string with ETA
                 if self._sync_progress:
                     elapsed = time.time() - self._sync_start_time
-                    progress_parts = []
-                    for part in self._sync_progress.split(" "):
-                        if part:
-                            progress_parts.append(part)
+                    progress_parts = [p for p in self._sync_progress.split(" ") if p]
                     progress_str = " ".join(progress_parts)
                     sync = f"  [{C['yellow']}]{s} {self._sync_status} {progress_str}[/]"
                 else:
@@ -2948,7 +2970,7 @@ class ClavusApp(App):
             elif self._last_sync:
                 sync = f"  [{C['green']}]{self._last_sync}[/]"
             widget = self.query_one("#header-title", Static)
-            widget.update(f"[bold {C['accent']}]⧩ clavus[/]{proj}{peer}{sync}")
+            widget.update(f"{logo}{proj}{sep}{peer}{sync}")
             widget.refresh()
             # Manage spinner based on sync activity (header-only, no footer cascade)
             if self._sync_status:
