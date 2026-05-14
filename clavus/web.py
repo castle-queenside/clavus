@@ -200,17 +200,20 @@ async def ping():
 
 @app.get("/api/projects")
 async def list_projects():
-    """List all registered projects (filtered by --project scope if set)."""
+    """List all shared projects (private ones are hidden from collaborators)."""
     store = BlobStore()
     projects = store.list_projects()
     if _relay_allowed_projects is not None:
         projects = [p for p in projects if p.name in _relay_allowed_projects]
+    # Only show shared projects to collaborators
+    projects = [p for p in projects if p.shared]
     return {"projects": [
         {
             "name": p.name,
             "root_als": p.root_als,
             "head": p.head[:8] if p.head else None,
             "branch": p.branch,
+            "shared": p.shared,
         }
         for p in projects
     ]}

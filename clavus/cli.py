@@ -1177,7 +1177,8 @@ def cmd_projects(args: argparse.Namespace) -> None:
     for p in sorted(projects, key=lambda x: x.name):
         head_str = f" @ {p.head[:8]}" if p.head else " (no snapshots)"
         als_exists = "✅" if Path(p.root_als).exists() else "❌"
-        print(f"  {p.name:<30} {als_exists} {p.root_als}{head_str}")
+        shared_icon = "🌐" if p.shared else "🔒"
+        print(f"  {shared_icon} {p.name:<30} {als_exists} {p.root_als}{head_str}")
     print()
     print(f"  Current: {store.read_ref('_last_project') or 'none'}")
 
@@ -1190,13 +1191,32 @@ def cmd_projects(args: argparse.Namespace) -> None:
 
 
 def cmd_project(args: argparse.Namespace) -> None:
-    """Switch the active project."""
+    """Switch the active project, or toggle sharing."""
     store = BlobStore()
     proj = store.get_index(args.name)
     if not proj:
         print(f"❌ Project '{args.name}' not found.")
         print("   Run 'clavus projects' to see available projects.")
         sys.exit(1)
+
+    # Toggle share/private
+    if args.share:
+        if proj.shared:
+            print(f"🌐 Project '{args.name}' is already shared.")
+        else:
+            proj.shared = True
+            store.set_index(proj)
+            print(f"🌐 Project '{args.name}' is now shared — visible to collaborators.")
+        return
+    if args.private:
+        if not proj.shared:
+            print(f"🔒 Project '{args.name}' is already private.")
+        else:
+            proj.shared = False
+            store.set_index(proj)
+            print(f"🔒 Project '{args.name}' is now private — hidden from collaborators.")
+        return
+
     store.set_index(proj)
     print(f"✅ Switched to project '{args.name}'")
     print(f"   Path: {proj.root_als}")
@@ -1205,6 +1225,7 @@ def cmd_project(args: argparse.Namespace) -> None:
     else:
         print(f"   (no snapshots yet)")
     print(f"   Branch: {proj.branch}")
+    print(f"   {'🌐 Shared' if proj.shared else '🔒 Private'}")
 
 
 def create_snapshot(message: str, allow_frozen: bool = True) -> tuple[Optional[str], list[str]]:
@@ -3908,8 +3929,10 @@ def main():
     subparsers.add_parser("projects", help="List all tracked projects")
 
     # Project (switch active)
-    p_project = subparsers.add_parser("project", help="Switch active project")
+    p_project = subparsers.add_parser("project", help="Switch active project, or toggle sharing")
     p_project.add_argument("name", help="Project name to switch to")
+    p_project.add_argument("--share", action="store_true", help="Make project visible to collaborators")
+    p_project.add_argument("--private", action="store_true", help="Hide project from collaborators")
 
     # Snapshot
     p_snap = subparsers.add_parser("snapshot", help="Create a new snapshot")

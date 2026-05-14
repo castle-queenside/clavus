@@ -698,7 +698,8 @@ class ClavusApp(App):
         for p in projects:
             head = p.head or ""
             active = " ◀" if p.name == self.project else ""
-            line = f"  {p.name}  @ {head[:12] if head else '(no snaps)':12s}{active}"
+            share_icon = "🌐" if p.shared else "🔒"
+            line = f"  {share_icon} {p.name}  @ {head[:12] if head else '(no snaps)':12s}{active}"
             lv.append(ListItem(Label(line, classes="project-picker-item")))
         # Footer hint
         self._footer_toast(f"[{C['accent']}]pick a project → enter   [{C['dim']}]esc to cancel[/]", 10.0)
