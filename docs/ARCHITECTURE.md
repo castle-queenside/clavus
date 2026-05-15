@@ -778,15 +778,22 @@ clavus backup
 
 ## 10. Future Considerations
 
-### Session Notes
+### Session Notes ✅ IMPLEMENTED
 
-Longer-form notes attached to a snapshot beyond the one-line message. A snapshot currently has a `message` field — a future enhancement could add a `notes` field supporting markdown, with the notes stored as a separate blob and referenced by the snapshot metadata.
+Longer-form notes attached to a snapshot. Use `--notes` at snapshot time, or use the `clavus note` command to read/write/append notes after the fact.
 
 ```
 clavus snapshot "expanded arrangement" --notes "Added 8-bar breakdown.
 The transition at bar 48 is still rough — needs a riser.
 Steven should look at the reverb return level on the snare."
+
+clavus note read              # show notes for current HEAD
+clavus note write <text>      # replace notes on a snapshot
+clavus note append <text>     # add to existing notes
+clavus note write -f note.md  # write from file (good for long notes)
 ```
+
+Notes are stored in the snapshot `.meta` JSON file alongside the snapshot metadata. They support markdown and are displayed in `clavus log --verbose` output.
 
 ### Audio Preview Attachments
 
