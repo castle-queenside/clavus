@@ -1168,49 +1168,36 @@ def cmd_projects(args: argparse.Namespace) -> None:
     from rich.console import Console
     from rich.style import Style
     c = Console()
-    accent   = Style(color="#1a9e9e", bold=True)
-    green_s = Style(color="#40cc80")
-    red_s   = Style(color="#ff4444")
-    dim_s   = Style(color="#6a9a9a")
+    accent = Style(color="#1a9e9e", bold=True)
+    dim    = Style(color="#6a9a9a")
+    green  = Style(color="#40cc80")
+    red    = Style(color="#ff4444")
 
     store = BlobStore()
     projects = store.list_projects()
+
     if not projects:
-        c.print("┌─────────────────────────────────────────────────┐", style=accent)
-        c.print("│  📁 No Clavus projects found.                   │", style=dim_s)
-        c.print("│     Run 'clavus init <path>' to add one.       │", style=dim_s)
-        c.print("└─────────────────────────────────────────────────┘", style=accent)
+        print("\n  No Clavus projects found. Run 'clavus init <path>' to add one.\n")
         return
 
-    subhdr = f"│  {'NAME':<28} {'STATUS':<6} {'PATH':<20}  │"
+    c.print()
+    c.print("  CLAVUS PROJECTS ({})".format(len(projects)), style=accent)
+    c.print("  " + "─"*50, style=dim)
+    c.print()
+
+    for p in sorted(projects, key=lambda x: x.name.lower()):
+        icon = "🔒" if not p.shared else "🌐"
+        status = "✓" if Path(p.root_als).exists() else "✗"
+        c.print("  {} {}".format(icon, p.name), style=dim)
+        c.print("     {}  {}".format(status, p.root_als))
 
     c.print()
-    c.print(f"  ╭─⬡ CLAVUS PROJECTS ─────────────────────────────────────────╮", style=accent)
-    c.print(f"  │")
-    c.print(f"  {subhdr}")
-    c.print(f"  │  {'─' * 56 }  │")
-    for p in sorted(projects, key=lambda x: x.name):
-        als_exists_s = green_s if Path(p.root_als).exists() else red_s
-        als_exists_t = "✓" if Path(p.root_als).exists() else "✗"
-        head_str     = f"@{p.head[:8]}" if p.head else "—"
-        shared_icon  = "🌐" if p.shared else "🔒"
-        # Truncate path if needed
-        path = p.root_als
-        if len(path) > 22:
-            path = "…" + path[-(22-1):]
-        c.print(f"  │  {shared_icon} {p.name:<28} ", end="")
-        c.print(als_exists_t, style=als_exists_s, end="")
-        c.print(f"  {path:<22}  │")
-    c.print(f"  │")
-    last_proj = store.read_ref("_last_project") or "none"
+    last = store.read_ref("_last_project") or "none"
     try:
         _, active = get_store_and_project()
-        active_name = active.name
+        c.print("  Current: {}    Active: {}".format(last, active.name), style=dim)
     except SystemExit:
-        active_name = "—"
-    c.print(f"  │  Current: {last_proj:<28} Active: {active_name:<20}│")
-    c.print(f"  │")
-    c.print(f"  ╰─{'─' * 58 }─╯", style=accent)
+        c.print("  Current: {}".format(last), style=dim)
     c.print()
 
 
@@ -1662,62 +1649,49 @@ def cmd_status(args: argparse.Namespace) -> None:
     from rich.console import Console
     from rich.style import Style
     c = Console()
-    accent   = Style(color="#1a9e9e", bold=True)
-    green_s  = Style(color="#40cc80")
-    red_s    = Style(color="#ff4444")
-    dim_s    = Style(color="#6a9a9a")
-    orange_s = Style(color="#d47030")
+    accent = Style(color="#1a9e9e", bold=True)
+    dim    = Style(color="#6a9a9a")
+    green  = Style(color="#40cc80")
+    red    = Style(color="#ff4444")
+    orange = Style(color="#d47030")
 
     store, proj = get_store_and_project()
-
-    als_path   = Path(proj.root_als)
+    als_path = Path(proj.root_als)
     als_exists = als_path.exists()
-    last_snap  = store.load_snapshot(proj.head) if proj.head else None
-
-    # Box-drawing status card
-    top    = f"  ╭─{'─' * 56}─╮"
-    mid    = f"  │  ⬡ {proj.name:<48} │"
-    path_r = f"  │  Path:   {proj.root_als:<44} │" if len(proj.root_als) <= 44 else f"  │  Path:   …{proj.root_als[-41:]:<44} │"
-    sep    = f"  │  {'─' * 52 }  │"
+    last_snap = store.load_snapshot(proj.head) if proj.head else None
 
     c.print()
-    c.print(top, style=accent)
-    c.print(mid, style=accent)
-    c.print(path_r, style=dim_s)
-    c.print(sep, style=accent)
+    c.print("  {}".format(proj.name.upper()), style=accent)
+    c.print("  " + "─"*50, style=dim)
+    c.print()
+    c.print("  Path    {}".format(proj.root_als), style=dim)
 
-    # Status line
-    status_t = "✓ exists" if als_exists else "✗ missing"
-    status_s = green_s if als_exists else red_s
-    c.print(f"  │  Status: ", end="")
-    c.print(status_t, style=status_s, end="")
-    c.print(f"  {' ' * (44 - len(status_t))}│")
+    if als_exists:
+        c.print("  Status  ", end="")
+        c.print("✓ exists", style=green)
+    else:
+        c.print("  Status  ", end="")
+        c.print("✗ missing", style=red)
 
     if last_snap:
+        msg = last_snap.message or "(no message)"
+        c.print("  HEAD    {} — '{}'".format(last_snap.short_hash(), msg))
         if als_exists:
             project = store.load_project(last_snap.hash)
             if project:
                 diff = diff_projects(project, parse_als(str(als_path)))
-                hash_line = f"  │  HEAD:   {last_snap.short_hash()} — '{last_snap.message}'"
-                c.print(f"{hash_line:<63} │")
                 if diff.summary != "No changes":
-                    c.print(f"  │  ⚠ Unsaved changes detected                            │", style=orange_s)
-                    c.print(f"  │     {diff.summary:<51} │", style=dim_s)
+                    c.print("  Warning ", end="")
+                    c.print("⚠ Unsaved changes — {}".format(diff.summary), style=orange)
                 else:
-                    c.print("  │  ", end="")
-                    c.print("✓ Up to date with last snapshot", style=green_s)
-                    c.print(" " * 21 + "│")
-            else:
-                c.print(f"  │  HEAD:   {last_snap.short_hash()} — '{last_snap.message}'")
-        else:
-            c.print(f"  │  HEAD:   {last_snap.short_hash()} — '{last_snap.message}'")
+                    c.print("  Sync    ", end="")
+                    c.print("✓ up to date", style=green)
     else:
-        c.print(f"  │  No snapshots yet.                                       │")
+        c.print("  HEAD    (no snapshots yet)")
 
-    # Branch + shared
-    c.print(f"  │  Branch: {proj.branch:<47} │")
-    c.print(f"  │  {'🌐 Shared' if proj.shared else '🔒 Private':<53} │")
-    c.print(f"  ╰─{'─' * 56 }─╯", style=accent)
+    c.print()
+    c.print("  Branch  {}".format(proj.branch))
+    c.print("  Mode    {}".format("🌐 Shared" if proj.shared else "🔒 Private"))
     c.print()
 
 
@@ -4059,33 +4033,6 @@ BANNER_LINES = [
     "  └─────────────────────────────────────────────────────────┘",
 ]
 
-def print_banner():
-    """Print the Clavus banner. Call once at startup, or use --no-banner to suppress."""
-    from rich.console import Console
-    from rich.text import Text
-    console = Console()
-    # All lines must be exactly 62 terminal cells wide.
-    # Box-drawing chars (─, ┌, ┐, │, └, ┘) render as 1 cell.
-    # ⬡ (U+2B21) renders as 2 cells — account for this in width math.
-    lines = [
-        # Top: 5 chars logo + 56 dashes + 1 ┐ = 62 chars (all box-drawing = 1 cell each, ⬡=2cells → 5+56+1=62)
-        Text("  ┌─⬡" + "─"*56 + "┐", style="bold #1a9e9e"),
-        # Rows 1-6: ASCII art inside the box
-        Text("  │   ██████╗  ██████╗ ██╗   ██╗██╗      ██████╗ ██╗    ██╗  │", style="bold #1a9e9e"),
-        Text("  │   ██╔══██╗██╔═══██╗██║   ██║██║     ██╔═══██╗██║    ██║  │", style="bold #1a9e9e"),
-        Text("  │   ██████╔╝██║   ██║██║   ██║██║     ██║   ██║██║ █╗ ██║  │", style="bold #1a9e9e"),
-        Text("  │   ██╔══██╗██║   ██║██║   ██║██║     ██║   ██║██║███╗██║  │", style="bold #1a9e9e"),
-        Text("  │   ██║  ██║╚██████╔╝╚██████╔╝███████╗╚██████╔╝╚███╔███╔╝  │", style="bold #1a9e9e"),
-        Text("  │   ╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚══════╝ ╚═════╝  ╚══╝╚══╝   │", style="bold #1a9e9e"),
-        # Row 7: spacer (60 cells → pad to 62)
-        Text("  │                                                        │  ", style="#b8c8c8"),
-        # Row 8: tagline (60 cells → pad to 62)
-        Text("  │   snapshot · sync · collaborate on Ableton Live        │  ", style="#b8c8c8"),
-        # Bottom: 3 chars "  └" + 58 dashes + 1 ┘ = 62 chars
-        Text("  └" + "─"*58 + "┘", style="#b8c8c8"),
-    ]
-    for line in lines:
-        console.print(line)
 
 # ─── Main Entry Point ──────────────────────────────────────────────────
 
@@ -4382,16 +4329,6 @@ def main():
 
     args = parser.parse_args()
 
-    # ── Banner: only on bare invocation (no command), help, or --help ──
-    no_banner = "--no-banner" in sys.argv
-    show_banner = not no_banner and (
-        args.command is None or           # `clavus` with no subcommand
-        args.command == "help" or         # `clavus help`
-        "--help" in sys.argv              # `clavus --help`
-    )
-    if show_banner:
-        print_banner()
-
     if args.version:
         try:
             from importlib.metadata import version
@@ -4399,7 +4336,7 @@ def main():
         except ImportError:
             v = "0.1.0-beta"
         # Banner already printed by main() entry point
-        print(f"  Version: {v}")
+        print(f"clavus {v}")
         return
 
     # Override clavus directory if specified
