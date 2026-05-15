@@ -1,3 +1,9 @@
+# Testing — Clavus (Internal)
+
+> **This is a living test matrix for Clavus maintainers.** If you're here to use Clavus, you don't need this — see [README.md](../README.md) for the user guide.
+
+---
+
 # Testing — Clavus
 
 Living test matrix. Mark ✅ (pass), ❌ (fail), ⚠️ (flake), 🔲 (untested). Add date + notes.
