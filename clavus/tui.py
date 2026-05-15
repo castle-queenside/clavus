@@ -2944,9 +2944,9 @@ class ClavusApp(App):
         """Header: ⬡ hex logo, project, connection dot + remote, sync activity."""
         try:
             # Box-drawing left border + logo
-            logo = f"[bold {C['accent']}]┌─⬡[/]"
-            # Project name — bold white
-            proj = f"  [bold white]{self.project}[/]" if self.project else ""
+            logo = f"[bold {C['accent']}]┌─⬡[/] "
+            # Project name — "clavus · projectname" when open
+            proj = f"[bold white]clavus[/]" if not self.project else f"[bold white]clavus  ·  {self.project}[/]"
             # Separator
             sep = f"[{C['muted']}]│[/]" if proj else ""
             # Connection dot — green = reachable, yellow = offline
