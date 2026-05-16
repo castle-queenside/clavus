@@ -34,13 +34,18 @@ def get_desktop_path() -> Path:
 
 
 def get_projects_dir() -> Path:
-    """Return the Clavus projects directory from config, or default ~/Clavus/Projects."""
+    """Return the Clavus projects directory from config, or default ~/Clavus/Projects.
+    
+    Ensures the directory exists, creating it if necessary.
+    """
     from clavus.config import ClavusConfig, DEFAULT_PROJECTS_DIR
     try:
         cfg = ClavusConfig.load()
-        return Path(cfg.projects_dir)
+        path = Path(cfg.projects_dir)
     except Exception:
-        return Path(DEFAULT_PROJECTS_DIR)
+        path = Path(DEFAULT_PROJECTS_DIR)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def find_als_file(path: str | Path) -> Optional[Path]:
