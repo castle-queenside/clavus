@@ -1797,6 +1797,20 @@ def cmd_relay(args: argparse.Namespace) -> None:
     cfg = ClavusConfig.load()
     host = args.host or cfg.host
     port = args.port or cfg.port
+
+    # Always do clean-slate check — kill any stale relay before trying to bind
+    pid_path = Path.home() / ".clavus" / "relay.pid"
+    if pid_path.exists():
+        try:
+            old_pid = int(pid_path.read_text().strip())
+            os.kill(old_pid, 0)
+            # Process still alive — kill it
+            os.kill(old_pid, 9)
+            time.sleep(0.5)
+        except (ProcessLookupError, ValueError):
+            pass
+        pid_path.unlink()
+
     # Check for --bg / --background flag
     if getattr(args, 'background', False) or getattr(args, 'bg', False):
         import subprocess
@@ -1893,6 +1907,18 @@ def cmd_share(args: argparse.Namespace) -> None:
     cfg = ClavusConfig.load()
     host = args.host or cfg.host
     port = args.port or cfg.port
+
+    # Always do clean-slate check — kill any stale relay before trying to bind
+    pid_path = Path.home() / ".clavus" / "relay.pid"
+    if pid_path.exists():
+        try:
+            old_pid = int(pid_path.read_text().strip())
+            os.kill(old_pid, 0)
+            os.kill(old_pid, 9)
+            time.sleep(0.5)
+        except (ProcessLookupError, ValueError):
+            pass
+        pid_path.unlink()
 
     # Check if port is already in use — try to kill stale Clavus relay
     import socket, platform, signal, subprocess as sp, time

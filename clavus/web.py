@@ -8,6 +8,12 @@ Run: python3 -m uvicorn clavus.web:app --port 7890
 
 from __future__ import annotations
 
+import os
+import signal
+import sys
+from contextlib import suppress
+from pathlib import Path
+
 import json
 import os
 import sys
@@ -1604,6 +1610,22 @@ def run_relay_server(host: str = "0.0.0.0", port: int = 7890, share_code: str = 
         pass
 
     import uvicorn
+
+    # PID file management — always write it so cleanup scripts can find us
+    pid_path = Path.home() / ".clavus" / "relay.pid"
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text(str(os.getpid()))
+
+    def _cleanup(signum, frame):
+        """Clean up PID file and exit cleanly on SIGINT/SIGTERM."""
+        with suppress(Exception):
+            pid_path.unlink()
+        print("\n  👋 Relay stopped.")
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, _cleanup)
+    signal.signal(signal.SIGTERM, _cleanup)
+
     print()
     print(f"  ⧩  Clavus Relay")
     print(f"  {'─' * 40}")
@@ -1628,9 +1650,16 @@ def run_relay_server(host: str = "0.0.0.0", port: int = 7890, share_code: str = 
     except SystemExit:
         raise
     except Exception as e:
+        # Clean up PID file on any error
+        with suppress(Exception):
+            pid_path.unlink()
         err = str(e)
         if "address already in use" in err.lower() or "10048" in err or "EADDRINUSE" in err:
             print(f"\n   ❌ Port {port} is already in use.")
             print(f"      Stop the other relay first: clavus share --kill")
             sys.exit(1)
         raise
+    finally:
+        # Clean up PID file on normal exit too
+        with suppress(Exception):
+            pid_path.unlink()
