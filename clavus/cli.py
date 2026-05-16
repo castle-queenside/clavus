@@ -1925,6 +1925,34 @@ def cmd_share(args: argparse.Namespace) -> None:
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     if sock.connect_ex(("127.0.0.1", port)) == 0:
         sock.close()
+        
+        # ── Check if Tailscale serve owns this port ──────────────────────────
+        # Tailscale serve proxies :PORT → localhost:PORT — if we kill it the proxy dies.
+        # Detect by checking if tailscale serve is configured for this port.
+        try:
+            ts_check = sp.run(
+                ["tailscale", "serve", "status"], capture_output=True, text=True, timeout=5
+            )
+            ts_output = ts_check.stdout
+            if ts_check.returncode == 0:
+                # tailscale serve status shows the mapping — parse "X -> localhost:Y"
+                import re
+                match = re.search(rf":{port}\s*->\s*localhost:(\d+)", ts_output)
+                if match:
+                    ts_proxy_port = int(match.group(1))
+                    print(f"   ℹ️  Port {port} is proxied by tailscale serve → localhost:{ts_proxy_port}")
+                    if port == 7890:
+                        # Tailscale serve on 7890 proxies to 7891 where relay must run
+                        port = 7891
+                        print(f"   🔄 Switched to port 7891 (tailscale serve handles external traffic on 7890)")
+                    else:
+                        print(f"   ⚠️  Port {port} proxied but not 7890 — don't know where relay should run")
+                        print(f"   ❌ Can't proceed. Stop tailscale serve first: tailscale serve reset")
+                        sys.exit(1)
+        except Exception:
+            pass
+        # ── End Tailscale serve check ────────────────────────────────────────
+        
         print(f"   ⚠️  Port {port} in use — checking for stale Clavus relay...")
         killed = False
         try:
