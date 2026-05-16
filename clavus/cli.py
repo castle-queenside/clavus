@@ -718,7 +718,7 @@ def cmd_help(args: argparse.Namespace) -> None:
 
 
 def cmd_setup(args: argparse.Namespace) -> None:
-    """Guided first-run setup — author, port, Tailscale, Ableton detection."""
+    """Guided first-run setup — author, role, port, Tailscale, Ableton detection."""
     import json, platform, socket, subprocess
     from clavus.config import ClavusConfig
     from clavus.store import BlobStore
@@ -738,7 +738,26 @@ def cmd_setup(args: argparse.Namespace) -> None:
         author = ""
     cfg.set("author", author or current)
 
-    # 2. Port
+    # 2. Role — host, join, or LAN-only
+    print()
+    print("🧭  How will you use Clavus?")
+    print("   [1] Host a session     — start a relay, share your URL with collaborators")
+    print("   [2] Join a session     — you've received a relay URL from the host")
+    print("   [3] LAN only           — no internet, same network only")
+    print()
+    role = ""
+    try:
+        role_sel = input("   Select [1]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        role_sel = ""
+    if role_sel == "2":
+        role = "join"
+    elif role_sel == "3":
+        role = "lan"
+    else:
+        role = "host"
+
+    # 3. Port
     port = cfg.port or 7890
     print(f"🔌 Relay port [{port}]: ", end="")
     try:
@@ -755,11 +774,12 @@ def cmd_setup(args: argparse.Namespace) -> None:
     if in_use:
         print(f"   ⚠️  Port {port} in use — choose another: clavus config set port <N>")
 
-    # 3. Tailscale check
+    # 4. Tailscale check
     print()
     print("🌐 Network discovery...")
     ts_ip = ""
     ts_magic_dns = ""
+    ts_running = False
     try:
         r = subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True, timeout=10)
         if r.returncode == 0:
@@ -767,8 +787,9 @@ def cmd_setup(args: argparse.Namespace) -> None:
             status = json.loads(r.stdout)
             self_info = status.get("Self", {})
             ts_magic_dns = self_info.get("DNSName", "").rstrip(".")
-            ts_ips = self_info.get("TailscaleIPs", [])
+            ts_ips = self_info.get("TailNetIPs", [])
             ts_ip = ts_ips[0] if ts_ips else ""
+            ts_running = True
             if ts_magic_dns:
                 print(f"   ✅ Tailscale found")
                 print(f"   🌐 MagicDNS: {ts_magic_dns}")
@@ -779,53 +800,83 @@ def cmd_setup(args: argparse.Namespace) -> None:
             else:
                 print("   ✅ Tailscale running (MagicDNS not configured)")
         else:
-            print("   ℹ️  Tailscale not found — LAN-only collab")
+            ts_running = False
     except (FileNotFoundError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        ts_running = False
+
+    if not ts_running and role == "host":
+        print()
+        print("   ⚠️  Tailscale not found — needed to share your relay URL remotely.")
+        print("   Install: https://tailscale.com/download")
+        print("   After install, run: clavus setup")
+        print()
+        print("   For now you can use LAN-only mode (option [3] above).")
+        role = "lan"
+    elif not ts_running:
         print("   ℹ️  Tailscale not found — LAN-only collab")
 
     # Initialize store (needed for remotes)
     store = BlobStore()
     store.init()
 
-    # 4. Collaborator IP — ask for their IP to auto-configure a remote
+    # 5. Collaborator URL (only for join role)
     print()
     from clavus.sync import load_remotes, save_remotes, Remote
     remotes = load_remotes(store)
     existing_urls = {r.url for r in remotes}
+    collab_url = ""
 
-    prompt = "👥 Collaborator's Tailscale IP" if ts_ip else "👥 Collaborator's IP"
-    print(f"{prompt} (IP or full URL, enter to skip)")
-    try:
-        collab_ip = input("   IP/URL [skip]: ").strip()
-    except (EOFError, KeyboardInterrupt):
-        collab_ip = ""
-    if collab_ip:
-        # Accept IP or full URL — strip http:// and extract port if present
-        from urllib.parse import urlparse
-        if collab_ip.startswith("http://") or collab_ip.startswith("https://"):
-            parsed = urlparse(collab_ip)
-            host = parsed.hostname or collab_ip
-            port = parsed.port or port
-        else:
-            host = collab_ip
-        url = f"http://{host}:{port}"
-        if url not in existing_urls:
-            name = host.replace(".", "-")
-            remotes.append(Remote(name=name, url=url))
-            save_remotes(store, remotes)
-            print(f"   ✅ Added remote '{name}' → {url}")
-            existing_urls.add(url)
+    if role == "join":
+        print("🔗  Enter the relay URL from your session host.")
+        print("    They ran 'clavus share' and saw a URL like:")
+        print("      http://machine-name.tailXXXX.ts.net:7890")
+        print()
+        try:
+            collab_url = input("   URL: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            collab_url = ""
+        if collab_url:
+            from urllib.parse import urlparse
+            if not (collab_url.startswith("http://") or collab_url.startswith("https://")):
+                if ":" in collab_url:
+                    collab_url = f"http://{collab_url}"
+                else:
+                    collab_url = f"http://{collab_url}:7890"
+            parsed = urlparse(collab_url)
+            host = parsed.hostname or collab_url
+            url = f"http://{host}:{parsed.port or port}"
+            if url not in existing_urls:
+                name = host.replace(".", "-")
+                remotes.append(Remote(name=name, url=url))
+                save_remotes(store, remotes)
+                print(f"   ✅ Added remote '{name}' → {url}")
+                existing_urls.add(url)
+        print()
+        print("   💡 Run 'clavus find' to scan the network for active relays.")
+    elif role == "host":
+        print()
+        print("📡  When you run 'clavus share', collaborators will connect to:")
+        if ts_magic_dns:
+            print(f"      http://{ts_magic_dns}:{port}")
+        if ts_ip:
+            print(f"      http://{ts_ip}:{port}")
+        print(f"      http://<your-lan-ip>:{port}")
+        print()
+        print("   Share this URL with your collaborators after running 'clavus share'.")
+    elif role == "lan":
+        print()
+        print("📡  LAN-only mode — collaborators must be on the same network.")
+        print("   They'll use your local IP address (e.g. 192.168.x.x)")
 
     # Also add localhost relay if port is in use (already running)
-    # Only if no collaborator IP was given — this IS the relay machine
-    if not collab_ip and in_use:
+    if not collab_url and in_use:
         print(f"   🔗 Relay detected on port {port} — good!")
         relay_url = f"http://localhost:{port}"
         if relay_url not in existing_urls:
             remotes.append(Remote(name="relay", url=relay_url))
             save_remotes(store, remotes)
             print(f"   ✅ Added remote 'relay' → {relay_url}")
-    elif collab_ip:
+    elif collab_url:
         # Remove any stale localhost remotes — they won't work on this machine
         before = len(remotes)
         remotes = [r for r in remotes if "localhost" not in r.url and "127.0.0.1" not in r.url]
@@ -840,7 +891,8 @@ def cmd_setup(args: argparse.Namespace) -> None:
     else:
         print("   ℹ️  No remotes — use 'clavus remote add' later or 'clavus join http://...'")
 
-    # 5. Projects folder
+    # 6. Projects folder
+    print()
     from clavus.config import DEFAULT_PROJECTS_DIR
     current_dir = cfg.projects_dir or DEFAULT_PROJECTS_DIR
     print(f"📁 Projects folder [{current_dir}]: ", end="")
@@ -853,7 +905,7 @@ def cmd_setup(args: argparse.Namespace) -> None:
         pass
     print(f"   All synced projects go here")
 
-    # 6. Ableton detection
+    # 7. Ableton detection
     print()
     ableton = None
     if platform.system() == "Darwin":
@@ -910,18 +962,22 @@ def cmd_setup(args: argparse.Namespace) -> None:
                     print(f"   ⚠️  {remote.name} — relay responded but no projects (run 'clavus init' on host)")
             except Exception:
                 print(f"   ⚠️  {remote.name} — unreachable (is 'clavus share' running?)")
-    # Smart next-step suggestions based on what was configured
-    has_external = any("localhost" not in r.url for r in remotes)
+
+    # Smart next-step based on role
     print()
-    print("   Next:")
-    if has_external:
-        print("     clavus pull               — pull projects and start collaborating")
-    print("     clavus tui                — terminal dashboard (press p to pull)")
-    if not has_external:
-        print("     clavus init /path/to.als  — track a local project")
+    print("   Next steps:")
+    if role == "host":
+        print("     clavus share            ← start relay and get your share URL")
+        print("     clavus init /path/to.als  ← track your first project")
+    elif role == "join":
+        print("     clavus pull             ← pull projects from the host")
+        print("     clavus tui              ← open the dashboard (press p to pull)")
+    else:
+        print("     clavus init /path/to.als  ← track a local project")
+        print("     clavus tui              ← open the dashboard")
     print()
-    if has_external:
-        print("   💡 Quick start: clavus pull && clavus tui")
+    print("   💡 Quick start (host):  clavus share")
+    print("   💡 Quick start (join):   clavus pull && clavus tui")
 
 
 def init_project(path_str: str | None, auto_confirm: bool = False) -> tuple[Optional[str], list[str]]:
@@ -1920,6 +1976,31 @@ def cmd_share(args: argparse.Namespace) -> None:
             pass
         pid_path.unlink()
 
+    # ── Tailscale serve detection (must run BEFORE socket check) ─────────────
+    # Tailscale serve is a userspace proxy — it won't be detected by socket.connect_ex()
+    # to the Tailscale IP (connection routes through Tailscale's own stack, not standard TCP).
+    # We always check tailscale serve status for port 7890 on Mac.
+    if port == 7890:
+        import subprocess as sp
+        try:
+            ts_check = sp.run(
+                ["tailscale", "serve", "status"], capture_output=True, text=True, timeout=5
+            )
+            ts_output = ts_check.stdout
+            if ts_check.returncode == 0:
+                import re
+                # Match "http://...:7890 (tailnet only)" and "localhost:7891" in output
+                port_match = re.search(rf"https?://[^:]+:{port}\s*\(tailnet only\)", ts_output)
+                proxy_match = re.search(rf"proxy\s+http://localhost:(\d+)", ts_output)
+                if port_match and proxy_match:
+                    ts_proxy_port = int(proxy_match.group(1))
+                    print(f"   ℹ️  Port {port} is proxied by tailscale serve → localhost:{ts_proxy_port}")
+                    port = 7891
+                    print(f"   🔄 Switched to port 7891 (tailscale serve handles external traffic on 7890)")
+        except Exception:
+            pass
+    # ── End Tailscale serve detection ─────────────────────────────────────────
+
     # Check if port is in use — try to kill stale Clavus relay
     import socket, platform, signal, subprocess as sp, time
 
@@ -1947,41 +2028,6 @@ def cmd_share(args: argparse.Namespace) -> None:
             break
 
     if port_open:
-        
-        # ── Check if Tailscale serve owns this port ──────────────────────────
-        # Tailscale serve proxies :PORT → localhost:PORT — if we kill it the proxy dies.
-        # Detect by checking if tailscale serve is configured for this port.
-        try:
-            ts_check = sp.run(
-                ["tailscale", "serve", "status"], capture_output=True, text=True, timeout=5
-            )
-            ts_output = ts_check.stdout
-            if ts_check.returncode == 0:
-                # tailscale serve status format:
-                #   http://hostname:PORT (tailnet only)
-                #   |-- / proxy http://localhost:REAL_PORT
-                import re
-                # Match "http://...:7890" and "localhost:7891" on adjacent lines
-                port_match = re.search(rf"https?://[^:]+:{port}\s*\(tailnet only\)", ts_output)
-                proxy_match = re.search(rf"proxy\s+http://localhost:(\d+)", ts_output)
-                if port_match and proxy_match:
-                    ts_proxy_port = int(proxy_match.group(1))
-                    print(f"   ℹ️  Port {port} is proxied by tailscale serve → localhost:{ts_proxy_port}")
-                    if port == 7890:
-                        # Tailscale serve on 7890 proxies to 7891 where relay must run
-                        port = 7891
-                        print(f"   🔄 Switched to port 7891 (tailscale serve handles external traffic on 7890)")
-                    else:
-                        print(f"   ⚠️  Port {port} proxied but not 7890 — don't know where relay should run")
-                        print(f"   ❌ Can't proceed. Stop tailscale serve first: tailscale serve reset")
-                        sys.exit(1)
-        except SystemExit:
-            raise  # re-raise sys.exit() from the tailscale serve block
-        except Exception:
-            pass
-        # ── End Tailscale serve check ────────────────────────────────────────
-        
-        print(f"   ⚠️  Port {port} in use — checking for stale Clavus relay...")
         killed = False
         try:
             import httpx
