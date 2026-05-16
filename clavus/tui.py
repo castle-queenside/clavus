@@ -269,7 +269,7 @@ class SettingsScreen(ModalScreen):
 
         self._cfg_path.write_text(json.dumps(data, indent=2) + "\n")
         result = self.query_one("#s-result", Static)
-        result.update("✓ saved")
+        result.update("ok saved")
         self.app.pop_screen()
 
 
@@ -738,11 +738,11 @@ class ClavusApp(App):
                     # Parse output for a clear summary
                     lines = [l.strip() for l in out.split("\n") if l.strip()]
                     if "CONFLICT" in out:
-                        self.notify("⚠️ Sync blocked — heads diverged (both modified since last sync)", timeout=6.0, severity="warning")
-                        self._status("⚠️ P2P conflict — sync both via relay first")
+                        self.notify("! Sync blocked -- heads diverged (both modified since last sync)", timeout=6.0, severity="warning")
+                        self._status("! P2P conflict -- sync both via relay first")
                     elif "Failed to connect" in out:
-                        self.notify("❌ Could not reach peer — host may be offline", timeout=6.0, severity="error")
-                        self._status("❌ P2P connect failed")
+                        self.notify("-- Could not reach peer -- host may be offline", timeout=6.0, severity="error")
+                        self._status("-- P2P connect failed")
                     elif "Sync result" in out:
                         import ast
                         sync_line = next((l for l in lines if l.startswith("Sync result")), "")
@@ -753,27 +753,27 @@ class ClavusApp(App):
                             ul = len(r.get("uploaded", []))
                             err = r.get("error", "")
                             if err:
-                                self.notify(f"⚠️ P2P sync error: {err[:60]}", timeout=6.0, severity="warning")
-                                self._status(f"⚠️ P2P error: {err[:50]}")
+                                self.notify(f"! P2P sync error: {err[:60]}", timeout=6.0, severity="warning")
+                                self._status(f"! P2P error: {err[:50]}")
                             elif dl or ul:
-                                self.notify(f"✅ P2P synced — {dl} downloaded, {ul} uploaded", timeout=5.0)
-                                self._status(f"✅ P2P: {dl}↓ {ul}↑")
+                                self.notify(f"[ok] P2P synced -- {dl} downloaded, {ul} uploaded", timeout=5.0)
+                                self._status(f"[ok] P2P: {dl}dl {ul}ul")
                             else:
-                                self.notify("✅ P2P sync — up to date (nothing to transfer)", timeout=4.0)
-                                self._status("✅ P2P: up to date")
+                                self.notify("[ok] P2P sync -- up to date (nothing to transfer)", timeout=4.0)
+                                self._status("[ok] P2P: up to date")
                         except Exception:
-                            self.notify(f"✅ P2P sync complete", timeout=4.0)
-                            self._status("✅ P2P done")
+                            self.notify("[ok] P2P sync complete", timeout=4.0)
+                            self._status("[ok] P2P done")
                     elif "Connected" in out and "Sync result" not in out:
-                        self.notify("✅ Connected to peer — no sync needed", timeout=4.0)
-                        self._status("✅ P2P connected")
+                        self.notify("[ok] Connected to peer -- no sync needed", timeout=4.0)
+                        self._status("[ok] P2P connected")
                     else:
                         self.notify(out.strip()[:100], timeout=5.0)
                         self._status(out.strip()[:80])
                 except subprocess.TimeoutExpired:
                     self._log_event(f":p2p-connect {arg} TIMEOUT")
                     self.notify("P2P sync timed out after 60s", timeout=5.0, severity="error")
-                    self._status("❌ P2P timeout")
+                    self._status("-- P2P timeout")
                 self._connect()
             else:
                 self._status("use :p2p-connect <peer-dns>")
@@ -806,7 +806,7 @@ class ClavusApp(App):
                     capture_output=True, text=True, encoding='utf-8', timeout=30)
                 out = (_p.stdout or "") + (_p.stderr or "")
                 self._log_event(f":repair → {out.strip()[:300]}")
-                self.notify("✅ Store repair complete", timeout=5.0)
+                self.notify("[ok] Store repair complete", timeout=5.0)
                 self._status("repair done")
                 self._connect()  # reload
             except Exception as e:
@@ -932,12 +932,12 @@ class ClavusApp(App):
             if name is None:
                 self._sync_status = ""
                 self._update_header()
-                err = logs[-1].replace("❌ ", "") if logs else "unknown error"
+                err = logs[-1].replace("-- ", "") if logs else "unknown error"
                 self._status(f"init failed: {err}")
                 return
             self._sync_status = ""
             self._update_header()
-            self._footer_toast(f"[{C['green']}]✓ imported: {name}[/] — loading...", 5.0)
+            self._footer_toast(f"[{C['green']}]ok imported: {name}[/] -- loading...", 5.0)
             # Reload from disk — this sets self.project and loads cues/snaps
             self._connect()
             # After connect: if remotes exist and none selected, prompt to pick one
@@ -1346,11 +1346,11 @@ class ClavusApp(App):
             if snap_hash:
                 frozen_warned = any("frozen" in line for line in logs)
                 if frozen_warned:
-                    self._sync_status = "● snap ✓ (⚠ frozen)"
-                    self._log_event(f"● {snap_hash[:10]} — '{message}' (⚠ frozen tracks)")
+                    self._sync_status = "● snap ok (! frozen)"
+                    self._log_event(f"● {snap_hash[:10]} -- '{message}' (! frozen tracks)")
                 else:
-                    self._sync_status = "● snap ✓"
-                    self._log_event(f"● {snap_hash[:10]} — '{message}'")
+                    self._sync_status = "● snap ok"
+                    self._log_event(f"● {snap_hash[:10]} -- '{message}'")
                 status_text = self._sync_status
                 asyncio.create_task(self._delayed_clear_snapshot_status(status_text))
             else:
@@ -1540,7 +1540,7 @@ class ClavusApp(App):
             def compose(self_):
                 c = self_._cue.conflict
                 yield Static(
-                    f"[bold {C['yellow']}]⚠ Sync Conflict[/]\n"
+                    f"[bold {C['yellow']}]! Sync Conflict[/]\n"
                     f"  {self_._cue.id[:12]} @{self_._cue.position}\n\n"
                     f"[{C['green']}]Yours (local)[/] [{C['muted']}]{local_ts}[/]\n"
                     f"  [{C['fg']}]{self_._cue.text[:80]}[/]\n"
@@ -1602,7 +1602,7 @@ class ClavusApp(App):
 
             def compose(self_):
                 yield Static(
-                    f"[bold {C['yellow']}]⚠ Snapshot Message Conflict[/]\n"
+                    f"[bold {C['yellow']}]! Snapshot Message Conflict[/]\n"
                     f"  Snapshot: {self_._snap.hash[:12]}\n\n"
                     f"[{C['green']}]Yours (local):[/]\n"
                     f"  [{C['fg']}]{self_._snap.message[:80]}[/]\n\n"
@@ -2086,19 +2086,19 @@ class ClavusApp(App):
                     c = result.get("cues", 0)
                     s = result.get("snapshots", 0)
                     if err:
-                        msgs.append(f"{pname}: ❌ {err[:40]}")
+                        msgs.append(f"{pname}: -- {err[:40]}")
                         self._log_event(f"pull-all: {pname} FAILED — {err}")
                     elif c or s:
                         blob_count, failed = await asyncio.to_thread(pull_snapshot_blobs, self.store, proj_data, remote, _on_blob_progress)
                         self._sync_progress = ""
-                        msgs.append(f"{pname}: {c}c {s}s" + (f" {blob_count}b" if blob_count else "") + (f" ⚠{len(failed)}" if failed else ""))
+                        msgs.append(f"{pname}: {c}c {s}s" + (f" {blob_count}b" if blob_count else "") + (f" !{len(failed)}" if failed else ""))
                         self._log_event(f"pull-all: {pname} OK — {c}c {s}s")
                     else:
                         msgs.append(f"{pname}: up to date")
                         self._log_event(f"pull-all: {pname} up to date")
                 except Exception as e2:
-                    msgs.append(f"{pname}: ❌ {str(e2)[:40]}")
-                    self._log_event(f"pull-all: {pname} EXCEPTION — {e2}")
+                    msgs.append(f"{pname}: -- {str(e2)[:40]}")
+                    self._log_event(f"pull-all: {pname} EXCEPTION -- {e2}")
                 
                 await asyncio.sleep(0.3)
             
@@ -2109,7 +2109,7 @@ class ClavusApp(App):
                 summary += f" · +{len(msgs)-5} more"
             w = self._footer_stats
             if w is not None:
-                w.update(f"[{C['dim']}]⬇ pull-all done: {summary}[/]")
+                w.update(f"[{C['dim']}]vv pull-all done: {summary}[/]")
                 w.refresh()
             # Use real timer so _restore_footer() fires and unblocks _update_footer
             if hasattr(self, '_toast_timer') and self._toast_timer is not None:
@@ -2259,7 +2259,7 @@ class ClavusApp(App):
                         from clavus.sync import pull_snapshot_blobs
                         _, failed = pull_snapshot_blobs(self.store, proj, remote)
                         if failed:
-                            self.notify(f"⚠️ {len(failed)} blob(s) failed to download", severity="warning")
+                            self.notify(f"! {len(failed)} blob(s) failed to download", severity="warning")
                     except Exception:
                         pass  # best-effort — don't break UI refresh on blob failure
                 
@@ -2547,7 +2547,7 @@ class ClavusApp(App):
                     self._sync_status = ""
                     self._update_header()
                     await asyncio.sleep(0)
-                    self._status("❌ relay failed to start — run 'clavus share' manually")
+                    self._status("-- relay failed to start -- run 'clavus share' manually")
                     return
             self._sync_status = f"\u2b07 {time.strftime('%H:%M')} pulling..."
             self._update_header()
@@ -2640,7 +2640,7 @@ class ClavusApp(App):
                             if result.get("cues"): parts.append(f"{result['cues']}c")
                             if result.get("snapshots"): parts.append(f"{result['snapshots']}s")
                             if blob_count: parts.append(f"{blob_count}b")
-                            if failed: parts.append(f"⚠{len(failed)}")
+                            if failed: parts.append(f"!{len(failed)}")
                             self._sync_status = f"\u2b07 {time.strftime('%H:%M')} {pname}  {' '.join(parts)}" if parts else f"\u2b07 {time.strftime('%H:%M')} {pname}  up to date"
                             self._update_header()
                             await asyncio.sleep(0)
@@ -2803,9 +2803,9 @@ class ClavusApp(App):
                     # Refresh sample counts in header after materialize completes
                     self.refresh_materialized_count()
 
-            self._sync_status = f"⇊ {time.strftime('%H:%M')} {remote.name}  {cues_n}c {snaps_n}s" + (f" {blobs}b" if blobs else "") + (f" ⚠{len(failed)}" if failed else "")
+            self._sync_status = f"vv {time.strftime('%H:%M')} {remote.name}  {cues_n}c {snaps_n}s" + (f" {blobs}b" if blobs else "") + (f" !{len(failed)}" if failed else "")
             if conflicts_n:
-                self._sync_status += f"  \u26a0{conflicts_n}"
+                self._sync_status += f"  !{conflicts_n}"
             self._sync_progress = ""  # Clear progress on completion
             self._update_header()
             await asyncio.sleep(0)
@@ -2830,8 +2830,8 @@ class ClavusApp(App):
             self.set_timer(0.05, self._update_header)
         except Exception as e:
             self._sync_progress = ""
-            self._log_event(f"❌ pull error: {e}")
-            self._status(f"❌ pull error: {e}")
+            self._log_event(f"-- pull error: {e}")
+            self._status(f"-- pull error: {e}")
 
     async def _do_push(self, force: bool = False):
         """Push cues + snapshots + blobs to the project's active remote."""
@@ -2917,25 +2917,25 @@ class ClavusApp(App):
                                     self.store.set_index(proj_index)
                                     self._log_event(f"● local snapshot {snap.hash[:8]}")
                                     self._last_sync = f"● {time.strftime('%H:%M')}"
-                                    self._status(f"📦 snapshot saved locally — use :remotes to pick a remote before pushing")
+                                    self._status(f"samples snapshot saved locally -- use :remotes to pick a remote before pushing")
                                 else:
-                                    self._status(f"✓ up to date — use :remotes to pick a remote before pushing")
+                                    self._status(f"ok up to date -- use :remotes to pick a remote before pushing")
                             else:
-                                self._status(f"✓ up to date — use :remotes to pick a remote before pushing")
+                                self._status(f"ok up to date -- use :remotes to pick a remote before pushing")
                         else:
                             self._last_sync = f"● {time.strftime('%H:%M')}"
-                            self._status(f"✓ up to date — use :remotes to pick a remote before pushing")
+                            self._status(f"ok up to date -- use :remotes to pick a remote before pushing")
                     except Exception as e:
-                        self._status(f"✓ working locally (snapshot failed: {e}) — use :remotes to push")
+                        self._status(f"ok working locally (snapshot failed: {e}) -- use :remotes to push")
                 else:
-                    self._status(f"✓ no .als found — use :remotes to pick a remote before pushing")
+                    self._status(f"ok no .als found -- use :remotes to pick a remote before pushing")
                 return
             remote = next((r for r in remotes if r.name == self._peer_name), None)
             if not remote:
                 self._sync_status = ""
                 self._update_header()
                 await asyncio.sleep(0)
-                self._status(f"❌ remote '{self._peer_name}' not found — use :remotes")
+                self._status(f"-- remote '{self._peer_name}' not found -- use :remotes")
                 return
             # Allow localhost (solo host mode) to work without relay
             is_localhost = remote.url.startswith("http://localhost")
@@ -2943,7 +2943,7 @@ class ClavusApp(App):
                 self._sync_status = ""
                 self._update_header()
                 await asyncio.sleep(0)
-                self._status("⚠️ relay unreachable — is 'clavus share' running?")
+                self._status("! relay unreachable -- is 'clavus share' running?")
                 self._log_event("push blocked: relay not reachable — run 'clavus share' first")
                 return
             # Auto-snapshot local changes before pushing (conflict resolution, cue edits, etc.)
@@ -3011,10 +3011,10 @@ class ClavusApp(App):
                 await asyncio.sleep(0)
                 err = result['error']
                 if 'pull first' in err.lower() or 'conflict' in err.lower():
-                    self._status(f"⚠️ conflict — press p to pull, then P to push")
-                    self._log_event(f"⚠️ push conflict: local_head={proj_index.head[:10] if proj_index.head else 'none'} remote_last_head={remote.last_head[:10] if remote.last_head else 'none'} — {err}")
+                    self._status(f"! conflict -- press p to pull, then P to push")
+                    self._log_event(f"! push conflict: local_head={proj_index.head[:10] if proj_index.head else 'none'} remote_last_head={remote.last_head[:10] if remote.last_head else 'none'} -- {err}")
                 else:
-                    self._status(f"❌ push failed: {err[:60]}")
+                    self._status(f"-- push failed: {err[:60]}")
                     self._log_event(f"push error: {err}")
                 return
             cues_n = result.get("cues", 0)
@@ -3037,7 +3037,7 @@ class ClavusApp(App):
             self._sync_progress = ""
             self._update_header()
             await asyncio.sleep(0)
-            self._status(f"❌ push error: {e}")
+            self._status(f"-- push error: {e}")
 
     def _get_cue(self) -> Optional[Cue]:
         if 0 <= self.idx < len(self.cues):
@@ -3449,7 +3449,7 @@ class ClavusApp(App):
             assignee_part = f"  👤 {c.assignee}" if c.assignee else ""
             in_prog = f" [{C['yellow']}]▶[/]" if c.in_progress else ""
             safe_text = c.text[:60].replace("[", "\\[").replace("]", "\\]")
-            conflict_mark = f" [{C['yellow']}]⚠[/]" if getattr(c, 'conflict', False) else ""
+            conflict_mark = f" [{C['yellow']}]![/]" if getattr(c, 'conflict', False) else ""
             ago = self._time_ago(c.timestamp)
             cue_line = (
                 f"  [{color}]{dot}[/] [{color}]@{c.position}[/] "
@@ -3491,7 +3491,7 @@ class ClavusApp(App):
         for s in self.snaps[:10]:
             ago = self._time_ago(s.timestamp)
             safe_msg = s.message[:50].replace("[", "\\[").replace("]", "\\]")
-            conflict_mark = f" [{C['yellow']}]⚠[/]" if s.conflict_message else ""
+            conflict_mark = f" [{C['yellow']}]![/]" if s.conflict_message else ""
             lv.append(ListItem(Label(
                 f"[{C['fg']}]{safe_msg}[/]{conflict_mark}  [{C['dim']}]{s.hash[:8]}  {ago}[/]"
             )))
