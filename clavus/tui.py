@@ -586,7 +586,7 @@ class ClavusApp(App):
         from clavus.sync import load_remotes
         remotes = load_remotes(self.store)
         if not remotes:
-            self._status("no remotes configured  —  use :join http://... or :remote add")
+            self._status("no remotes configured  --  use :join http://... or :remote add")
             return
         self._remote_list = remotes
         self._remote_picker_active = True
@@ -602,7 +602,7 @@ class ClavusApp(App):
             reachable = "●" if self._peer_reachable and r.name == self._peer_name else "○"
             line = f"  {reachable} {r.name}  @ {r.url}{active}"
             lv.append(ListItem(Label(line, classes="project-picker-item")))
-        self._footer_toast(f"[{C['accent']}]pick a remote → enter   [{C['dim']}]esc to cancel[/]", 10.0)
+        self._footer_toast(f"[{C['accent']}]pick a remote -> enter   [{C['dim']}]esc to cancel[/]", 10.0)
         self._update_footer_hint()
 
     def _cancel_remote_picker(self):
@@ -716,7 +716,7 @@ class ClavusApp(App):
             if arg and (arg.startswith("http://") or arg.startswith("https://")):
                 self._run_join_url(arg)
             else:
-                self._status("use :join http://IP:PORT — get URL from 'clavus share' on host")
+                self._status("use :join http://IP:PORT -- get URL from 'clavus share' on host")
         elif cmd in ("help", "h", "?"):
             self.push_screen(HelpScreen())
         elif cmd == "p2p-host":
@@ -839,7 +839,7 @@ class ClavusApp(App):
             localhost = next((r for r in remotes if r.url.rstrip("/") in ("http://localhost:7890", "http://localhost:7891")), None)
             if localhost:
                 self._peer_name = localhost.name
-                self._log_event(f"auto-selected '{localhost.name}' — press P to push")
+                self._log_event(f"auto-selected '{localhost.name}' -- press P to push")
         if self._peer_name:
             self._probe_reachability()
         self.idx = 0  # reset cursor before loading
@@ -850,7 +850,7 @@ class ClavusApp(App):
         self._render()
         self._update_footer()
         # Show result as a temporary label at top of cue list
-        msg = f"  switched to project [bold]{name}[/]  —  {len(self.cues)} cues, {len(self.snaps)} snapshots"
+        msg = f"  switched to project [bold]{name}[/]  --  {len(self.cues)} cues, {len(self.snaps)} snapshots"
         try:
             lv = self.query_one("#clv", ListView)
             lv.mount(ListItem(Label(msg, classes="project-list")), before=0)
@@ -862,7 +862,7 @@ class ClavusApp(App):
     async def _run_list_projects(self):
         projects = self.store.list_projects()
         if not projects:
-            self._status("no projects found  —  run :init <path> to add one")
+            self._status("no projects found  --  run :init <path> to add one")
             return
         self._project_list = projects
         self._project_picker_active = True
@@ -871,11 +871,11 @@ class ClavusApp(App):
         for p in projects:
             head = p.head or ""
             active = " ◀" if p.name == self.project else ""
-            share_icon = "🌐" if p.shared else "🔒"
+            share_icon = "[NET]" if p.shared else "[PK]"
             line = f"  {share_icon} {p.name}  @ {head[:12] if head else '(no snaps)':12s}{active}"
             lv.append(ListItem(Label(line, classes="project-picker-item")))
         # Footer hint
-        self._footer_toast(f"[{C['accent']}]pick a project → enter   [{C['dim']}]esc to cancel[/]", 10.0)
+        self._footer_toast(f"[{C['accent']}]pick a project -> enter   [{C['dim']}]esc to cancel[/]", 10.0)
         self._update_footer_hint()
 
     def _clear_project_list(self):
@@ -944,7 +944,7 @@ class ClavusApp(App):
             from clavus.sync import load_remotes
             remotes = load_remotes(self.store)
             if remotes and not self._peer_name:
-                self._status(f"{name} ready — pick a remote to sync")
+                self._status(f"{name} ready -- pick a remote to sync")
                 # _run_list_remotes is @work — calling it directly starts the background worker
                 self._run_list_remotes()
         except Exception as e:
@@ -1027,7 +1027,7 @@ class ClavusApp(App):
             remotes = [r for r in remotes if r.name != name]
             remotes.append(Remote(name=name, url=url))
             save_remotes(store, remotes)
-            self._status(f"added remote '{name}' — pulling...")
+            self._status(f"added remote '{name}' -- pulling...")
             await self._do_pull()
         except Exception as e:
             self._status(f"join failed: {e}")
@@ -1061,7 +1061,7 @@ class ClavusApp(App):
 
         raw = self.store.get_object(snap.als_hash)
         if not raw:
-            self._status("raw .als blob missing — try pulling")
+            self._status("raw .als blob missing -- try pulling")
             return
 
         # Write to Ableton project folder convention:
@@ -1201,7 +1201,7 @@ class ClavusApp(App):
                             cmd.extend(["rename", self._peer_name, parts[1]])
                             self._log_event(f"renaming '{self._peer_name}' → '{parts[1]}'")
                         else:
-                            self._status("no connected remote — use :remote rename <old> <new>")
+                            self._status("no connected remote -- use :remote rename <old> <new>")
                             return
                     else:
                         # :remote rename mac Studio → is "mac" an existing remote?
@@ -1219,7 +1219,7 @@ class ClavusApp(App):
                             cmd.extend(["rename", self._peer_name, full])
                             self._log_event(f"renaming '{self._peer_name}' → '{full}'")
                         else:
-                            self._status(f"remote '{first}' not found — use :remote rename <old> <new>")
+                            self._status(f"remote '{first}' not found -- use :remote rename <old> <new>")
                             return
                 else:
                     cmd.extend(parts)
@@ -1381,7 +1381,7 @@ class ClavusApp(App):
             now = time.time()
             if now - getattr(self, '_last_auto_push', 0) > 5:
                 self._last_auto_push = now
-                self._status(f"● {snap_hash[:10]} — 'auto-pushing to relay...'")
+                self._status(f"● {snap_hash[:10]} -- 'auto-pushing to relay...'")
                 self._log_event(f"auto-push: {snap_hash[:8]}")
                 asyncio.create_task(self._do_push())
         # Reload snapshots from disk and refresh UI
@@ -2087,12 +2087,12 @@ class ClavusApp(App):
                     s = result.get("snapshots", 0)
                     if err:
                         msgs.append(f"{pname}: -- {err[:40]}")
-                        self._log_event(f"pull-all: {pname} FAILED — {err}")
+                        self._log_event(f"pull-all: {pname} FAILED -- {err}")
                     elif c or s:
                         blob_count, failed = await asyncio.to_thread(pull_snapshot_blobs, self.store, proj_data, remote, _on_blob_progress)
                         self._sync_progress = ""
                         msgs.append(f"{pname}: {c}c {s}s" + (f" {blob_count}b" if blob_count else "") + (f" !{len(failed)}" if failed else ""))
-                        self._log_event(f"pull-all: {pname} OK — {c}c {s}s")
+                        self._log_event(f"pull-all: {pname} OK -- {c}c {s}s")
                     else:
                         msgs.append(f"{pname}: up to date")
                         self._log_event(f"pull-all: {pname} up to date")
@@ -2164,10 +2164,10 @@ class ClavusApp(App):
         self._allow_frozen = not self._allow_frozen
         if self._allow_frozen:
             self._status("● freeze: warn (snapshots allowed)")
-            self._log_event(":freeze → warn mode — frozen snapshots allowed with warning")
+            self._log_event(":freeze -> warn mode -- frozen snapshots allowed with warning")
         else:
             self._status("● freeze: block (unfreeze first)")
-            self._log_event(":freeze → block mode — frozen snapshots rejected")
+            self._log_event(":freeze -> block mode -- frozen snapshots rejected")
 
     @work(exclusive=True)
     async def action_stem_push(self):
@@ -2291,13 +2291,13 @@ class ClavusApp(App):
                 if remotes:
                     self._peer_name = remotes[0].name
                     self._peer_reachable = False  # yellow until proven
-                    self._status("connected — press p to pull projects")
-                    self._log_event("remotes configured — press p to pull")
+                    self._status("connected -- press p to pull projects")
+                    self._log_event("remotes configured -- press p to pull")
                 else:
-                    self._status("no project — use :join http://IP:PORT or :init <path>")
-                    self._log_event("no remotes — use :join http://IP:PORT")
+                    self._status("no project -- use :join http://IP:PORT or :init <path>")
+                    self._log_event("no remotes -- use :join http://IP:PORT")
             except Exception:
-                self._status("no project — use :init <path> to add one")
+                self._status("no project -- use :init <path> to add one")
             self._update_header()
             self._update_footer()
             # Show helpful empty-state message in the cue list area
@@ -2453,7 +2453,7 @@ class ClavusApp(App):
             from clavus.cli import create_snapshot
             snap_hash, logs = create_snapshot("initial", allow_frozen=True)
             if snap_hash:
-                self._log_event(f"● initial snapshot {snap_hash[:10]} — baseline saved")
+                self._log_event(f"● initial snapshot {snap_hash[:10]} -- baseline saved")
                 self._load_snapshots_from_disk()
             else:
                 # Not an error — project might have no changes yet
@@ -2683,14 +2683,14 @@ class ClavusApp(App):
                 self._sync_status = ""
                 self._update_header()
                 await asyncio.sleep(0)
-                self._status("\u274c no remote selected — use :remotes to pick one")
+                self._status("-- no remote selected -- use :remotes to pick one")
                 return
             remote = next((r for r in remotes if r.name == self._peer_name), None)
             if not remote:
                 self._sync_status = ""
                 self._update_header()
                 await asyncio.sleep(0)
-                self._status(f"\u274c remote '{self._peer_name}' not found — use :remotes")
+                self._status(f"-- remote '{self._peer_name}' not found -- use :remotes")
                 return
 
             # Auto-snapshot local work before overwriting with remote changes.
@@ -2764,7 +2764,7 @@ class ClavusApp(App):
                     self._update_header()
                     await asyncio.sleep(0)
                     self._status(f"● {remote.name} unreachable")
-                    self._log_event(f"● {remote.name} unreachable — pull failed")
+                    self._log_event(f"● {remote.name} unreachable -- pull failed")
                     return
                 cues_n = result.get("cues", 0)
                 snaps_n = result.get("snapshots", 0)
@@ -2944,7 +2944,7 @@ class ClavusApp(App):
                 self._update_header()
                 await asyncio.sleep(0)
                 self._status("! relay unreachable -- is 'clavus share' running?")
-                self._log_event("push blocked: relay not reachable — run 'clavus share' first")
+                self._log_event("push blocked: relay not reachable -- run 'clavus share' first")
                 return
             # Auto-snapshot local changes before pushing (conflict resolution, cue edits, etc.)
             # This ensures HEAD matches what we're about to send.
@@ -2981,10 +2981,10 @@ class ClavusApp(App):
                     pass
                 if not relay_live:
                     # Relay not running — save locally only
-                    self._sync_status = f"💾 {time.strftime('%H:%M')} local"
+                    self._sync_status = f"-- {time.strftime('%H:%M')} local"
                     self._update_header()
                     await asyncio.sleep(0)
-                    self._status("💾 saved locally — relay offline")
+                    self._status("-- saved locally -- relay offline")
                     self._log_event("solo push: saved locally, relay not running")
                     return
 
