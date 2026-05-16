@@ -1935,11 +1935,15 @@ def cmd_share(args: argparse.Namespace) -> None:
             )
             ts_output = ts_check.stdout
             if ts_check.returncode == 0:
-                # tailscale serve status shows the mapping — parse "X -> localhost:Y"
+                # tailscale serve status format:
+                #   http://hostname:PORT (tailnet only)
+                #   |-- / proxy http://localhost:REAL_PORT
                 import re
-                match = re.search(rf":{port}\s*->\s*localhost:(\d+)", ts_output)
-                if match:
-                    ts_proxy_port = int(match.group(1))
+                # Match "http://...:7890" and "localhost:7891" on adjacent lines
+                port_match = re.search(rf"https?://[^:]+:{port}\s*\(tailnet only\)", ts_output)
+                proxy_match = re.search(rf"proxy\s+http://localhost:(\d+)", ts_output)
+                if port_match and proxy_match:
+                    ts_proxy_port = int(proxy_match.group(1))
                     print(f"   ℹ️  Port {port} is proxied by tailscale serve → localhost:{ts_proxy_port}")
                     if port == 7890:
                         # Tailscale serve on 7890 proxies to 7891 where relay must run
