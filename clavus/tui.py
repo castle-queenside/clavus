@@ -257,6 +257,8 @@ class SettingsScreen(ModalScreen):
 
         data["author"] = author or "Chris"
         data["projects_dir"] = projects_dir
+        if projects_dir:
+            Path(projects_dir).mkdir(parents=True, exist_ok=True)
         data["host"] = host or "0.0.0.0"
         try:
             data["port"] = int(port_str) if port_str else 7890
@@ -390,6 +392,9 @@ class ClavusApp(App):
         _cfg = ClavusConfig.load()
         self.author = _cfg.author
         self._clavus_cfg = _cfg
+        # Ensure projects directory exists
+        from clavus.helpers import get_projects_dir
+        get_projects_dir()
         self._cue_store = None  # Lazy init per project
         self._header_title: Optional[Static] = None
         self._footer_stats: Optional[Static] = None
