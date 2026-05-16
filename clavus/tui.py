@@ -808,6 +808,14 @@ class ClavusApp(App):
         # Load active remote from project config
         self._peer_name = getattr(proj, 'active_remote', '') or ''
         self._peer_reachable = False
+        if not self._peer_name:
+            # No active remote saved for this project — auto-select localhost if available
+            from clavus.sync import load_remotes
+            remotes = load_remotes(self.store)
+            localhost = next((r for r in remotes if r.url.rstrip("/") in ("http://localhost:7890", "http://localhost:7891")), None)
+            if localhost:
+                self._peer_name = localhost.name
+                self._log_event(f"auto-selected '{localhost.name}' — press P to push")
         if self._peer_name:
             self._probe_reachability()
         self.idx = 0  # reset cursor before loading

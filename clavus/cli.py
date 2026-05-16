@@ -3303,9 +3303,16 @@ def cmd_push(args: argparse.Namespace) -> None:
     remotes = load_remotes(store)
 
     if not remotes:
-        print(f"❌ No remotes configured.")
-        print(f"   Use 'clavus remote add <name> <url>' first.")
-        return
+        # Fallback: if localhost exists but no remotes configured, use it silently
+        from clavus.sync import Remote
+        localhost_url = "http://localhost:7890"
+        alt = next((r for r in load_remotes(store) if r.url.rstrip("/") == localhost_url), None)
+        if alt:
+            remotes = [alt]
+        else:
+            print(f"❌ No remotes configured.")
+            print(f"   Use 'clavus remote add <name> <url>' first.")
+            return
 
     # If a remote name is specified, only push to that one
     if args.remote:
