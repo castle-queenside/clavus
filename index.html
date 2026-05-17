@@ -226,6 +226,22 @@
   footer a:hover { color: var(--accent2); }
 
   /* Responsive */
+  kbd {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 6px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 0.85em;
+    color: var(--accent2);
+  }
+  .screenshot-caption {
+    padding: 12px 20px;
+    color: var(--dim);
+    font-size: 0.85em;
+    border-top: 1px solid var(--border);
+  }
+
   @media (max-width: 640px) {
     .hero h2 { font-size: 2em; }
     .pain-grid, .cap-grid { grid-template-columns: 1fr; }
@@ -239,6 +255,7 @@
   <div class="container">
     <h1>clavus</h1>
     <div>
+      <a href="#screenshots">Screenshots</a>
       <a href="#capabilities">What It Does</a>
       <a href="#start">Get Started</a>
       <a href="#donate">Support</a>
@@ -359,24 +376,31 @@
 
 <hr class="divider">
 
-<!-- Use cases -->
-<section>
+<!-- Screenshots -->
+<section id="screenshots">
   <div class="container">
-    <h3>Who Actually Benefits</h3>
+    <h3>What It Looks Like</h3>
+    <p>Clavus runs in your terminal. The dashboard is split into two panes: cues on the left, snapshot history on the right. All navigation is keyboard-driven — no mouse needed.</p>
 
-    <div class="testimonial">
-      <p>"I produce on a Mac in the studio and mix on a Windows PC at home. Before Clavus, I was emailing myself .als files. Now I push from the studio, pull at home, and never wonder which version I'm opening."</p>
-      <div class="attribution">— producer, studio ↔ home workflow</div>
+    <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin: 24px 0;">
+      <img src="docs/screenshots/tui-main.jpg" alt="Clavus TUI showing cue list and snapshot history" style="width: 100%; display: block;">
+      <div style="padding: 12px 20px; color: var(--dim); font-size: 0.85em; border-top: 1px solid var(--border);">
+        Dashboard: cues (left) and snapshot history (right). Project: Ja More Mon Amore.
+      </div>
     </div>
 
-    <div class="testimonial">
-      <p>"My co-writer lives in another city. We used to send screenshots of arrangement changes. Now we snapshot after each session, push to the relay, and the other person pulls the next morning. The cue system replaced an entire WhatsApp thread."</p>
-      <div class="attribution">— remote co-writer pair</div>
+    <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin: 24px 0;">
+      <img src="docs/screenshots/tui-cues.jpg" alt="Clavus TUI cues view" style="width: 100%; display: block;">
+      <div style="padding: 12px 20px; color: var(--dim); font-size: 0.85em; border-top: 1px solid var(--border);">
+        Cue detail: timeline-tagged comments with replies, assignee, and status.
+      </div>
     </div>
 
-    <div class="testimonial">
-      <p>"I was working on a remix and made 11 versions in three days. I could not remember what version 6 sounded like. With Clavus, every 'save as new version' is just a snapshot. I can go back to any of them in one keypress."</p>
-      <div class="attribution">— solo producer, heavy iterater</div>
+    <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin: 24px 0;">
+      <img src="docs/screenshots/tui-help.jpg" alt="Clavus keyboard reference" style="width: 100%; display: block;">
+      <div style="padding: 12px 20px; color: var(--dim); font-size: 0.85em; border-top: 1px solid var(--border);">
+        Keyboard reference overlay (press <kbd>?</kbd> at any time).
+      </div>
     </div>
   </div>
 </section>
