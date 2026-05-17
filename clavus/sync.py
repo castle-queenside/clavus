@@ -1241,12 +1241,15 @@ def push_stems_to_remote(
 
     client = SyncClient(remote.url)
     count = 0
-    counters = {"stem": 0}
+    total_bytes = sum(s.size for s in manifest.stems)
+    total_mb = total_bytes / (1024 * 1024)
+    counters = {"stem": 0, "bytes": 0}
     count_lock = threading.Lock()
 
-    def _report(done: int):
+    def _report(done: int, mb_done: float):
         if progress_callback:
-            progress_callback("stem", done, counters["stem"])
+            progress_callback("stem", done, len(manifest.stems))
+        print(f"  \r  Progress: {done}/{len(manifest.stems)} stems ({mb_done:.0f}/{total_mb:.0f} MB)", end="", flush=True)
 
     def _upload_stem(stem_hash: str) -> tuple[str, bool]:
         data = store.get_object(stem_hash)
@@ -1262,19 +1265,22 @@ def push_stems_to_remote(
                 content=data, timeout=120,
             )
             if r.status_code == 200:
-                print(f"    Uploaded {track} ({stem_hash[:12]}) — {len(data) / (1024*1024):.1f} MB")
                 with count_lock:
                     counters["stem"] += 1
-                _report(counters["stem"])
+                    counters["bytes"] += len(data)
+                    done = counters["stem"]
+                    mb = counters["bytes"] / (1024 * 1024)
+                _report(done, mb)
                 return (stem_hash, True)
             else:
-                print(f"    ⚠️  Upload failed for {stem_hash[:12]}: {r.status_code}")
-        except Exception:
-            pass
+                print(f"\n  ⚠️  Upload failed for {stem_hash[:12]}: {r.status_code}")
+        except Exception as e:
+            print(f"\n  ⚠️  Upload failed for {stem_hash[:12]}: {e}")
         return (stem_hash, False)
 
     try:
         # Ask remote which hashes it's missing
+        print(f"  Checking which stems the relay already has...")
         all_hashes = [s.hash for s in manifest.stems]
         r = client.client.post(
             f"{remote.url}/api/stems/check",
@@ -1287,9 +1293,16 @@ def push_stems_to_remote(
 
         missing = r.json().get("missing", [])
         if not missing:
+            print(f"  All {len(manifest.stems)} stem(s) already on relay — nothing to push.")
             return 0
 
-        print(f"  Pushing {len(missing)} stem(s) with {MAX_WORKERS} workers...")
+        # Compute how many MB we need to send
+        missing_bytes = sum(
+            s.size for s in manifest.stems if s.hash in missing
+        )
+        print(f"  Uploading {len(missing)} stem(s) — {missing_bytes / (1024*1024):.0f} MB total")
+        print(f"  Starting {MAX_WORKERS} parallel upload(s)...")
+
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
             futures = [ex.submit(_upload_stem, sh) for sh in missing]
             for future in as_completed(futures):
@@ -1297,7 +1310,11 @@ def push_stems_to_remote(
                 if success:
                     count += 1
 
+        # Print newline after progress line
+        print()
+
         # Push the manifest too
+        print(f"  Updating stem manifest on relay...")
         manifest_data = {
             "snapshot_hash": manifest.snapshot_hash,
             "stems": [{
@@ -1316,6 +1333,7 @@ def push_stems_to_remote(
     finally:
         client.close()
 
+    print(f"  Done: {count}/{len(missing)} stem(s) pushed")
     return count
 
 
