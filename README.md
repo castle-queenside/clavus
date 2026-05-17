@@ -1,11 +1,12 @@
-# Clavus — Version & Collaborate on Ableton Projects
+# Clavus — Version Control for Ableton Live
 
-**Clavus** gives your Ableton projects time-travel. Snapshot your work, add timeline comments your collaborator can see, and sync everything through a lightweight relay — no cloud, no plugins, no accounts.
+Snapshots, cues, and sync for your Ableton projects. No cloud. No plugins. No accounts.
 
-Work alone: save checkpoints, diff what changed, restore if you need to.  
-Work together: push snapshots to a shared relay, pull their changes, resolve conflicts with one keypress.
+- **Solo** — save checkpoints, diff what changed, restore any version in one keypress
+- **Together** — push snapshots to a shared relay, pull your collaborator's changes, resolve conflicts cleanly
+- **Cross-platform** — Mac ↔ Windows, studio ↔ home, works with Tailscale or LAN
 
-**New here?** Start with [Quick Install](#quick-install) below. Takes about 5 minutes.
+[Get started in 2 minutes](#quick-install) &darr;
 
 ```
   Mac Studio     push/pull      ┌──────────┐      push/pull     Windows PC
@@ -44,54 +45,25 @@ One person runs the relay (`clavus share`). Others connect (`clavus join`), push
 
 ## Quick Install
 
-### Step 1 — Install Tailscale (one-time, 2 minutes)
-
-Download at [tailscale.com/download](https://tailscale.com/download). Sign in with Google, Microsoft, or GitHub. That's it — free tier is all you need.
-
-> **Why Tailscale?** Clavus uses it to create a secure, private network between you and your collaborators without configuring routers, ports, or firewalls. It just works.
-
-### Step 2 — Clone Clavus
-
-Open Terminal (Mac) or PowerShell (Windows):
+**Requirements:** Python 3.10+, [Tailscale](https://tailscale.com/download) (free tier). Takes about 2 minutes.
 
 ```bash
+# 1. Grab the code
 git clone https://github.com/castle-queenside/clavus
 cd clavus
-```
 
-### Step 3 — Install
+# 2. Install
+pip install -e .          
+# Windows: py -m pip install -e .
 
-**macOS / Linux:**
-```bash
-pip3 install -e .
-```
-
-**Windows:**
-```powershell
-py -m pip install -e .
-```
-
-### Step 4 — First-Run Setup
-
-```bash
-clavus setup
-```
-
-The wizard asks for:
-- **Your name** — shows up on cues and snapshots
-- **Relay port** — default is 7890, almost always fine
-- **Projects folder** — where Clavus stores its copy of synced projects (default is fine)
-- **Ableton detection** — it finds Live automatically if it's installed
-
-It also detects your Tailscale MagicDNS name (e.g. `your-machine.tailXXXX.ts.net`) — this is what you share with collaborators so they can join your relay.
-
-### Step 5 — Open the Dashboard
-
-```bash
+# 3. Add a project and open the dashboard
+clavus init /path/to/your/project.als
 clavus tui
 ```
 
-You're ready. Here's what each screen shows and how to navigate.
+> **Why Tailscale?** It creates a secure, private network between you and your collaborators without configuring routers or firewalls. Install it, sign in with any account (Google, GitHub, etc.), and Clavus picks it up automatically.
+
+Press `S` to snapshot, `c` to add a cue, `T` to restore. Full walkthrough below.
 
 ---
 
@@ -153,6 +125,18 @@ That's it. Clavus shows you everything they have available.
 
 ---
 
+## What It Looks Like
+
+![Clavus TUI dashboard with cues and snapshot history](docs/screenshots/tui-main.jpg)
+
+Dashboard with cue list (left) and snapshot history (right). Press `?` for the full keyboard reference.
+
+![Keyboard reference overlay](docs/screenshots/tui-help.jpg)
+
+Press `?` at any time to see every keybinding.
+
+---
+
 ## Daily Collaboration Workflow
 
 Open the dashboard:
@@ -193,9 +177,10 @@ Press `:` then type `inject`. Clavus adds your cue comments as named markers in 
 
 ---
 
-## TUI Keybindings
+## Keyboard Reference
 
-Press `?` at any time to see the full reference.
+<details>
+<summary>Press <code>?</code> in the dashboard at any time — or expand this section.</summary>
 
 ### Navigation
 
@@ -250,6 +235,7 @@ Press `?` at any time to see the full reference.
 | `:projects` | Show all projects |
 | `:remotes` | Show all remotes |
 | `:freeze` | Toggle frozen track warning (warn / block / allow) |
+</details>
 
 ---
 
