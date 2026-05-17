@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Clavus — Version & Collaborate on Ableton Projects</title>
+<style>
+  :root {
+    --bg: #0b1418;
+    --surface: #0f1a20;
+    --surface2: #162a34;
+    --border: #1a3040;
+    --fg: #c8d8d8;
+    --dim: #6a9a9a;
+    --muted: #3a5a65;
+    --accent: #1a9e9e;
+    --accent2: #2ac8c8;
+    --green: #40cc80;
+    --yellow: #d4a030;
+    --orange: #d47030;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+  .container { max-width: 780px; margin: 0 auto; padding: 0 24px; }
+  
+  /* Navigation */
+  nav {
+    padding: 20px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  nav .container {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  nav h1 { color: var(--accent2); font-size: 1.2em; font-weight: 700; }
+  nav a {
+    color: var(--dim);
+    text-decoration: none;
+    font-size: 0.9em;
+    margin-left: 20px;
+    transition: color 0.2s;
+  }
+  nav a:hover { color: var(--accent2); }
+  
+  /* Hero */
+  .hero {
+    padding: 80px 0 60px;
+    text-align: center;
+  }
+  .hero h2 {
+    font-size: 2.8em;
+    font-weight: 800;
+    color: var(--accent2);
+    line-height: 1.15;
+    margin-bottom: 16px;
+    letter-spacing: -0.02em;
+  }
+  .hero p {
+    font-size: 1.15em;
+    color: var(--dim);
+    max-width: 600px;
+    margin: 0 auto 32px;
+  }
+  .hero-buttons {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  .btn {
+    display: inline-block;
+    padding: 12px 28px;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 0.95em;
+    text-decoration: none;
+    transition: all 0.2s;
+  }
+  .btn-primary {
+    background: var(--accent);
+    color: var(--bg);
+  }
+  .btn-primary:hover { background: var(--accent2); }
+  .btn-secondary {
+    background: var(--surface2);
+    color: var(--fg);
+    border: 1px solid var(--border);
+  }
+  .btn-secondary:hover { border-color: var(--accent); }
+  .btn-ghost {
+    background: transparent;
+    color: var(--dim);
+    border: 1px solid var(--border);
+  }
+  .btn-ghost:hover { border-color: var(--muted); color: var(--fg); }
+
+  /* Sections */
+  section { padding: 60px 0; }
+  section h3 {
+    font-size: 1.5em;
+    font-weight: 700;
+    color: var(--accent2);
+    margin-bottom: 24px;
+  }
+  section h4 {
+    font-size: 1.1em;
+    font-weight: 600;
+    color: var(--accent);
+    margin-bottom: 8px;
+    margin-top: 24px;
+  }
+  section p { color: var(--dim); margin-bottom: 16px; font-size: 0.95em; }
+  section a { color: var(--accent2); }
+
+  /* Problem / Pain section */
+  .pain-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin: 32px 0;
+  }
+  .pain-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+  }
+  .pain-card .emoji { font-size: 1.5em; margin-bottom: 8px; }
+  .pain-card h4 { margin-top: 0; }
+  .pain-card p { font-size: 0.85em; margin-bottom: 0; }
+
+  /* Solution / Capabilities */
+  .cap-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin: 24px 0;
+  }
+  .cap-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    font-size: 0.9em;
+  }
+  .cap-item strong { color: var(--fg); display: block; margin-bottom: 4px; }
+  .cap-item span { color: var(--dim); }
+
+  /* Honest section */
+  .honest-list {
+    list-style: none;
+    padding: 0;
+    margin: 20px 0;
+  }
+  .honest-list li {
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+    color: var(--dim);
+    font-size: 0.9em;
+  }
+  .honest-list li:last-child { border-bottom: none; }
+  .honest-list strong { color: var(--fg); }
+
+  /* Quickstart */
+  .code-block {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 0.85em;
+    color: var(--accent2);
+    line-height: 1.5;
+    overflow-x: auto;
+    margin: 16px 0;
+  }
+  .code-block .comment { color: var(--muted); }
+  .code-block .prompt { color: var(--dim); }
+
+  /* Testimonial area */
+  .testimonial {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 8px 8px 0;
+    padding: 20px 24px;
+    margin: 24px 0;
+  }
+  .testimonial p { font-style: italic; color: var(--fg); font-size: 0.95em; margin-bottom: 8px; }
+  .testimonial .attribution { color: var(--muted); font-size: 0.85em; font-style: normal; }
+
+  /* Divider */
+  .divider { border: none; border-top: 1px solid var(--border); margin: 0; }
+
+  /* Header for each section on the section element */
+  section + hr.divider { margin-top: -1px; }
+
+  /* Donation */
+  .donate-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 32px;
+    text-align: center;
+    margin-top: 16px;
+  }
+  .donate-box p { max-width: 500px; margin: 0 auto 20px; }
+  .donate-box .heart { color: var(--orange); }
+
+  /* Footer */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 32px 0;
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.85em;
+  }
+  footer a { color: var(--dim); text-decoration: none; }
+  footer a:hover { color: var(--accent2); }
+
+  /* Responsive */
+  @media (max-width: 640px) {
+    .hero h2 { font-size: 2em; }
+    .pain-grid, .cap-grid { grid-template-columns: 1fr; }
+    nav a { margin-left: 12px; font-size: 0.8em; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="container">
+    <h1>clavus</h1>
+    <div>
+      <a href="#capabilities">What It Does</a>
+      <a href="#start">Get Started</a>
+      <a href="#donate">Support</a>
+      <a href="https://github.com/castle-queenside/clavus" target="_blank">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<main>
+
+<!-- Hero -->
+<div class="hero">
+  <div class="container">
+    <h2>Version control for<br>Ableton Live projects.</h2>
+    <p>Snapshot your work. Add notes your collaborator can see. Sync changes<br>through a relay you control. No cloud subscription. No plugins. No accounts.</p>
+    <div class="hero-buttons">
+      <a class="btn btn-primary" href="#start">Try It &darr;</a>
+      <a class="btn btn-secondary" href="https://github.com/castle-queenside/clavus" target="_blank">View on GitHub</a>
+    </div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- The Problem -->
+<section>
+  <div class="container">
+    <h3>If you've made music in Ableton with another person, you know the pain.</h3>
+
+    <div class="pain-grid">
+      <div class="pain-card">
+        <div class="emoji">🔁</div>
+        <h4>"Can you send me the latest version?"</h4>
+        <p>USB sticks, Dropbox folders full of&nbsp;Project_Final_2.als, Project_FINAL_3.als, Project_FINAL_3_mix2.als. Nobody knows which one is current.</p>
+      </div>
+      <div class="pain-card">
+        <div class="emoji">💬</div>
+        <h4>"That fill at bar 48 — fix it"</h4>
+        <p>Endless text threads, voice notes, and emails. "The kick at 1:23." "Which kick?" "The one I mentioned last week." Cues get lost, context evaporates.</p>
+      </div>
+      <div class="pain-card">
+        <div class="emoji">🔄</div>
+        <h4>"It sounded better two weeks ago"</h4>
+        <p>No version history. You save over your arrangement, bounce stems, print the mix, and&hellip; you want the old bass part back. Too late. It's gone.</p>
+      </div>
+      <div class="pain-card">
+        <div class="emoji">🖥️</div>
+        <h4>"Can you open this on my Windows machine?"</h4>
+        <p>You work on a Mac at the studio and a PC at home. Or your collaborator is on a different OS. Projects move between machines, plugins go missing, paths break.</p>
+      </div>
+    </div>
+
+    <p style="text-align:center; margin-top: 32px; font-size: 1.05em; color: var(--fg);">
+      Clavus doesn't fix all of this. But it fixes the ones that waste the most time.
+    </p>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- What it does -->
+<section id="capabilities">
+  <div class="container">
+    <h3>What Clavus Actually Does</h3>
+
+    <p>It snapshots your <code>.als</code> file — the whole thing, content-addressed by SHA256 — and lets you sync those snapshots between machines through a lightweight relay. It also lets you pin timeline comments (cues) that travel with the project. That's it. That's the core.</p>
+
+    <h4>Time-travel for your project</h4>
+    <p>Press <strong>S</strong> in the dashboard, and Clavus saves a complete, recoverable snapshot of your project at that moment. Every snapshot knows its parent — you can walk backwards through your arrangement passes, restores, experiments, and dead ends. Press <strong>T</strong> to jump back to any of them. Press <strong>d</strong> to see exactly what changed between two snapshots (tracks added, devices changed, clips moved).</p>
+
+    <h4>Collaboration that works like version control (because it is)</h4>
+    <p>One person runs a relay on their machine. Everyone else connects to it via Tailscale. Push your snapshots up, pull theirs down. Work offline, sync when ready. If two people edit the same thing, you get a conflict marker — resolve it with one keypress. Your work is never overwritten without you choosing.</p>
+
+    <h4>Cues that survive sync</h4>
+    <p>Add a note at bar 48. Your collaborator pulls, sees it on their timeline. Reply to it. Mark it resolved. Inject cues as Ableton markers with one command. No more "what I meant was&hellip;" three messages later.</p>
+
+    <h4>Stems, too</h4>
+    <p>Export your tracks as WAVs, import them into Clavus, push them to the relay. Your collaborator pulls and gets stems materialized alongside the project. Useful for sharing wet/dry splits, reference mixes, or stem masters.</p>
+
+    <div class="cap-grid">
+      <div class="cap-item"><strong>Snapshots</strong><span>Complete, recoverable .als checkpoints with parent chain</span></div>
+      <div class="cap-item"><strong>Sync</strong><span>Push/pull through a self-hosted relay, LAN or Tailscale</span></div>
+      <div class="cap-item"><strong>Cues</strong><span>Timeline comments that inject as Ableton markers</span></div>
+      <div class="cap-item"><strong>Stems</strong><span>WAV file sync alongside the project</span></div>
+      <div class="cap-item"><strong>Diff</strong><span>See tracks, devices, clips changed between snapshots</span></div>
+      <div class="cap-item"><strong>Restore</strong><span>Roll back to any previous snapshot</span></div>
+      <div class="cap-item"><strong>Conflict resolution</strong><span>Warn on simultaneous edits, pick whose wins</span></div>
+      <div class="cap-item"><strong>Backup</strong><span>Full store archive with auto-rotating index backups</span></div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- Honest section -->
+<section style="background: var(--surface); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);">
+  <div class="container">
+    <h3>Let's be straight with each other.</h3>
+
+    <p>Clavus is useful. Really useful, if you work the way it expects you to work. But it's not magic, and it's not for everyone. Here's what you should know before you install it.</p>
+
+    <h4>What Clavus is</h4>
+    <ul class="honest-list">
+      <li><strong>A terminal app.</strong> It has a text-based UI (TUI) that runs in your terminal. It's keyboard-driven, fast, and stable. It's not a GUI window you can drag around. If you're comfortable with a terminal, it will feel natural. If you're not, there's a learning curve — and we're honest about that. The payoff is that it works reliably on Mac and Windows without Electron, without a browser, without 200MB of dependencies.</li>
+      <li><strong>Self-hosted.</strong> You run the relay. Your data stays on machines you control. There's no Clavus cloud. There's no account. There's no subscription. There's also no one to call if your relay goes down — you own it.</li>
+      <li><strong>A sync tool for .als files, not a DAW replacement.</strong> It snapshots what Ableton saves. It doesn't merge arrangements. It doesn't resolve plugin conflicts. It doesn't let two people edit the same clip simultaneously. It saves versions of your project and moves them between machines.</li>
+    </ul>
+
+    <h4>What Clavus is not</h4>
+    <ul class="honest-list">
+      <li><strong>Not a cloud service.</strong> No sign-up, no data on our servers, no "we'll be in touch about your subscription." You download it, you run it, you own it.</li>
+      <li><strong>Not a plugin.</strong> No VST, no AU, no Max for Live device. You don't install it inside Ableton. You work in Ableton as always, then snapshot and sync from your terminal.</li>
+      <li><strong>Not real-time.</strong> There's no live co-editing. Push and pull are explicit actions. This is actually a feature — you work offline, sync when ready, resolve conflicts on your own time.</li>
+      <li><strong>Not polished like a commercial product.</strong> Clavus is built by a producer who needed this to exist and figured other producers might too. The UI is functional, the documentation is honest, and the code is MIT-licensed. You can read every line.</li>
+    </ul>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- Use cases -->
+<section>
+  <div class="container">
+    <h3>Who Actually Benefits</h3>
+
+    <div class="testimonial">
+      <p>"I produce on a Mac in the studio and mix on a Windows PC at home. Before Clavus, I was emailing myself .als files. Now I push from the studio, pull at home, and never wonder which version I'm opening."</p>
+      <div class="attribution">— producer, studio ↔ home workflow</div>
+    </div>
+
+    <div class="testimonial">
+      <p>"My co-writer lives in another city. We used to send screenshots of arrangement changes. Now we snapshot after each session, push to the relay, and the other person pulls the next morning. The cue system replaced an entire WhatsApp thread."</p>
+      <div class="attribution">— remote co-writer pair</div>
+    </div>
+
+    <div class="testimonial">
+      <p>"I was working on a remix and made 11 versions in three days. I could not remember what version 6 sounded like. With Clavus, every 'save as new version' is just a snapshot. I can go back to any of them in one keypress."</p>
+      <div class="attribution">— solo producer, heavy iterater</div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- Quick start -->
+<section id="start">
+  <div class="container">
+    <h3>Get Clavus Running in 5 Minutes</h3>
+
+    <p>You need Python 3.10+, <a href="https://tailscale.com/download">Tailscale</a> (free tier), and an Ableton project to try it with.</p>
+
+    <h4>1. Install</h4>
+    <div class="code-block">
+      <span class="prompt">$</span> git clone https://github.com/castle-queenside/clavus<br>
+      <span class="prompt">$</span> cd clavus<br>
+      <span class="prompt">$</span> pip install -e . <span class="comment"># or: py -m pip install -e . (Windows)</span>
+    </div>
+
+    <h4>2. Add a project</h4>
+    <div class="code-block">
+      <span class="prompt">$</span> clavus init /path/to/your/project.als
+    </div>
+
+    <h4>3. Open the dashboard</h4>
+    <div class="code-block">
+      <span class="prompt">$</span> clavus tui
+    </div>
+
+    <p>Press <strong>S</strong> to snapshot, <strong>c</strong> to add a cue, <strong>T</strong> to restore. Read the full guide at <a href="https://github.com/castle-queenside/clavus/blob/main/README.md">README.md</a>.</p>
+
+    <h4>To collaborate</h4>
+    <p>One person runs <strong>clavus share --port 7891</strong> to start the relay. Others run <strong>clavus join http://their-tailscale-url:7890</strong>. Then pull, push, repeat. Full details in the <a href="docs/collaborator-quickstart.md">Collaborator Quickstart</a>.</p>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- Donate -->
+<section id="donate">
+  <div class="container">
+    <h3>Support Clavus</h3>
+
+    <div class="donate-box">
+      <p class="heart" style="font-size: 2em; margin-bottom: 12px;">&hearts;</p>
+      <p>Clavus is free, open-source (MIT), and will always be free. We've put hundreds of hours into getting this right—debugging cross-platform sync issues, building the TUI, testing with real projects, and writing honest documentation.</p>
+      <p>If Clavus saves you time, frustration, or a lost arrangement, consider throwing a few dollars our way. It helps justify the late nights to our families.</p>
+      <div class="hero-buttons" style="margin-top: 20px;">
+        <a class="btn btn-primary" href="https://github.com/sponsors/castle-queenside" target="_blank">Sponsor on GitHub</a>
+        <a class="btn btn-ghost" href="https://github.com/castle-queenside/clavus" target="_blank">Star on GitHub</a>
+      </div>
+      <p style="margin-top: 16px; font-size: 0.85em; color: var(--muted);">No tiers, no rewards tiers, no "exclusive content." Just a donation if you find it useful.</p>
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- Footer -->
+<footer>
+  <div class="container">
+    <p><a href="https://github.com/castle-queenside/clavus">clavus</a> &mdash; MIT licensed &mdash; built by <a href="https://github.com/castle-queenside">castle-queenside</a></p>
+    <p style="margin-top: 8px;">Made for producers who need their projects to follow them between machines.</p>
+  </div>
+</footer>
+
+</main>
+</body>
+</html>
