@@ -340,9 +340,18 @@ class BlobStore:
         # duplicate snapshots have the same hash, and overwriting would
         # trigger self-referencing parent protection (parent == hash).
         meta_path = self.objects_dir / snapshot.hash[:2] / f"{snapshot.hash}.meta"
-        if not meta_path.exists():
-            self._write_snapshot_meta(snapshot)
+        if meta_path.exists():
+            # Return the EXISTING snapshot so callers get the correct
+            # hash, parent, and chain position.  Returning a fresh
+            # Snapshot with a caller-supplied parent would let callers
+            # clobber HEAD to an old root (parent=None), destroying the
+            # chain.  See Bug B in the sync postmortem.
+            existing = self.load_snapshot(snapshot.hash)
+            if existing:
+                return existing
+            # Fall through — meta exists but is corrupt; overwrite it.
 
+        self._write_snapshot_meta(snapshot)
         return snapshot
 
     def load_snapshot(self, hash_str: str) -> Optional[Snapshot]:
@@ -620,6 +629,81 @@ class BlobStore:
         return False
 
     # ── Index (Active Project) ──
+
+    def count_chain(self, head: str | None) -> int:
+        """Count reachable snapshots from a given HEAD."""
+        if not head:
+            return 0
+        seen: set[str] = set()
+        current = head
+        n = 0
+        while current and current not in seen:
+            seen.add(current)
+            snap = self.load_snapshot(current)
+            if not snap:
+                break
+            n += 1
+            if snap.parent == current:
+                break
+            current = snap.parent
+        return n
+
+    def set_project_head(self, project: ClavusProject, new_head: str,
+                         source: str = "unknown") -> bool:
+        """Set HEAD for a project with validation and tracing.
+
+        Centralized setter — every HEAD mutation should go through here.
+        Logs the change to head_trace.log, warns if the chain shrinks,
+        and validates that the new head snapshot actually exists.
+
+        Returns True if the update was applied, False if rejected.
+        """
+        import traceback
+        old_head = project.head
+        old_chain = self.count_chain(old_head) if old_head else 0
+        new_chain = self.count_chain(new_head)
+
+        # Validate: new head snapshot must exist
+        if new_head and not self.load_snapshot(new_head):
+            self._trace_head(
+                f"REJECTED: snapshot {new_head[:12]} not found "
+                f"(source={source}, project={project.name})"
+            )
+            return False
+
+        # Reject: chain should never shrink on a normal pull/push/auto-snapshot.
+        # The only legitimate case is an explicit restore to an older snapshot.
+        # Auto-snapshot and sync operations must never shrink the chain.
+        _ALLOW_SHRINK = {"restore", "restore-cli"}
+        if old_chain > 0 and new_chain < old_chain and source not in _ALLOW_SHRINK:
+            self._trace_head(
+                f"REJECTED: chain would shrink {old_chain}→{new_chain} "
+                f"({old_head[:12] if old_head else 'none'}→{new_head[:12]}) "
+                f"source={source} project={project.name}"
+            )
+            return False
+
+        # Trace every mutation
+        self._trace_head(
+            f"HEAD {old_head[:12] if old_head else 'none'}→{new_head[:12]} "
+            f"chain={old_chain}→{new_chain} source={source} project={project.name}"
+        )
+
+        project.head = new_head
+        self.set_index(project)
+        return True
+
+    def _trace_head(self, message: str) -> None:
+        """Append a line to head_trace.log for debugging HEAD corruption."""
+        try:
+            import datetime
+            trace_path = self.root / "head_trace.log"
+            ts = datetime.datetime.now().isoformat()
+            trace_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(trace_path, "a") as f:
+                f.write(f"{ts} {message}\n")
+        except Exception:
+            pass
 
     def set_index(self, project: ClavusProject) -> None:
         """Set the active tracked project in the index."""

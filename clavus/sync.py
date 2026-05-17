@@ -1033,8 +1033,7 @@ def pull_from_remote(store: BlobStore, proj: ClavusProject, remote: Remote, outp
             # with no guard on the subsequent push).
             relay_head = client.get_relay_head(proj.name)
         if relay_head:
-            proj.head = relay_head
-            store.set_index(proj)
+            store.set_project_head(proj, relay_head, source="pull-from-remote")
             # Verify it stuck
             verify = store.get_index(proj.name)
             if not verify or not verify.head:

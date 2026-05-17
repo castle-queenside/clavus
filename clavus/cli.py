@@ -1053,10 +1053,9 @@ def init_project(path_str: str | None, auto_confirm: bool = False) -> tuple[Opti
     )
 
     snap = store.save_snapshot(project, "Initial import", parent=None)
-    clavus_proj.head = snap.hash
     store.update_ref("HEAD", snap.hash)
     store.update_ref("refs/tags/initial", snap.hash)
-    store.set_index(clavus_proj)
+    store.set_project_head(clavus_proj, snap.hash, source="init")
 
     # Set as last project
     if store.index_path.exists():
@@ -1232,10 +1231,9 @@ def cmd_init(args: argparse.Namespace) -> None:
     )
 
     snap = store.save_snapshot(project, "Initial import", parent=None)
-    clavus_proj.head = snap.hash
     store.update_ref("HEAD", snap.hash)
     store.update_ref(f"refs/tags/initial", snap.hash)
-    store.set_index(clavus_proj)
+    store.set_project_head(clavus_proj, snap.hash, source="init-cli")
 
     # ── Done ──
     print(f"[ok] Initialized Clavus project '{clavus_proj.name}'")
@@ -1364,6 +1362,22 @@ def create_snapshot(message: str, allow_frozen: bool = True) -> tuple[Optional[s
         else:
             logs.append(f"  [WARN]  {frozen_count} frozen track(s) — snapshots may not restore on other platforms")
 
+    # Guard: if a snapshot already exists for this .als content, skip.
+    # Prevents recycling an old root snapshot and destroying the chain.
+    if proj.head:
+        raw_als = als_path.read_bytes()
+        current_als_hash = hashlib.sha256(raw_als).hexdigest()
+        prev = store.load_snapshot(proj.head)
+        if prev and prev.als_hash == current_als_hash:
+            logs.append(f"[WARN]  No changes — {proj.name}.als is identical to last snapshot")
+            return None, logs
+        existing_meta = store.objects_dir / current_als_hash[:2] / f"{current_als_hash}.meta"
+        if existing_meta.exists():
+            existing = store.load_snapshot(current_als_hash)
+            if existing:
+                logs.append(f"[WARN]  Snapshot {current_als_hash[:10]} already exists for this .als state")
+                return existing.hash, logs
+
     snap = store.save_snapshot(
         project, message=message, parent=proj.head, tags=[],
     )
@@ -1372,14 +1386,8 @@ def create_snapshot(message: str, allow_frozen: bool = True) -> tuple[Optional[s
     if not snap.als_hash:
         logs.append(f"  [WARN]  Snapshot saved but .als file has no backup — restore will not be possible")
 
-    prev = store.load_snapshot(proj.head) if proj.head else None
-    if prev and snap.als_hash and snap.als_hash == prev.als_hash:
-        logs.append(f"[WARN]  No changes — {proj.name}.als is identical to last snapshot")
-        return None, logs
-
     store.update_ref("HEAD", snap.hash)
-    proj.head = snap.hash
-    store.set_index(proj)
+    store.set_project_head(proj, snap.hash, source="create-snapshot")
 
     if prev:
         prev_project = store.load_project(prev.hash)
@@ -1442,6 +1450,24 @@ def cmd_snapshot(args: argparse.Namespace) -> None:
                 print("-- Snapshot cancelled.")
                 return
 
+    # Guard: if a snapshot already exists for this .als content, skip.
+    # Prevents recycling an old root snapshot and destroying the chain.
+    if proj.head:
+        raw_als = als_path.read_bytes()
+        current_als_hash = hashlib.sha256(raw_als).hexdigest()
+        prev = store.load_snapshot(proj.head)
+        if prev and prev.als_hash == current_als_hash:
+            print(f"[WARN]  No changes detected — project state is identical to last snapshot.")
+            print(f"   Current HEAD: {prev.short_hash()} — '{prev.message}'")
+            return
+        existing_meta = store.objects_dir / current_als_hash[:2] / f"{current_als_hash}.meta"
+        if existing_meta.exists():
+            existing = store.load_snapshot(current_als_hash)
+            if existing:
+                print(f"[WARN]  Snapshot {current_als_hash[:10]} already exists for this .als state")
+                print(f"   '{existing.message}'")
+                return
+
     # Create snapshot
     notes_arg = getattr(args, 'notes', None) or ""
     snap = store.save_snapshot(
@@ -1452,17 +1478,9 @@ def cmd_snapshot(args: argparse.Namespace) -> None:
         notes=notes_arg,
     )
 
-    # Check if anything actually changed (compare raw .als bytes, not parsed structure)
-    prev = store.load_snapshot(proj.head) if proj.head else None
-    if prev and snap.als_hash and snap.als_hash == prev.als_hash:
-        print(f"[WARN]  No changes detected — project state is identical to last snapshot.")
-        print(f"   Current HEAD: {snap.short_hash()} — '{store.load_snapshot(proj.head).message if store.load_snapshot(proj.head) else ''}'")
-        return
-
     # Update references
     store.update_ref("HEAD", snap.hash)
-    proj.head = snap.hash
-    store.set_index(proj)
+    store.set_project_head(proj, snap.hash, source="snapshot-cli")
 
     # Show diff from previous snapshot
     if args.parent:
@@ -2822,9 +2840,8 @@ def cmd_checkout(args: argparse.Namespace) -> None:
 
     # Update project to point to new branch
     proj.branch = args.name
-    proj.head = branch_head
     store.update_ref("HEAD", branch_head)
-    store.set_index(proj)
+    store.set_project_head(proj, branch_head, source="branch")
 
     snap = store.load_snapshot(branch_head)
     msg = f" — '{snap.message}'" if snap else ""
@@ -2887,9 +2904,8 @@ def cmd_merge(args: argparse.Namespace) -> None:
         # Fast-forward: current is ancestor of merge_branch
         if not args.no_ff:
             # Fast-forward: just move HEAD forward
-            proj.head = merge_head
             store.update_ref("HEAD", merge_head)
-            store.set_index(proj)
+            store.set_project_head(proj, merge_head, source="merge-ff")
             print(f"⏩ Fast-forward merged '{args.branch}' into '{proj.branch}'")
             print(f"   {current_head[:8]}..{merge_head[:8]}")
             return
@@ -2923,10 +2939,9 @@ def cmd_merge(args: argparse.Namespace) -> None:
         meta_path.write_text(json.dumps(data, indent=2))
 
     # Update refs
-    proj.head = snap.hash
     store.update_ref("HEAD", snap.hash)
     store.update_ref(f"heads/{proj.branch}", snap.hash)
-    store.set_index(proj)
+    store.set_project_head(proj, snap.hash, source="merge")
 
     base_msg = f" ({merge_base[:8]})" if merge_base else ""
     print(f"🔀 Merged '{args.branch}' into '{proj.branch}'")
@@ -3585,8 +3600,7 @@ def cmd_pull(args: argparse.Namespace) -> None:
                         )
                         if snap.hash != proj.head:
                             store.update_ref("HEAD", snap.hash)
-                            proj.head = snap.hash
-                            store.set_index(proj)
+                            store.set_project_head(proj, snap.hash, source="auto-snapshot-cli")
                             print(f"📸 Auto-snapshot {snap.hash[:8]} (local changes saved)")
         except Exception:
             pass
@@ -3861,8 +3875,7 @@ def cmd_restore(args: argparse.Namespace) -> None:
 
     # Update HEAD to point at this snapshot
     store.update_ref("HEAD", hash_str)
-    proj.head = hash_str
-    store.set_index(proj)
+    store.set_project_head(proj, hash_str, source="restore-cli")
     print(f"   HEAD updated to {snap.short_hash()}")
 
 

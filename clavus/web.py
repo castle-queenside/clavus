@@ -313,10 +313,9 @@ async def init_project(path: str = Query(..., description="Path to .als file or 
     )
 
     snap = store.save_snapshot(project, "Initial import", parent=None)
-    clavus_proj.head = snap.hash
     store.update_ref("HEAD", snap.hash)
     store.update_ref(f"refs/tags/initial", snap.hash)
-    store.set_index(clavus_proj)
+    store.set_project_head(clavus_proj, snap.hash, source="init")
 
     return {
         "success": True,
@@ -685,8 +684,7 @@ async def restore_snapshot_endpoint(
 
     # Update HEAD
     store.update_ref("HEAD", hash_str)
-    proj.head = hash_str
-    store.set_index(proj)
+    store.set_project_head(proj, hash_str, source="restore")
 
     snap_time = time.strftime("%Y-%m-%d %H:%M", time.localtime(snap.timestamp))
     return {
@@ -740,8 +738,7 @@ async def create_snapshot_endpoint(
 
     # Update references
     store.update_ref("HEAD", snap.hash)
-    proj.head = snap.hash
-    store.set_index(proj)
+    store.set_project_head(proj, snap.hash, source="snapshot")
 
     return {
         "status": "ok",
@@ -1310,7 +1307,7 @@ def _sync_push_snapshots_impl(body: SyncPushSnapshotsBody, name: str):
         if new_head:
             if body.force:
                 # Force push: overwrite HEAD unconditionally
-                proj.head = new_head
+                store.set_project_head(proj, new_head, source="push-snapshots-force")
             else:
                 # Only update if the relay's HEAD is older (or unset)
                 current_head = proj.head
@@ -1322,8 +1319,7 @@ def _sync_push_snapshots_impl(body: SyncPushSnapshotsBody, name: str):
                 newest_time = newest.get("timestamp", 0)
                 if newest_time > current_time or not current_head:
                     store.update_ref("HEAD", new_head)
-                    proj.head = new_head
-        store.set_index(proj)
+                    store.set_project_head(proj, new_head, source="push-snapshots")
 
     return {"status": "ok", "imported": imported}
 
@@ -1627,6 +1623,110 @@ def _get_tailscale_url(port: int = 7890) -> str:
 # ─── Web companion server (run_web_server) removed — use relay ──
 
 
+def _repair_orphaned_chains() -> int:
+    """Walk all snapshot meta files and advance HEAD to chain tips.
+
+    If a snapshot's parent exists in a project's chain but the snapshot
+    itself isn't reachable from HEAD (e.g. because HEAD was clobbered
+    back to an older snapshot), advance HEAD to the tip of the orphan
+    chain so those snapshots become reachable again.
+
+    Returns the number of projects whose HEAD was advanced.
+    """
+    store = BlobStore()
+    if not store.objects_dir.exists():
+        return 0
+
+    # Load every snapshot meta into a dict: hash → Snapshot
+    all_snaps: dict[str, Snapshot] = {}
+    for meta_file in store.objects_dir.rglob("*.meta"):
+        try:
+            data = json.loads(meta_file.read_text())
+            h = data.get("hash", "")
+            if h and h not in all_snaps:
+                all_snaps[h] = Snapshot(
+                    hash=h,
+                    timestamp=data.get("timestamp", 0.0),
+                    message=data.get("message", ""),
+                    parent=data.get("parent"),
+                    project_path=data.get("project_path", ""),
+                    track_count=data.get("track_count", 0),
+                    bpm=data.get("bpm", 120.0),
+                    tags=data.get("tags", []),
+                    als_hash=data.get("als_hash"),
+                    content_hash=data.get("content_hash"),
+                    sample_hashes=data.get("sample_hashes", []),
+                    sample_paths=data.get("sample_paths", {}),
+                )
+        except Exception:
+            continue
+
+    if not all_snaps:
+        return 0
+
+    # Build child→parent and parent→children maps
+    children_of: dict[str, list[str]] = {}
+    for h, snap in all_snaps.items():
+        if snap.parent and snap.parent in all_snaps:
+            children_of.setdefault(snap.parent, []).append(h)
+
+    repaired = 0
+    index_data = json.loads(store.index_path.read_text()) if store.index_path.exists() else {}
+
+    for proj_name, proj_dict in index_data.items():
+        if proj_name.startswith("_"):
+            continue
+        head = proj_dict.get("head", "")
+        if not head or head not in all_snaps:
+            continue
+
+        # Walk from HEAD, collect reachable hashes
+        reachable: set[str] = set()
+        current = head
+        while current and current not in reachable:
+            reachable.add(current)
+            snap = all_snaps.get(current)
+            if not snap or not snap.parent or snap.parent == current:
+                break
+            current = snap.parent
+
+        # Find orphans whose parent is in the reachable set
+        orphans = [h for h in all_snaps
+                   if h not in reachable and all_snaps[h].parent in reachable]
+        if not orphans:
+            continue
+
+        # Follow orphan chain(s) to their tips
+        best_tip = head
+        best_depth = len(reachable)
+        for orphan in orphans:
+            tip = orphan
+            depth = 0
+            while tip in children_of:
+                # Pick the first child (chain shouldn't fork, but handle it)
+                next_gen = [c for c in children_of[tip] if c not in reachable]
+                if not next_gen:
+                    break
+                tip = next_gen[0]
+                depth += 1
+                # Safety: don't loop forever
+                if depth > 1000:
+                    break
+            if len(reachable) + depth > best_depth:
+                best_tip = tip
+                best_depth = len(reachable) + depth
+
+        if best_tip != head:
+            proj_dict["head"] = best_tip
+            repaired += 1
+            print(f"  🔗 Repaired orphan chain: {proj_name} HEAD {head[:10]} → {best_tip[:10]}")
+
+    if repaired:
+        store._write_json(store.index_path, index_data)
+
+    return repaired
+
+
 def run_relay_server(host: str = "0.0.0.0", port: int = 7890, share_code: str = "", allowed_projects: list[str] | None = None) -> None:
     """Run the Clavus relay server — API + WebSocket for collaboration.
 
@@ -1695,6 +1795,12 @@ def run_relay_server(host: str = "0.0.0.0", port: int = 7890, share_code: str = 
     print()
     print(f"  Press Ctrl+C to stop.")
     print()
+
+    # Repair any orphaned snapshot chains before accepting connections.
+    # If HEAD was clobbered back to an old snapshot, orphan chains exist
+    # in the object store that should be reachable.
+    _repair_orphaned_chains()
+
     try:
         uvicorn.run(app, host=host, port=port, log_level="warning")
     except SystemExit:

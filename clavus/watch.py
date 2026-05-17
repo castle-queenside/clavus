@@ -254,8 +254,7 @@ def _take_snapshot(
 
     # Final check: store the snapshot hash
     store.update_ref("HEAD", snap.hash)
-    proj.head = snap.hash
-    store.set_index(proj)
+    store.set_project_head(proj, snap.hash, source="cmd-snapshot")
 
     # Build summary
     if prev:
@@ -293,6 +292,12 @@ def watch_once(
     if prev and prev.als_hash == current_als_hash:
         return False  # no change
 
+    # Guard: skip if a snapshot already exists for this .als state.
+    # Prevents recycling an old root snapshot and destroying the chain.
+    existing_meta = store.objects_dir / current_als_hash[:2] / f"{current_als_hash}.meta"
+    if existing_meta.exists():
+        return False  # snapshot already exists for this .als content
+
     try:
         project = parse_als(als_path)
     except Exception:
@@ -305,8 +310,7 @@ def watch_once(
     )
 
     store.update_ref("HEAD", snap.hash)
-    proj.head = snap.hash
-    store.set_index(proj)
+    store.set_project_head(proj, snap.hash, source="auto-snapshot-watch")
 
     if verbose:
         print(f"📸 Auto-snapshot: {snap.short_hash()} — {project.track_count} tracks @ {project.bpm}bpm")

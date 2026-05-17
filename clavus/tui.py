@@ -2738,25 +2738,40 @@ class ClavusApp(App):
 
             # Auto-snapshot local work before overwriting with remote changes.
             # This ensures the user can always go back to what they had.
+            #
+            # Safety checks (see sync postmortem Bug A + Bug B):
+            #  1. Skip if root_als is None/empty (.cfg projects, bundles, etc.)
+            #  2. Skip if a snapshot meta already exists for this .als hash —
+            #     re-snapshotting would recycle an old hash and destroy the chain.
+            #  3. Compare .als hash to HEAD snapshot's als_hash (not head directly).
             try:
-                als_path = Path(proj_index.root_als)
-                if als_path.exists() and proj_index.head:
-                    raw_als = als_path.read_bytes()
-                    current_hash = hashlib.sha256(raw_als).hexdigest()
-                    if current_hash != proj_index.head:
-                        from clavus import parse_als
-                        project = parse_als(als_path)
-                        if project:
-                            snap = self.store.save_snapshot(
-                                project,
-                                message="auto-snapshot before sync",
-                                parent=proj_index.head,
-                            )
-                            if snap.hash != proj_index.head:
-                                self.store.update_ref("HEAD", snap.hash)
-                                proj_index.head = snap.hash
-                                self.store.set_index(proj_index)
-                                self._log_event(f"● auto-snapshot {snap.hash[:8]} (local changes saved)")
+                if proj_index.root_als and proj_index.head:
+                    als_path = Path(proj_index.root_als)
+                    if als_path.exists():
+                        raw_als = als_path.read_bytes()
+                        current_hash = hashlib.sha256(raw_als).hexdigest()
+                        # Guard: skip if a snapshot already exists for this .als state.
+                        # Without this, save_snapshot() returns the existing snapshot
+                        # (which may have parent=None) and the chain gets destroyed.
+                        existing_meta = self.store.objects_dir / current_hash[:2] / f"{current_hash}.meta"
+                        if existing_meta.exists():
+                            self._log_event(f"● auto-snapshot skipped: snapshot exists for .als {current_hash[:8]}")
+                        else:
+                            head_snap = self.store.load_snapshot(proj_index.head)
+                            head_als_hash = head_snap.als_hash if head_snap else None
+                            if current_hash != head_als_hash:
+                                from clavus import parse_als
+                                project = parse_als(als_path)
+                                if project:
+                                    snap = self.store.save_snapshot(
+                                        project,
+                                        message="auto-snapshot before sync",
+                                        parent=proj_index.head,
+                                    )
+                                    if snap.hash != proj_index.head:
+                                        self.store.update_ref("HEAD", snap.hash)
+                                        self.store.set_project_head(proj_index, snap.hash, source="auto-snapshot-pull")
+                                        self._log_event(f"● auto-snapshot {snap.hash[:8]} (local changes saved)")
             except Exception:
                 pass  # best-effort — don't block pull on snapshot failure
 
@@ -2773,46 +2788,26 @@ class ClavusApp(App):
             self._sync_progress = ""
             self._update_header()
 
-            # Fast path: localhost -> data's already on disk, just re-read
-            # Fast path: localhost -> data's already on disk, just re-read
-            is_localhost = remote.url.startswith("http://localhost") or remote.url.startswith("http://127.0.0.1")
-            relay_live = True
-            if is_localhost:
-                try:
-                    import urllib.request
-                    r = urllib.request.urlopen(f"{remote.url.rstrip('/')}/api/ping", timeout=2)
-                    relay_live = (r.status == 200)
-                except Exception:
-                    relay_live = False
+            # Always use pull_from_remote() so the relay manages HEAD consistently.
+            # The old fast-path for localhost bypassed merging/HEAD-update logic
+            # and caused snapshot chains to appear empty after pull.
             blobs = 0
             failed: list[str] = []
-            if is_localhost:
-                self._load_cues_from_disk()
-                self._load_snapshots_from_disk()
-                cues_n = len(self.cues)
-                snaps_n = len(self.snaps)
-                conflicts_n = sum(1 for c in self.cues if getattr(c, '_conflict', False))
-                # Only pull blobs if relay is running (solo mode: skip entirely)
-                if relay_live:
-                    _, failed = await asyncio.to_thread(pull_snapshot_blobs, self.store, proj_index, remote, _on_blob_progress)
-                else:
-                    self._log_event("solo pull: relay offline, using local data")
-            else:
-                result = await asyncio.to_thread(pull_from_remote, self.store, proj_index, remote)
-                if result.get("error"):
-                    self._peer_reachable = False
-                    self._last_sync = f"\u2b07 \u2717 {time.strftime('%H:%M')}"
-                    self._sync_status = ""
-                    self._sync_progress = ""
-                    self._update_header()
-                    await asyncio.sleep(0)
-                    self._status(f"● {remote.name} unreachable")
-                    self._log_event(f"● {remote.name} unreachable -- pull failed")
-                    return
-                cues_n = result.get("cues", 0)
-                snaps_n = result.get("snapshots", 0)
-                conflicts_n = result.get("conflicts", 0)
-                blobs, failed = pull_snapshot_blobs(self.store, proj_index, remote, _on_blob_progress)
+            result = await asyncio.to_thread(pull_from_remote, self.store, proj_index, remote)
+            if result.get("error"):
+                self._peer_reachable = False
+                self._last_sync = f"\u2b07 \u2717 {time.strftime('%H:%M')}"
+                self._sync_status = ""
+                self._sync_progress = ""
+                self._update_header()
+                await asyncio.sleep(0)
+                self._status(f"● {remote.name} unreachable")
+                self._log_event(f"● {remote.name} unreachable -- pull failed")
+                return
+            cues_n = result.get("cues", 0)
+            snaps_n = result.get("snapshots", 0)
+            conflicts_n = result.get("conflicts", 0)
+            blobs, failed = await asyncio.to_thread(pull_snapshot_blobs, self.store, proj_index, remote, _on_blob_progress)
 
             # Materialize audio samples from store -> project folder
             head_ref = self.store.read_ref("HEAD")
@@ -2956,8 +2951,7 @@ class ClavusApp(App):
                                 )
                                 if snap.hash != proj_index.head:
                                     self.store.update_ref("HEAD", snap.hash)
-                                    proj_index.head = snap.hash
-                                    self.store.set_index(proj_index)
+                                    self.store.set_project_head(proj_index, snap.hash, source="solo-snapshot")
                                     self._log_event(f"● local snapshot {snap.hash[:8]}")
                                     self._last_sync = f"● {time.strftime('%H:%M')}"
                                     self._status(f"samples snapshot saved locally -- use :remotes to pick a remote before pushing")
@@ -2991,25 +2985,38 @@ class ClavusApp(App):
                 return
             # Auto-snapshot local changes before pushing (conflict resolution, cue edits, etc.)
             # This ensures HEAD matches what we're about to send.
+            #
+            # Safety checks (see sync postmortem Bug A + Bug B):
+            #  1. Skip if root_als is None/empty (.cfg projects, bundles, etc.)
+            #  2. Skip if a snapshot meta already exists for this .als hash —
+            #     re-snapshotting would recycle an old hash and destroy the chain.
+            #  3. Compare .als hash to HEAD snapshot's als_hash (not head directly).
             try:
-                als_path = Path(proj_index.root_als)
-                if als_path.exists():
-                    raw_als = als_path.read_bytes()
-                    current_hash = hashlib.sha256(raw_als).hexdigest()
-                    if current_hash != (proj_index.head or ""):
-                        from clavus import parse_als
-                        project = parse_als(als_path)
-                        if project:
-                            snap = self.store.save_snapshot(
-                                project,
-                                message="auto-snapshot before push",
-                                parent=proj_index.head,
-                            )
-                            if snap.hash != proj_index.head:
-                                self.store.update_ref("HEAD", snap.hash)
-                                proj_index.head = snap.hash
-                                self.store.set_index(proj_index)
-                                self._log_event(f"● auto-snapshot {snap.hash[:8]} (local changes saved)")
+                if proj_index.root_als:
+                    als_path = Path(proj_index.root_als)
+                    if als_path.exists():
+                        raw_als = als_path.read_bytes()
+                        current_hash = hashlib.sha256(raw_als).hexdigest()
+                        # Guard: skip if a snapshot already exists for this .als state.
+                        existing_meta = self.store.objects_dir / current_hash[:2] / f"{current_hash}.meta"
+                        if existing_meta.exists():
+                            self._log_event(f"● auto-snapshot skipped: snapshot exists for .als {current_hash[:8]}")
+                        else:
+                            head_snap = self.store.load_snapshot(proj_index.head) if proj_index.head else None
+                            head_als_hash = head_snap.als_hash if head_snap else None
+                            if current_hash != head_als_hash:
+                                from clavus import parse_als
+                                project = parse_als(als_path)
+                                if project:
+                                    snap = self.store.save_snapshot(
+                                        project,
+                                        message="auto-snapshot before push",
+                                        parent=proj_index.head,
+                                    )
+                                    if snap.hash != proj_index.head:
+                                        self.store.update_ref("HEAD", snap.hash)
+                                        self.store.set_project_head(proj_index, snap.hash, source="auto-snapshot-push")
+                                        self._log_event(f"● auto-snapshot {snap.hash[:8]} (local changes saved)")
             except Exception:
                 pass  # best-effort — don't block push on snapshot failure
 
