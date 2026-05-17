@@ -3655,7 +3655,7 @@ def cmd_pull(args: argparse.Namespace) -> None:
             if head:
                 with Spinner("syncing stems..."):
                     from clavus.sync import pull_stems_from_remote
-                    stem_count = pull_stems_from_remote(store, proj, remote)
+                    stem_count, _ = pull_stems_from_remote(store, proj, remote)
                     if stem_count:
                         parts.append(f"{stem_count} stem{'s' if stem_count != 1 else ''}")
                         # Materialize after pull

@@ -1340,11 +1340,13 @@ def push_stems_to_remote(
 def pull_stems_from_remote(
     store: BlobStore, proj: ClavusProject, remote: Remote,
     progress_callback: Callable[[str, int, int], None] | None = None,
-) -> int:
-    """Pull stem files from a remote for the current HEAD. Returns count downloaded."""
+) -> tuple[int, dict | None]:
+    """Pull stem files from a remote for the current HEAD.
+
+    Returns (count_downloaded, manifest_data_dict_or_None)."""
     head = store.read_ref("HEAD")
     if not head:
-        return 0
+        return (0, None)
 
     client = SyncClient(remote.url)
     stem_store = StemStore(proj.name, store)
@@ -1415,20 +1417,20 @@ def pull_stems_from_remote(
                         manifest_data = r3.json()
                 if not manifest_data or not manifest_data.get("stems"):
                     print(f"    No stem manifests found on relay.")
-                    return 0
+                    return (0, None)
 
         if not manifest_data:
-            return 0
+            return (0, None)
 
         stems = manifest_data.get("stems", [])
         if not stems:
-            return 0
+            return (0, None)
 
         # Check which we need locally
         needed = [s for s in stems if not stem_store.has_stem(s["hash"])]
 
         if not needed:
-            return len(stems)
+            return (len(stems), manifest_data)
 
         print(f"  Pulling {len(needed)} stem(s) with {MAX_WORKERS} workers...")
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
