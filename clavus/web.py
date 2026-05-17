@@ -1266,11 +1266,30 @@ def _sync_push_snapshots_impl(body: SyncPushSnapshotsBody, name: str):
         if not snap_hash:
             continue
 
-        # NEVER overwrite existing metadata — parent chains are sacred.
-        # If the relay already has this snapshot (from a prior push), skip it.
+        # Existing snapshots: only update mutable metadata (message, tags, notes).
+        # Parent chains are sacred — never overwrite parent or structural fields.
         meta_dir = store.objects_dir / snap_hash[:2]
         meta_path = meta_dir / f"{snap_hash}.meta"
         if meta_path.exists():
+            existing = store.load_snapshot(snap_hash)
+            if existing:
+                changed = False
+                new_msg = s.get("message", "")
+                new_tags = s.get("tags", [])
+                new_notes = s.get("notes", "")
+                if new_msg and new_msg != existing.message:
+                    existing.message = new_msg
+                    changed = True
+                if new_tags and new_tags != existing.tags:
+                    existing.tags = new_tags
+                    changed = True
+                if new_notes and new_notes != existing.notes:
+                    existing.notes = new_notes
+                    changed = True
+                if changed:
+                    from dataclasses import asdict
+                    meta_path.write_text(json.dumps(asdict(existing), indent=2, default=str))
+                    imported += 1
             continue
 
         meta_dir.mkdir(parents=True, exist_ok=True)
