@@ -129,11 +129,11 @@ That's it. Clavus shows you everything they have available.
 
 ![Clavus TUI dashboard with cues and snapshot history](docs/screenshots/tui-main.jpg)
 
-Dashboard with cue list (left) and snapshot history (right). Press `?` for the full keyboard reference.
+Dashboard with cue list (left) and snapshot history (right).
 
-![Keyboard reference overlay](docs/screenshots/tui-help.jpg)
+![Clavus diff viewer showing track-level changes](docs/screenshots/tui-diff.jpg)
 
-Press `?` at any time to see every keybinding.
+Diff view: see exactly what changed between snapshots — tracks added, devices changed, clips moved.
 
 ---
 
