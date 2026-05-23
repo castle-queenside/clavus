@@ -3234,7 +3234,8 @@ class ClavusApp(App):
                 hlv.focus()
             else:
                 clv.focus()
-            self._update_footer_hint()
+            # Defer hint update to after screen processes the focus change
+            self.call_after_refresh(self._update_footer_hint)
         except NoMatches:
             pass
 
@@ -3258,6 +3259,13 @@ class ClavusApp(App):
                 f"[{a}]enter[/] [{d}]select[/]",
                 f"[{a}]esc[/] [{d}]cancel[/]",
                 f"[{a}]j/k[/] [{d}]nav[/]",
+            ]
+            hint = sep.join(parts) + f" {sep}[{a}]?[/] [{d}]help[/]"
+        elif not self.project:
+            # No project loaded — show init/join hints
+            parts = [
+                f"[{a}]:init <path>[/] [{d}]open[/]",
+                f"[{a}]:join <URL>[/] [{d}]connect[/]",
             ]
             hint = sep.join(parts) + f" {sep}[{a}]?[/] [{d}]help[/]"
         else:
@@ -3615,6 +3623,7 @@ class ClavusApp(App):
             self._render_cues()
             self._render_history()
             self._update_footer()
+            self._update_footer_hint()
         except Exception as e:
             self._status(f"render error: {e}")
 
