@@ -577,7 +577,6 @@ class ClavusApp(App):
         except NoMatches:
             pass
         self._cue_fingerprint = None  # force full rebuild
-        self._snap_fingerprint = None
         self._update_footer()
         self._render()  # rebuild cues list
 
@@ -621,7 +620,6 @@ class ClavusApp(App):
         except NoMatches:
             pass
         self._cue_fingerprint = None
-        self._snap_fingerprint = None
         self._update_footer()
         self._render()
 
@@ -2473,7 +2471,6 @@ class ClavusApp(App):
         self.cues = self._sort_cues(active_cues)
         self.idx = min(self.idx or 0, len(self.cues) - 1) if self.cues else 0
         self._cue_fingerprint = None  # invalidate render cache
-        self._snap_fingerprint = None
 
     def _load_snapshots_from_disk(self):
         """Load snapshot history for the current project from BlobStore."""
@@ -2510,7 +2507,6 @@ class ClavusApp(App):
         ]
         if self.snaps:
             self._last_snap_time = self.snaps[0].timestamp
-        self._snap_fingerprint = None  # invalidate render cache
         self._render_history()
         self._load_sample_counts()  # update header sample counts
 
@@ -3681,24 +3677,21 @@ class ClavusApp(App):
 
     def _render_history(self):
         lv = self.query_one("#hlv", ListView)
-        # Fingerprint: skip rebuild if snapshots haven't changed
-        fp = tuple((s.hash, s.message, s.conflict_message) for s in self.snaps[:10])
-        if fp == getattr(self, '_snap_fingerprint', None):
-            return
-        self._snap_fingerprint = fp
         lv.remove_children()
         if not self.snaps:
-            lv.append(ListItem(Label(f"  [{C['dim']}]no snapshots yet — S to capture[/]")))
-            lv.refresh()
+            lv.append(ListItem(Label(
+                f"\n    [{C['dim']}]no snapshots yet[/]\n"
+                f"    [{C['accent']}]S[/] [{C['dim']}]to capture the current state[/]\n"
+            )))
             return
         for i, s in enumerate(self.snaps[:10]):
             ago = self._time_ago(s.timestamp)
             safe_msg = s.message[:45].replace("[", "\\[").replace("]", "\\]")
             conflict_mark = f" [{C['yellow']}]![/]" if s.conflict_message else ""
 
-            # Tree connector: ▶ for HEAD (current), · for older
+            # HEAD indicator: ▶ in bold teal, older snapshots: · in dim
             if i == 0:
-                dot = f"[bold {C['accent']}]▶[/]"
+                dot = f"[bold][{C['accent']}]▶[/][/]"
             else:
                 dot = f"[{C['dim']}]·[/]"
 
