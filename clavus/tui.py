@@ -311,11 +311,11 @@ class ClavusApp(App):
     #history-list ListView {{ height: 100%; border: none; background: transparent; }}
     #history-list ListItem {{ background: transparent; padding: 0 1; min-height: 1; }}
 
-    #footer {{ height: 1; background: {C['surface']}; padding: 0 1; }}
+    #footer {{ height: 1; background: {C['surface']}; padding: 0 1; border-top: solid {C['accent_dim']}; }}
     #footer.input-mode {{ height: 3; padding: 0; }}
     #footer-keys {{ display: none; }}
-    #footer-status {{ color: {C['fg']}; }}
-    #footer-hint {{ color: {C['muted']}; text-align: right; }}
+    #footer-status {{ color: {C['dim']}; width: auto; margin-right: 2; }}
+    #footer-hint {{ color: {C['accent']}; text-align: right; min-width: 40; }}
     #footer-stats {{ display: none; }}
     #footer-input {{ display: none; width: 100%; height: 3; background: {C['bg']}; border: solid {C['accent']}; color: {C['fg']}; padding: 0 1; }}
     #footer.input-mode #footer-input {{ display: block; }}
@@ -3240,23 +3240,50 @@ class ClavusApp(App):
             pass
 
     def _update_footer_hint(self):
-        """Context-aware hint: shows relevant keys for the focused pane."""
-        hint = "? help"
-        # Remote picker mode
+        """Context-aware key bar with styled separators."""
+        a = C['accent']     # key letter color
+        d = C['dim']         # label text color
+        s = C['muted']       # separator color
+        sep = f" [{s}]│[/] "
+
+        hint = f"[{a}]?[/] [{d}]help[/]"
         if self._remote_picker_active:
-            hint = "enter select  esc cancel  j/k navigate  ? help"
-        # Project picker mode
+            parts = [
+                f"[{a}]enter[/] [{d}]select[/]",
+                f"[{a}]esc[/] [{d}]cancel[/]",
+                f"[{a}]j/k[/] [{d}]nav[/]",
+            ]
+            hint = sep.join(parts) + f" {sep}[{a}]?[/] [{d}]help[/]"
         elif self._project_picker_active:
-            hint = "enter select  esc cancel  j/k navigate  ? help"
+            parts = [
+                f"[{a}]enter[/] [{d}]select[/]",
+                f"[{a}]esc[/] [{d}]cancel[/]",
+                f"[{a}]j/k[/] [{d}]nav[/]",
+            ]
+            hint = sep.join(parts) + f" {sep}[{a}]?[/] [{d}]help[/]"
         else:
             try:
                 hlv = self.query_one("#hlv", ListView)
                 if hlv.has_focus:
-                    hint = "S snap  T restore  e edit  o open  d diff  ? help"
+                    parts = [
+                        f"[{a}]S[/] [{d}]snap[/]",
+                        f"[{a}]T[/] [{d}]restore[/]",
+                        f"[{a}]o[/] [{d}]open[/]",
+                        f"[{a}]d[/] [{d}]diff[/]",
+                    ]
+                    hint = sep.join(parts) + f" {sep}[{a}]?[/] [{d}]help[/]"
                 else:
                     clv = self.query_one("#clv", ListView)
                     if clv.has_focus:
-                        hint = "c cue  r reply  e edit  a assign  o open  S snap  p pull  T history  ? help"
+                        parts = [
+                            f"[{a}]c[/] [{d}]cue[/]",
+                            f"[{a}]r[/] [{d}]reply[/]",
+                            f"[{a}]e[/] [{d}]edit[/]",
+                            f"[{a}]a[/] [{d}]assign[/]",
+                            f"[{a}]S[/] [{d}]snap[/]",
+                            f"[{a}]p[/] [{d}]pull[/]",
+                        ]
+                        hint = sep.join(parts) + f" {sep}[{a}]?[/] [{d}]help[/]"
             except NoMatches:
                 pass
         try:
@@ -3448,7 +3475,15 @@ class ClavusApp(App):
                 self._update_welcome()
                 return
 
-            parts = [f"[bold]{self.project}[/]"]
+            # Show sync progress bar when active
+            if self._sync_status and self._sync_progress:
+                bar = self._progress_bar(self._sync_progress)
+                parts = [self._sync_status, bar]
+            elif self._sync_status:
+                s = self.BRAILLE[self._spinner_idx % len(self.BRAILLE)]
+                parts = [f"{s} {self._sync_status}"]
+            else:
+                parts = [f"[bold]{self.project}[/]"]
             self._update_welcome()  # hide welcome, show cues + history
 
             # Cues — always show, even 0
@@ -3482,12 +3517,12 @@ class ClavusApp(App):
         if not self.project:
             welcome.update(
                 f"\n\n"
-                f"    [{C['accent']}]clavus[/]\n\n"
+                f"    [{C['accent2']}]⬡[/] [{C['accent']}]clavus[/]\n\n"
                 f"    [{C['dim']}]Ableton Live cue management[/]\n"
                 f"    [{C['dim']}]snap and sync your ideas across machines[/]\n\n"
-                f"    [{C['fg']}]open a project[/]:  :init <path>\n"
-                f"    [{C['fg']}]join a relay[/]:    :join <URL>\n\n"
-                f"    [{C['dim']}]S  snapshot   p  pull   ?  help[/]\n"
+                f"    [{C['accent']}]:init <path>[/]  [{C['dim']}]open a project[/]\n"
+                f"    [{C['accent']}]:join <URL>[/]  [{C['dim']}]connect to a relay[/]\n\n"
+                f"    [{C['dim']}]S[/] snapshot   [{C['dim']}]p[/] pull   [{C['dim']}]?[/] help\n"
             )
             welcome.styles.display = "block"
             cues_list.styles.display = "none"
@@ -3548,6 +3583,32 @@ class ClavusApp(App):
         days = int(delta // 86400)
         return f"{days}d ago"
 
+    def _progress_bar(self, progress_str: str) -> str:
+        """Convert 'content:3/10 sample:7/7' into a visual block bar.
+
+        Returns a Rich-markup string like: '████████░░ 75%'.
+        """
+        parts = progress_str.split()
+        total_done = 0
+        total_all = 0
+        for p in parts:
+            if ":" in p:
+                cat, frac = p.split(":", 1)
+                if "/" in frac:
+                    done_str, all_str = frac.split("/", 1)
+                    try:
+                        total_done += int(done_str)
+                        total_all += int(all_str)
+                    except ValueError:
+                        pass
+        if total_all == 0:
+            return ""
+        pct = total_done / total_all
+        bar_width = 12
+        filled = int(bar_width * pct)
+        bar = "█" * filled + "░" * (bar_width - filled)
+        return f"[{C['accent']}]{bar}[/] [{C['dim']}]{int(pct*100)}%[/]"
+
     def _render(self):
         if self._project_picker_active or self._remote_picker_active:
             return  # picker owns the ListView
@@ -3569,7 +3630,10 @@ class ClavusApp(App):
         lv.remove_children()
 
         if not self.cues:
-            lv.append(ListItem(Label(f"  [{C['dim']}]no cues yet — c to place one at the playhead[/]")))
+            lv.append(ListItem(Label(
+                f"\n    [{C['dim']}]no cues yet[/]\n"
+                f"    [{C['accent']}]c[/] [{C['dim']}]to place one at the playhead[/]\n"
+            )))
             return
 
         for i, c in enumerate(self.cues):
@@ -3577,31 +3641,36 @@ class ClavusApp(App):
                 C["green"] if c.status == "resolved" else C["muted"])
             dot = "[ok]" if c.status == "resolved" else "●"
             rc = f" [{C['dim']}]{len(c.replies)}r[/]" if c.replies else ""
-            assignee_part = f"  👤 {c.assignee}" if c.assignee else ""
+            assignee_part = f" 👤 {c.assignee}" if c.assignee else ""
             in_prog = f" [{C['yellow']}]▶[/]" if c.in_progress else ""
-            safe_text = c.text[:60].replace("[", "\\[").replace("]", "\\]")
+            safe_text = c.text[:55].replace("[", "\\[").replace("]", "\\]")
             conflict_mark = f" [{C['yellow']}]![/]" if getattr(c, 'conflict', False) else ""
             ago = self._time_ago(c.timestamp)
-            cue_line = (
-                f"  [{color}]{dot}[/] [{color}]@{c.position}[/] "
-                f"[{C['fg']}]{safe_text}[/]{rc}{conflict_mark}"
+            track_hint = f" [{C['muted']}]{c.track_name}[/]" if c.track_name else ""
+
+            # Card edge: ▎ colored by status, then dot + position + text + indicators
+            edge = f"[{color}]▎[/]"
+            header = (
+                f"{edge}[{color}]{dot}[/] [{color}]@{c.position}[/] "
+                f"[{C['fg']}]{safe_text}[/]{track_hint}{rc}{conflict_mark}"
                 + (f" [{C['dim']}]{ago}[/]" if ago else "")
             )
-            lines = [cue_line]
-            if assignee_part:
-                lines.append(f"  [{C['dim']}]├──[/]{assignee_part}{in_prog}")
-            elif in_prog:
-                lines.append(f"  [{C['dim']}]├──[/]  [{C['yellow']}]▶[/]")
+            lines = [header]
+
             if c.replies:
                 for j, r in enumerate(c.replies):
                     tag = r.author or "anon"
                     r_ago = self._time_ago(r.timestamp)
-                    conn = "╰─" if j == len(c.replies) - 1 else "├─"
-                    safe_reply = r.text[:55].replace("[", "\\[").replace("]", "\\]")
+                    safe_reply = r.text[:50].replace("[", "\\[").replace("]", "\\]")
                     lines.append(
-                        f"  [{C['dim']}]{conn} {tag} [{C['muted']}]{r_ago}[/]"
+                        f"{edge}  [{C['dim']}]{tag}[/] [{C['muted']}]{r_ago}[/]"
                         f"  [{C['dim']}]{safe_reply}[/]"
                     )
+
+            # Meta line: assignee + in-progress at bottom of card
+            if assignee_part or in_prog:
+                lines.append(f"{edge}  [{C['dim']}]{assignee_part}{in_prog}[/]")
+
             lv.append(ListItem(Label("\n".join(lines))))
 
         if self.idx < len(lv.children):
@@ -3619,12 +3688,25 @@ class ClavusApp(App):
             lv.append(ListItem(Label(f"  [{C['dim']}]no snapshots yet — S to capture[/]")))
             lv.refresh()
             return
-        for s in self.snaps[:10]:
+        for i, s in enumerate(self.snaps[:10]):
             ago = self._time_ago(s.timestamp)
-            safe_msg = s.message[:50].replace("[", "\\[").replace("]", "\\]")
+            safe_msg = s.message[:45].replace("[", "\\[").replace("]", "\\]")
             conflict_mark = f" [{C['yellow']}]![/]" if s.conflict_message else ""
+
+            # Tree connector: ● for HEAD (filled), ○ for older (hollow)
+            # │ between items, ╰ for last item
+            if i == 0:
+                dot = f"[{C['accent']}]●[/]"
+            else:
+                dot = f"[{C['dim']}]○[/]"
+
+            # Auto-snapshots get dimmed message
+            is_auto = "auto-snapshot" in s.message.lower() if s.message else False
+            msg_color = C['dim'] if is_auto else C['fg']
+
             lv.append(ListItem(Label(
-                f"[{C['fg']}]{safe_msg}[/]{conflict_mark}  [{C['dim']}]{s.hash[:8]}  {ago}[/]"
+                f"  {dot} [{msg_color}]{safe_msg}[/]{conflict_mark}  "
+                f"[{C['dim']}]{s.hash[:8]}  {ago}[/]"
             )))
         lv.refresh()
 
