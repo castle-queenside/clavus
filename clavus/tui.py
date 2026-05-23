@@ -577,6 +577,7 @@ class ClavusApp(App):
         except NoMatches:
             pass
         self._cue_fingerprint = None  # force full rebuild
+        self._snap_fingerprint = None
         self._update_footer()
         self._render()  # rebuild cues list
 
@@ -620,6 +621,7 @@ class ClavusApp(App):
         except NoMatches:
             pass
         self._cue_fingerprint = None
+        self._snap_fingerprint = None
         self._update_footer()
         self._render()
 
@@ -2471,6 +2473,7 @@ class ClavusApp(App):
         self.cues = self._sort_cues(active_cues)
         self.idx = min(self.idx or 0, len(self.cues) - 1) if self.cues else 0
         self._cue_fingerprint = None  # invalidate render cache
+        self._snap_fingerprint = None
 
     def _load_snapshots_from_disk(self):
         """Load snapshot history for the current project from BlobStore."""
@@ -3693,12 +3696,11 @@ class ClavusApp(App):
             safe_msg = s.message[:45].replace("[", "\\[").replace("]", "\\]")
             conflict_mark = f" [{C['yellow']}]![/]" if s.conflict_message else ""
 
-            # Tree connector: ● for HEAD (filled), ○ for older (hollow)
-            # │ between items, ╰ for last item
+            # Tree connector: ▶ for HEAD (current), · for older
             if i == 0:
-                dot = f"[{C['accent']}]●[/]"
+                dot = f"[bold {C['accent']}]▶[/]"
             else:
-                dot = f"[{C['dim']}]○[/]"
+                dot = f"[{C['dim']}]·[/]"
 
             # Auto-snapshots get dimmed message
             is_auto = "auto-snapshot" in s.message.lower() if s.message else False
