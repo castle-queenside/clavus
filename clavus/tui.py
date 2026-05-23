@@ -311,8 +311,8 @@ class ClavusApp(App):
     #history-list ListView {{ height: 100%; border: none; background: transparent; }}
     #history-list ListItem {{ background: transparent; padding: 0 1; min-height: 1; }}
 
-    #footer {{ height: 1; background: {C['surface']}; padding: 0 1; border-top: solid {C['accent_dim']}; }}
-    #footer.input-mode {{ height: 3; padding: 0; }}
+    #footer {{ height: 1; background: {C['surface']}; padding: 0 1; }}
+    #footer.input-mode {{ height: 3; }}
     #footer-keys {{ display: none; }}
     #footer-status {{ color: {C['dim']}; width: auto; margin-right: 2; }}
     #footer-hint {{ color: {C['accent']}; text-align: right; min-width: 40; }}
@@ -3647,10 +3647,9 @@ class ClavusApp(App):
             ago = self._time_ago(c.timestamp)
             track_hint = f" [{C['muted']}]{c.track_name}[/]" if c.track_name else ""
 
-            # Card edge: ▎ colored by status, then dot + position + text + indicators
-            edge = f"[{color}]▎[/]"
+            # Main cue line: dot + position + text + indicators
             header = (
-                f"{edge}[{color}]{dot}[/] [{color}]@{c.position}[/] "
+                f"  [{color}]{dot}[/] [{color}]@{c.position}[/] "
                 f"[{C['fg']}]{safe_text}[/]{track_hint}{rc}{conflict_mark}"
                 + (f" [{C['dim']}]{ago}[/]" if ago else "")
             )
@@ -3660,15 +3659,16 @@ class ClavusApp(App):
                 for j, r in enumerate(c.replies):
                     tag = r.author or "anon"
                     r_ago = self._time_ago(r.timestamp)
+                    conn = "╰─" if j == len(c.replies) - 1 else "├─"
                     safe_reply = r.text[:50].replace("[", "\\[").replace("]", "\\]")
                     lines.append(
-                        f"{edge}  [{C['dim']}]{tag}[/] [{C['muted']}]{r_ago}[/]"
+                        f"  [{C['dim']}]{conn} {tag}[/] [{C['muted']}]{r_ago}[/]"
                         f"  [{C['dim']}]{safe_reply}[/]"
                     )
 
-            # Meta line: assignee + in-progress at bottom of card
+            # Meta line: assignee + in-progress
             if assignee_part or in_prog:
-                lines.append(f"{edge}  [{C['dim']}]{assignee_part}{in_prog}[/]")
+                lines.append(f"  [{C['dim']}]└─{assignee_part}{in_prog}[/]")
 
             lv.append(ListItem(Label("\n".join(lines))))
 
