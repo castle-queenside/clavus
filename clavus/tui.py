@@ -315,7 +315,7 @@ class ClavusApp(App):
     #footer.input-mode {{ height: 3; }}
     #footer-keys {{ display: none; }}
     #footer-status {{ color: {C['dim']}; width: auto; margin-right: 2; }}
-    #footer-hint {{ color: {C['accent']}; text-align: right; min-width: 40; }}
+    #footer-hint {{ color: {C['muted']}; text-align: right; min-width: 40; }}
     #footer-stats {{ display: none; }}
     #footer-input {{ display: none; width: 100%; height: 3; background: {C['bg']}; border: solid {C['accent']}; color: {C['fg']}; padding: 0 1; }}
     #footer.input-mode #footer-input {{ display: block; }}
@@ -3234,67 +3234,13 @@ class ClavusApp(App):
                 hlv.focus()
             else:
                 clv.focus()
-            # Defer hint update to after screen processes the focus change
-            self.call_after_refresh(self._update_footer_hint)
         except NoMatches:
             pass
 
     def _update_footer_hint(self):
-        """Context-aware key bar with styled separators."""
-        a = C['accent']     # key letter color
-        d = C['dim']         # label text color
-        s = C['muted']       # separator color
-        sep = f" [{s}]│[/] "
-
-        hint = f"[{a}]?[/] [{d}]help[/]"
-        if self._remote_picker_active:
-            parts = [
-                f"[{a}]enter[/] [{d}]select[/]",
-                f"[{a}]esc[/] [{d}]cancel[/]",
-                f"[{a}]j/k[/] [{d}]nav[/]",
-            ]
-            hint = sep.join(parts) + f" {sep}[{a}]?[/] [{d}]help[/]"
-        elif self._project_picker_active:
-            parts = [
-                f"[{a}]enter[/] [{d}]select[/]",
-                f"[{a}]esc[/] [{d}]cancel[/]",
-                f"[{a}]j/k[/] [{d}]nav[/]",
-            ]
-            hint = sep.join(parts) + f" {sep}[{a}]?[/] [{d}]help[/]"
-        elif not self.project:
-            # No project loaded — show init/join hints
-            parts = [
-                f"[{a}]:init <path>[/] [{d}]open[/]",
-                f"[{a}]:join <URL>[/] [{d}]connect[/]",
-            ]
-            hint = sep.join(parts) + f" {sep}[{a}]?[/] [{d}]help[/]"
-        else:
-            try:
-                hlv = self.query_one("#hlv", ListView)
-                if hlv.has_focus:
-                    parts = [
-                        f"[{a}]S[/] [{d}]snap[/]",
-                        f"[{a}]T[/] [{d}]restore[/]",
-                        f"[{a}]o[/] [{d}]open[/]",
-                        f"[{a}]d[/] [{d}]diff[/]",
-                    ]
-                    hint = sep.join(parts) + f" {sep}[{a}]?[/] [{d}]help[/]"
-                else:
-                    clv = self.query_one("#clv", ListView)
-                    if clv.has_focus:
-                        parts = [
-                            f"[{a}]c[/] [{d}]cue[/]",
-                            f"[{a}]r[/] [{d}]reply[/]",
-                            f"[{a}]e[/] [{d}]edit[/]",
-                            f"[{a}]a[/] [{d}]assign[/]",
-                            f"[{a}]S[/] [{d}]snap[/]",
-                            f"[{a}]p[/] [{d}]pull[/]",
-                        ]
-                        hint = sep.join(parts) + f" {sep}[{a}]?[/] [{d}]help[/]"
-            except NoMatches:
-                pass
+        """Simple hint in footer corner."""
         try:
-            self.query_one("#footer-hint", Static).update(hint)
+            self.query_one("#footer-hint", Static).update(f"[{C['muted']}]? help[/]")
         except NoMatches:
             pass
 
@@ -3623,7 +3569,6 @@ class ClavusApp(App):
             self._render_cues()
             self._render_history()
             self._update_footer()
-            self._update_footer_hint()
         except Exception as e:
             self._status(f"render error: {e}")
 
