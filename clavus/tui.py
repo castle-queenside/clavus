@@ -3468,9 +3468,19 @@ class ClavusApp(App):
         except NoMatches:
             return
         if not self.project:
+            # ASCII art banner — CLAVUS in doom font
+            banner = [
+                "  _____  _       ___  _   _ _   _ _____ ",
+                " /  __ \\| |     / _ \\| | | | | | /  ___|",
+                " | /  \\/| |    / /_\\ \\ | | | | | \\ `--. ",
+                " | |    | |    |  _  | | | | | | |`--. \\",
+                " | \\__/\\| |____| | | \\ \\_/ / |_| /\\__/ /",
+                "  \\____/\\_____/\\_| |_/\\___/ \\___/\\____/ ",
+            ]
+            art = "\n".join(f"    [{C['accent2']}]{line}[/]" for line in banner)
             welcome.update(
-                f"\n\n"
-                f"    [{C['accent2']}]⬡[/] [{C['accent']}]clavus[/]\n\n"
+                f"\n"
+                f"{art}\n\n"
                 f"    [{C['dim']}]Ableton Live cue management[/]\n"
                 f"    [{C['dim']}]snap and sync your ideas across machines[/]\n\n"
                 f"    [{C['accent']}]:init <path>[/]  [{C['dim']}]open a project[/]\n"
