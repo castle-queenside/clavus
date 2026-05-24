@@ -44,7 +44,8 @@ python test_cli_full.py
 
 ### Run TUI
 ```bash
-clavus tui
+python -m clavus tui   # recommended — avoids PATH issues on Windows
+# or: clavus tui       # if pip install worked cleanly
 ```
 
 ---

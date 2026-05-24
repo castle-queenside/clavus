@@ -1887,7 +1887,7 @@ def cmd_relay(args: argparse.Namespace) -> None:
             # Process still alive — kill it
             os.kill(old_pid, 9)
             time.sleep(0.5)
-        except (ProcessLookupError, ValueError):
+        except (ProcessLookupError, ValueError, OSError):
             pass
         pid_path.unlink()
 
@@ -1904,7 +1904,7 @@ def cmd_relay(args: argparse.Namespace) -> None:
                 os.kill(old_pid, 0)
                 print(f'[WARN]  Relay already running (PID {old_pid}). Use --kill to stop.')
                 return
-            except (ProcessLookupError, ValueError):
+            except (ProcessLookupError, ValueError, OSError):
                 pid_path.unlink()
         
         if platform.system() == 'Windows':
@@ -1996,7 +1996,7 @@ def cmd_share(args: argparse.Namespace) -> None:
             os.kill(old_pid, 0)
             os.kill(old_pid, 9)
             time.sleep(0.5)
-        except (ProcessLookupError, ValueError):
+        except (ProcessLookupError, ValueError, OSError):
             pass
         pid_path.unlink()
 
@@ -2189,7 +2189,7 @@ def cmd_share(args: argparse.Namespace) -> None:
                 os.kill(old_pid, 0)
                 print(f'[WARN]  Relay already running (PID {old_pid}). Use --kill to stop.')
                 return
-            except (ProcessLookupError, ValueError):
+            except (ProcessLookupError, ValueError, OSError):
                 pid_path.unlink()
         
         if platform.system() == 'Windows':

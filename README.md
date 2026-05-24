@@ -55,8 +55,11 @@ git clone https://github.com/castle-queenside/clavus
 cd clavus
 
 # 2. Install
-pip install -e .          
-# Windows: py -m pip install -e .
+pip install -e .          # Windows: py -m pip install -e .
+
+# If 'clavus' isn't recognized after install, use:
+# Windows: py -m clavus <command>
+# Mac/Linux: python -m clavus <command>
 
 # 3. Add a project and open the dashboard
 clavus init /path/to/your/project.als
@@ -294,6 +297,20 @@ Someone pushed while you were working. Your work is safe — Clavus auto-snapsho
 
 ### "⚠ on a cue or snapshot"
 Both of you edited the same thing simultaneously. Press `!` and pick **yours** or **theirs**.
+
+### "clavus isn't recognized" (Windows)
+`pip install -e .` on Windows can fail silently if you ran it from the wrong directory — it binds to the exact path where you executed it. If `clavus` commands don't work after install:
+
+```powershell
+# Navigate to your cloned repo first, THEN install
+cd C:\path\to\clavus
+py -m pip install -e .
+
+# Or use the module form directly (always works)
+py -m clavus share
+py -m clavus init
+py -m clavus tui
+```
 
 ### "Connection refused" / "Cannot reach relay"
 - Is the host still running `clavus share`?

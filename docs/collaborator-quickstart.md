@@ -52,7 +52,8 @@ py -m pip install -e .
 
 Then run the setup wizard:
 ```bash
-clavus setup
+clavus setup          # Mac
+py -m clavus setup    # Windows (if 'clavus' isn't recognized)
 ```
 
 It'll ask your name and a couple preferences. Just press Enter for defaults.
@@ -64,7 +65,8 @@ It'll ask your name and a couple preferences. Just press Enter for defaults.
 Run this in the terminal, using the URL your collaborator sent:
 
 ```bash
-clavus join http://your-machine.tailXXXX.ts.net:7891
+clavus join http://your-machine.tailXXXX.ts.net:7891   # Mac
+py -m clavus join http://your-machine.tailXXXX.ts.net:7891   # Windows
 ```
 
 You'll see something like:
@@ -92,7 +94,7 @@ You'll see something like:
 
     ✅ Pulled — 12 snapshots, 8 cues total
 
-▶️   Ready to work! Run: clavus tui
+▶️   Ready to work! Run: `clavus tui` (Windows: `py -m clavus tui`)
 ```
 
 If anything fails, the error message will tell you exactly what's wrong and how to fix it.
@@ -102,7 +104,8 @@ If anything fails, the error message will tell you exactly what's wrong and how 
 ## Step 4: Open the Dashboard
 
 ```bash
-clavus tui
+clavus tui          # Mac
+py -m clavus tui    # Windows
 ```
 
 You'll see the Clavus TUI:
@@ -130,7 +133,7 @@ Here's what you do in a normal session:
 
 | Step | Key | What it does |
 |------|-----|-------------|
-| 1. Start | `clavus tui` | Open the dashboard |
+| 1. Start | `clavus tui` / `py -m clavus tui` | Open the dashboard |
 | 2. Pull latest | `p` | Get your collaborator's changes (auto-saves your work first) |
 | 3. Work in Ableton | (switch to Live) | Make your changes |
 | 4. Snapshot | `S` | Save a checkpoint of what you've done |
@@ -195,6 +198,16 @@ Type `:` then the command:
 ---
 
 ## Troubleshooting
+
+**"clavus isn't recognized" (Windows)**
+`pip install -e .` on Windows binds to the exact path where you ran it. If `clavus` commands don't work, re-run from the repo folder:
+
+```powershell
+cd C:\path\to\clavus
+py -m pip install -e .
+```
+
+Or just use the `py -m clavus` form directly for all commands — it always works regardless of install location.
 
 **"Connection refused" or "Cannot reach"**
 - Is the host running `clavus share`?
