@@ -37,13 +37,13 @@ from clavus.parser import parse_als, project_summary
 from clavus.config import ClavusConfig, CONFIG_PATH
 from clavus.store import (
     BlobStore, ClavusProject, diff_projects, format_diff,
-    DEFAULT_CLAVUS_DIR,
+    DEFAULT_CLAVUS_DIR, repair_orphaned_chains,
 )
 from clavus.cues import (
     CueStore, CueFilter, format_cue, format_cue_list,
     render_cues_as_markers, add_cue_command,
 )
-from clavus.helpers import find_als_file, get_store_and_project, resolve_snapshot, get_desktop_path, get_projects_dir
+from clavus.helpers import find_als_file, get_store_and_project, resolve_snapshot, get_desktop_path, get_projects_dir, resolve_project_als
 from clavus.watch import watch
 from clavus.store import (
     StemStore, StemEntry, StemManifest,
@@ -79,10 +79,20 @@ def cmd_repair(args: argparse.Namespace) -> None:
             data = json.loads(index_path.read_text())
             valid = sum(1 for v in data.values() if isinstance(v, dict) and "root_als" in v)
             print(f"[ok] index.json exists with {valid} project(s).")
-            print("   Use --force to re-scan from scratch.")
-            return
         except json.JSONDecodeError:
             print(f"[WARN] index.json is corrupt (will rebuild).")
+            # fall through to recovery scan below
+            pass
+        else:
+            # Index is healthy — run orphan repair, then done
+            print()
+            print("🔍 Checking for orphaned snapshots...")
+            n = repair_orphaned_chains()
+            if n:
+                print(f"[ok] Repaired {n} project(s) with orphaned snapshots.")
+            else:
+                print("[ok] No orphaned snapshots found.")
+            return
     elif args.force:
         print("[build] Force mode: re-scanning from scratch.")
 
@@ -170,18 +180,25 @@ def cmd_repair(args: argparse.Namespace) -> None:
     print()
     print(f"[ok] Recovered {len([k for k in recovered if isinstance(recovered[k], dict)])} project(s) to {index_path}")
     print()
-    for name, data in recovered.items():
-        if not isinstance(data, dict):
-            continue
-        als = data.get("root_als", "") or "(no path)"
-        head = data.get("head", "")[:12] if data.get("head") else "(no snapshots)"
-        print(f"   {name:<25} {als}")
-    print()
-    if any(not data.get("root_als") for data in recovered.values() if isinstance(data, dict)):
+    if recovered and any(not data.get("root_als") for data in recovered.values() if isinstance(data, dict)):
+        for name, data in recovered.items():
+            if not isinstance(data, dict):
+                continue
+            als = data.get("root_als", "") or "(no path)"
+            head = data.get("head", "")[:12] if data.get("head") else "(no snapshots)"
+            print(f"   {name:<25} {als}")
+        print()
         print("[TIP] Tip: Set .als paths with: clavus repair --set-als 'ProjectName=/path/to/project.als'")
         print("   Or for all at once:    clavus repair --set-als 'all=/path/to/ProjectDir/'")
+
+    # Phase 5: repair orphaned snapshot chains (always runs)
+    print()
+    print("🔍 Checking for orphaned snapshots...")
+    n = repair_orphaned_chains()
+    if n:
+        print(f"[ok] Repaired {n} project(s) with orphaned snapshots.")
     else:
-        print("[ok] All projects have .als paths. Run 'clavus projects' to verify.")
+        print("[ok] No orphaned snapshots found.")
 
 
 def cmd_doctor(args: argparse.Namespace) -> None:
@@ -249,11 +266,13 @@ def cmd_doctor(args: argparse.Namespace) -> None:
                         warn_check(f"  {name}", "corrupt entry (null)")
                         continue
                     als = p.get("root_als", "")
-                    als_ok = Path(als).exists() if als else False
+                    resolved = resolve_project_als(name, als)
+                    als_ok = resolved is not None
                     head = (p.get("head") or "")[:12] or "(none)"
                     sym = "[ok]" if als_ok else "[WARN]"
                     status = "file found" if als_ok else "file missing"
-                    (ok if als_ok else warn).append(f"  {sym} {name}  @ {head}  {als[:50] if als else '(no path)'}  [{status}]")
+                    display_path = str(resolved)[:50] if resolved else (als[:50] if als else "(no path)")
+                    (ok if als_ok else warn).append(f"  {sym} {name}  @ {head}  {display_path}  [{status}]")
         except (json.JSONDecodeError, OSError) as e:
             check("index.json valid", False, str(e))
 
@@ -3495,9 +3514,12 @@ def cmd_pull(args: argparse.Namespace) -> None:
                             continue
                         data = r2.json()
                         info = data.get("project", {})
+                        remote_als = info.get("root_als", f"~/{pname}/{pname}.als")
+                        # Auto-resolve root_als to a path on this machine
+                        local_als = resolve_project_als(pname, remote_als)
                         new_proj = ClavusProject(
                             name=pname,
-                            root_als=info.get("root_als", f"~/{pname}/{pname}.als"),
+                            root_als=str(local_als) if local_als else remote_als,
                             created_at=time.time(),
                         )
                         store.set_index(new_proj)
