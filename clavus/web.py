@@ -33,7 +33,7 @@ from pydantic import BaseModel
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from clavus.helpers import get_store_and_project, find_als_file
 from clavus.cues import CueStore, CueFilter, format_cue_list, Cue, CueReply as CueReplyData
-from clavus.store import BlobStore, ClavusProject, Snapshot, diff_projects, DEFAULT_CLAVUS_DIR, StemStore
+from clavus.store import BlobStore, ClavusProject, Snapshot, diff_projects, DEFAULT_CLAVUS_DIR, StemStore, _repair_orphaned_chains
 from clavus import parse_als
 
 # ─── Helpers ────────────────────────────────────────────────────────────
@@ -1806,129 +1806,6 @@ def _get_tailscale_url(port: int = 7890) -> str:
 
 
 # ─── Web companion server (run_web_server) removed — use relay ──
-
-
-def _repair_orphaned_chains() -> int:
-    """Walk all snapshot meta files and advance HEAD to chain tips.
-
-    If a snapshot's parent exists in a project's chain but the snapshot
-    itself isn't reachable from HEAD (e.g. because HEAD was clobbered
-    back to an older snapshot), advance HEAD to the tip of the orphan
-    chain so those snapshots become reachable again.
-
-    Returns the number of projects whose HEAD was advanced.
-    """
-    store = BlobStore()
-    if not store.objects_dir.exists():
-        return 0
-
-    # Load every snapshot meta into a dict: hash → Snapshot
-    all_snaps: dict[str, Snapshot] = {}
-    for meta_file in store.objects_dir.rglob("*.meta"):
-        try:
-            data = json.loads(meta_file.read_text())
-            h = data.get("hash", "")
-            if h and h not in all_snaps:
-                all_snaps[h] = Snapshot(
-                    hash=h,
-                    timestamp=data.get("timestamp", 0.0),
-                    message=data.get("message", ""),
-                    parent=data.get("parent"),
-                    project_path=data.get("project_path", ""),
-                    track_count=data.get("track_count", 0),
-                    bpm=data.get("bpm", 120.0),
-                    tags=data.get("tags", []),
-                    als_hash=data.get("als_hash"),
-                    content_hash=data.get("content_hash"),
-                    sample_hashes=data.get("sample_hashes", []),
-                    sample_paths=data.get("sample_paths", {}),
-                )
-        except Exception:
-            continue
-
-    if not all_snaps:
-        return 0
-
-    # Build child→parent and parent→children maps
-    children_of: dict[str, list[str]] = {}
-    for h, snap in all_snaps.items():
-        if snap.parent and snap.parent in all_snaps:
-            children_of.setdefault(snap.parent, []).append(h)
-
-    repaired = 0
-    lock_fd = store._lock_index()
-    try:
-        index_data = store._read_index()
-    finally:
-        store._unlock_index(lock_fd)
-    # Work on a copy — we only need to read, not hold the lock for the
-    # entire scan (which can be slow with many meta files).
-    modified = False
-
-    for proj_name, proj_dict in list(index_data.items()):
-        if proj_name.startswith("_"):
-            continue
-        head = proj_dict.get("head", "")
-        if not head or head not in all_snaps:
-            continue
-
-        # Walk from HEAD, collect reachable hashes
-        reachable: set[str] = set()
-        current = head
-        while current and current not in reachable:
-            reachable.add(current)
-            snap = all_snaps.get(current)
-            if not snap or not snap.parent or snap.parent == current:
-                break
-            current = snap.parent
-
-        # Find orphans whose parent is in the reachable set
-        orphans = [h for h in all_snaps
-                   if h not in reachable and all_snaps[h].parent in reachable]
-        if not orphans:
-            continue
-
-        # Follow orphan chain(s) to their tips
-        best_tip = head
-        best_depth = len(reachable)
-        for orphan in orphans:
-            tip = orphan
-            depth = 0
-            while tip in children_of:
-                # Pick the first child (chain shouldn't fork, but handle it)
-                next_gen = [c for c in children_of[tip] if c not in reachable]
-                if not next_gen:
-                    break
-                tip = next_gen[0]
-                depth += 1
-                # Safety: don't loop forever
-                if depth > 1000:
-                    break
-            if len(reachable) + depth > best_depth:
-                best_tip = tip
-                best_depth = len(reachable) + depth
-
-        if best_tip != head:
-            proj_dict["head"] = best_tip
-            repaired += 1
-            modified = True
-            print(f"  🔗 Repaired orphan chain: {proj_name} HEAD {head[:10]} → {best_tip[:10]}")
-
-    if modified:
-        lock_fd = store._lock_index()
-        try:
-            # Re-read, patch, write — minimize the critical section
-            current = store._read_index()
-            for proj_name in index_data:
-                if proj_name.startswith("_"):
-                    continue
-                if proj_name in current and index_data[proj_name].get("head") != current[proj_name].get("head"):
-                    current[proj_name]["head"] = index_data[proj_name]["head"]
-            store._write_json(store.index_path, current)
-        finally:
-            store._unlock_index(lock_fd)
-
-    return repaired
 
 
 def run_relay_server(host: str = "0.0.0.0", port: int = 7890, share_code: str = "", allowed_projects: list[str] | None = None) -> None:
