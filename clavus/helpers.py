@@ -48,6 +48,27 @@ def get_projects_dir() -> Path:
     return path
 
 
+def resolve_project_als(proj_name: str, root_als: str = "") -> Optional[Path]:
+    """Resolve the .als path for a project, trying fallbacks if root_als doesn't exist.
+
+    1. root_als itself (as-is from index)
+    2. get_projects_dir() / proj_name / f"{proj_name}.als"
+    3. get_projects_dir() / proj_name / f"{proj_name} Project" / f"{proj_name}.als"
+
+    Returns the first path that exists, or None.
+    """
+    candidates: list[Path] = []
+    if root_als:
+        candidates.append(Path(root_als))
+    proj_dir = get_projects_dir() / proj_name
+    candidates.append(proj_dir / f"{proj_name}.als")
+    candidates.append(proj_dir / f"{proj_name} Project" / f"{proj_name}.als")
+    for c in candidates:
+        if c.is_file():
+            return c
+    return None
+
+
 def find_als_file(path: str | Path) -> Optional[Path]:
     """Find the .als file in a directory, or use the path directly."""
     p = Path(path)
