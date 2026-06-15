@@ -1285,7 +1285,7 @@ def format_diff(diff: ProjectDiff, verbose: bool = False) -> str:
     return "\n".join(lines)
 
 
-def _repair_orphaned_chains() -> int:
+def repair_orphaned_chains() -> int:
     """Walk all snapshot meta files and advance HEAD to chain tips.
 
     If a snapshot's parent exists in a project's chain but the snapshot
@@ -1365,9 +1365,14 @@ def _repair_orphaned_chains() -> int:
         if not orphans:
             continue
 
-        # Follow orphan chain(s) to their tips
-        best_tip = head
-        best_depth = len(reachable)
+        # Follow orphan chain(s) to their tips. Pick the deepest — but if
+        # every orphan is a single-snapshot leaf (depth=0), still promote
+        # one of them rather than leaving them stranded. The previous
+        # implementation initialized best_tip to HEAD and required strictly
+        # greater depth to update, which silently failed to repair chains
+        # where the orphan was a single child of HEAD.
+        best_tip = orphans[0]
+        best_depth = 0
         for orphan in orphans:
             tip = orphan
             depth = 0
@@ -1381,15 +1386,14 @@ def _repair_orphaned_chains() -> int:
                 # Safety: don't loop forever
                 if depth > 1000:
                     break
-            if len(reachable) + depth > best_depth:
+            if depth > best_depth:
                 best_tip = tip
-                best_depth = len(reachable) + depth
+                best_depth = depth
 
-        if best_tip != head:
-            proj_dict["head"] = best_tip
-            repaired += 1
-            modified = True
-            print(f"  🔗 Repaired orphan chain: {proj_name} HEAD {head[:10]} → {best_tip[:10]}")
+        proj_dict["head"] = best_tip
+        repaired += 1
+        modified = True
+        print(f"  🔗 Repaired orphan chain: {proj_name} HEAD {head[:10]} → {best_tip[:10]}")
 
     if modified:
         lock_fd = store._lock_index()

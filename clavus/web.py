@@ -33,7 +33,7 @@ from pydantic import BaseModel
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from clavus.helpers import get_store_and_project, find_als_file
 from clavus.cues import CueStore, CueFilter, format_cue_list, Cue, CueReply as CueReplyData
-from clavus.store import BlobStore, ClavusProject, Snapshot, diff_projects, DEFAULT_CLAVUS_DIR, StemStore, _repair_orphaned_chains
+from clavus.store import BlobStore, ClavusProject, Snapshot, diff_projects, DEFAULT_CLAVUS_DIR, StemStore, repair_orphaned_chains
 from clavus import parse_als
 
 # ─── Helpers ────────────────────────────────────────────────────────────
@@ -1884,7 +1884,7 @@ def run_relay_server(host: str = "0.0.0.0", port: int = 7890, share_code: str = 
     # Repair any orphaned snapshot chains before accepting connections.
     # If HEAD was clobbered back to an old snapshot, orphan chains exist
     # in the object store that should be reachable.
-    _repair_orphaned_chains()
+    repair_orphaned_chains()
 
     try:
         uvicorn.run(app, host=host, port=port, log_level="warning")
