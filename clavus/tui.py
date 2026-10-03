@@ -29,30 +29,73 @@ from textual.screen import Screen, ModalScreen
 from textual.widgets import Static, Input, ListView, ListItem, Label, Button
 from textual.css.query import NoMatches
 
-# ─── Color Palette (CRUX dark — shared across TUI) ──────────────────────────
+# ─── Color Palette (Tokyo Night — r/unixporn inspired) ──────────────────
+#
+# Tokyo Night is a classic dark theme: deep navy backgrounds, soft blues
+# and purples for text, warm sunset accents. Designed for long sessions.
+# Inspired by: folke/tokyonight.nvim, the r/unixporn aesthetic.
 
 C = {
-    # Core
-    "bg": "#0b1418",       # near-black blue
-    "surface": "#0f1a20", # card background
-    "surface2": "#162a34", # elevated surface
-    "border": "#1a3040",   # subtle border
+    # Core backgrounds
+    "bg": "#1a1b26",       # deep navy (main background)
+    "surface": "#16161e",  # slightly darker surface
+    "surface2": "#1f2335", # elevated surface (panels, cards)
+    "surface3": "#292e42", # highest surface (hover, focus)
+    "border": "#292e42",   # subtle border
+    "border_bright": "#3b4261",  # active border
+
     # Text
-    "fg": "#c8d8d8",       # primary text
-    "dim": "#6a9a9a",     # secondary/muted text
-    "muted": "#3a5a65",    # very subtle
-    # Accent — teal spectrum
-    "accent": "#1a9e9e",   # primary teal
-    "accent2": "#2ac8c8",  # bright teal (highlights)
-    "accent_dim": "#0e7070", # dim teal
-    # Status
-    "green": "#40cc80",    # success / reachable
-    "yellow": "#d4a030",   # warning / offline
-    "orange": "#d47030",   # error / conflict
-    "red": "#ff4444",      # danger
+    "fg": "#a9b1d6",       # primary text — soft lavender-white
+    "fg_bright": "#c0caf5",  # bright text (headings, active)
+    "dim": "#737aa2",     # secondary / muted text
+    "muted": "#414868",    # very subtle / placeholders
+
+    # Accent — blue/purple spectrum (Tokyo Night's character)
+    "accent": "#7aa2f7",   # primary blue (links, selection, focus)
+    "accent2": "#bb9af7",  # purple (special highlights)
+    "accent_dim": "#3d59a1",  # dim blue (subtle markers)
+
+    # Status — sunset palette
+    "green": "#9ece6a",    # success / online
+    "yellow": "#e0af68",   # warning / pending
+    "orange": "#ff9e64",   # conflict / error start
+    "red": "#f7768e",      # danger / error
+    "pink": "#ff007c",     # critical / conflict marker
+
     # Semantic extras
-    "purple": "#8878d0",   # branch / special
-    "cyan": "#50c8c8",     # info / sync
+    "cyan": "#7dcfff",     # info / sync indicators
+    "purple": "#bb9af7",   # branch / special actions (same as accent2)
+    "comment": "#565f89",   # comment / system text
+}
+
+# ─── Box-drawing helpers ────────────────────────────────────────────────────
+# Unicode box-drawing characters, consistent across the UI.
+# Single-line weight: ┌─┐│└┘├┤┬┴┼
+# Rounded corners:    ╭─╮│╰╯
+# Light:              ┍┯┡╋┭┵┰╀┬╁╃╄╅╆╇╈╉╊━
+
+BD = {
+    "h": "─",      # horizontal
+    "v": "│",      # vertical
+    "tl": "┌",     # top-left
+    "tr": "┐",     # top-right
+    "bl": "└",     # bottom-left
+    "br": "┘",     # bottom-right
+    "l": "├",      # left T
+    "r": "┤",      # right T
+    "t": "┬",      # top T
+    "b": "┴",      # bottom T
+    "x": "┼",      # cross
+    # Rounded (for panels, cards)
+    "rtl": "╭",    # rounded top-left
+    "rtr": "╮",    # rounded top-right
+    "rbl": "╰",    # rounded bottom-left
+    "rbr": "╯",   # rounded bottom-right
+    # Tree (reply threads)
+    "tee": "├──",  # tree, more siblings
+    "end": "└──",  # tree, last child
+    "bar": "│  ",  # continuation bar (with spacing)
+    "spc": "   ",  # spacing for no continuation
 }
 
 # ─── Data Models ────────────────────────────────────────────────────────────
@@ -462,7 +505,7 @@ class ClavusApp(App):
     #main {{ layout: grid; grid-size: 1 3; grid-rows: auto 1fr auto; height: 100%; }}
 
     #header-title {{
-        color: {C['fg']};
+        color: {C['fg_bright']};
         background: {C['surface']};
         border-bottom: solid {C['accent']};
         padding: 0 1 0 2;
@@ -474,26 +517,26 @@ class ClavusApp(App):
     #welcome {{ display: none; column-span: 2; content-align: center middle; height: 100%; color: {C['dim']}; text-style: bold; }}
 
     #cues-list {{ height: 100%; min-height: 5; border: solid {C['border']}; background: transparent; }}
-    #cues-list:focus-within {{ border: solid {C['accent']}; background: rgba(26,158,158,0.03); }}
+    #cues-list:focus-within {{ border: solid {C['border_bright']}; background: {C['surface']}15; }}
     #cues-list ListView {{ height: 100%; border: none; background: transparent; }}
     #cues-list ListItem {{ background: transparent; padding: 0 2; min-height: 1; max-height: 10; }}
-    #cues-list ListItem:hover {{ background: {C['surface']}; }}
-    #clv > ListItem.-highlight {{ background: {C['surface']}80; text-style: bold; border-left: solid transparent; padding-left: 1; }}
-    #clv:focus > ListItem.-highlight {{ background: {C['surface2']}; text-style: bold; border-left: solid #d4a030; padding-left: 1; }}
-    #hlv > ListItem.-highlight {{ background: {C['surface']}80; text-style: bold; border-left: solid transparent; padding-left: 1; }}
-    #hlv:focus > ListItem.-highlight {{ background: {C['surface2']}; text-style: bold; border-left: solid #d4a030; padding-left: 1; }}
+    #cues-list ListItem:hover {{ background: {C['surface2']}; }}
+    #clv > ListItem.-highlight {{ background: {C['surface2']}; text-style: bold; border-left: solid {C['accent']}; padding-left: 1; }}
+    #clv:focus > ListItem.-highlight {{ background: {C['surface3']}; text-style: bold; border-left: solid {C['accent']}; padding-left: 1; }}
+    #hlv > ListItem.-highlight {{ background: {C['surface2']}; text-style: bold; border-left: solid {C['muted']}; padding-left: 1; }}
+    #hlv:focus > ListItem.-highlight {{ background: {C['surface3']}; text-style: bold; border-left: solid {C['accent']}; padding-left: 1; }}
 
-    #history {{ height: 100%; background: {C['surface']}; padding: 0 1; border: solid transparent; }}
-    #history:focus-within {{ border: solid {C['accent']}; background: rgba(26,158,158,0.03); }}
+    #history {{ height: 100%; background: {C['surface']}; padding: 0 1; border-left: solid {C['border']}; }}
+    #history:focus-within {{ border-left: solid {C['border_bright']}; background: {C['surface']}15; }}
     #history-list {{ height: 100%; }}
     #history-list ListView {{ height: 100%; border: none; background: transparent; }}
     #history-list ListItem {{ background: transparent; padding: 0 1; min-height: 1; }}
 
-    #footer {{ height: 1; background: {C['surface']}; padding: 0 1; }}
+    #footer {{ height: 1; background: {C['surface']}; padding: 0 1; border-top: solid {C['border']}; }}
     #footer.input-mode {{ height: 3; }}
-    #footer-keys { display: none; }
+    #footer-keys {{ display: none; }}
 
-    #toast-container {
+    #toast-container {{
         dock: top;
         align: right top;
         width: auto;
@@ -501,33 +544,34 @@ class ClavusApp(App):
         padding: 1 2;
         layout: vertical;
         reverse: true;
-    }
-    .toast {
-        width: 42;
+    }}
+    .toast {{
+        width: 44;
         min-height: 1;
         background: {C['surface2']};
         border: solid {C['border']};
         padding: 1 2;
         margin-bottom: 1;
         color: {C['fg']};
-    }
+        border-radius: 3;
+    }}
     .toast-success {{ border-left: solid {C['green']}; }}
     .toast-error {{ border-left: solid {C['red']}; }}
     .toast-warn {{ border-left: solid {C['yellow']}; }}
-    .toast-info {{ border-left: solid {C['accent']}; }}
+    .toast-info {{ border-left: solid {C['cyan']}; }}
     #footer-status {{ color: {C['dim']}; width: auto; margin-right: 2; }}
     #footer-hint {{ color: {C['muted']}; text-align: right; min-width: 40; }}
     #footer-stats {{ display: none; }}
-    #footer-input {{ display: none; width: 100%; height: 3; background: {C['bg']}; border: solid {C['accent']}; color: {C['fg']}; padding: 0 1; }}
+    #footer-input {{ display: none; width: 100%; height: 3; background: {C['surface']}; border: solid {C['accent']}; color: {C['fg']}; padding: 0 1; }}
     #footer.input-mode #footer-input {{ display: block; }}
     #footer.input-mode #footer-status {{ display: none; }}
     #footer.input-mode #footer-hint {{ display: none; }}
-    /* Worker errors use self.notify() (OS toast) so they are always visible,
-       even when the footer is hidden during command input (input-mode). */
 
-    Scrollbar {{ scrollbar-color: #1a9e9e #0f1a20; }}
-    Scrollbar > .scrollbar--grabber {{ background: #1a9e9e; }}
+    Scrollbar {{ scrollbar-color: {C['accent_dim']} {C['surface']}; }}
+    Scrollbar > .scrollbar--grabber {{ background: {C['accent']}; }}
     Scrollbar.vertical > .scrollbar--grabber {{ min-height: 3; }}
+    
+
     """
 
     BINDINGS = [
@@ -3705,40 +3749,39 @@ class ClavusApp(App):
             self._update_header()
 
     def _update_header(self):
-        """Header: ⬡ hex logo, project, connection dot + remote, sync activity."""
+        """Header: ◈ logo, project, remote status, sync activity."""
         try:
-            # Box-drawing left border + logo
-            logo = f"[bold {C['accent2']}]┌─⬡[/] "
-            # Project name — "clavus · projectname" when open
-            proj = f"[bold white]clavus[/]" if not self.project else f"[bold white]clavus  ·  {self.project}[/]"
-            # Separator
-            sep = f"[{C['muted']}]│[/]" if proj else ""
-            # Connection dot — green = reachable, yellow = offline, local = dim
+            # ── Logo + project ─────────────────────────────────────────────
+            logo = f"[bold {C['accent']}]◈[/] "
+            proj = f"[bold {C['fg_bright']}]clavus[/]"
+            if self.project:
+                proj += f"  [{C['muted']}]·[/]  [bold {C['fg_bright']}]{self.project}[/]"
+
+            # ── Remote status ────────────────────────────────────────────────
             if self._peer_name and self._peer_reachable:
-                peer = f"  [bold {C['green']}]●[/]"
+                remote = f"  [{C['green']}]●[/]  [{C['dim']}]{self._peer_name}[/]"
             elif self._peer_name:
-                peer = f"  [{C['yellow']}]○[/]"
+                remote = f"  [{C['yellow']}]○[/]  [{C['dim']}]{self._peer_name}[/]"
             elif self.project:
-                peer = f"  [{C['muted']}][local][/]"
+                remote = f"  [{C['muted']}][local][/]"
             else:
-                peer = ""
-            # Sync activity — spinner during, timestamp after
-            sync = ""
+                remote = ""
+
+            # ── Sync activity ─────────────────────────────────────────────────
             if self._sync_status:
                 s = self.BRAILLE[self._spinner_idx % len(self.BRAILLE)]
+                sync = f"  [{C['cyan']}]{s}[/]  [{C['dim']}]{self._sync_status}[/]"
                 if self._sync_progress:
-                    elapsed = time.time() - self._sync_start_time
-                    progress_parts = [p for p in self._sync_progress.split(" ") if p]
-                    progress_str = " ".join(progress_parts)
-                    sync = f"  [{C['yellow']}]{s} {self._sync_status} {progress_str}[/]"
-                else:
-                    sync = f"  [{C['yellow']}]{s} {self._sync_status}[/]"
+                    sync += f"  [{C['accent_dim']}]{self._progress_bar(self._sync_progress)}[/]"
             elif self._last_sync:
                 sync = f"  [{C['green']}]{self._last_sync}[/]"
+            else:
+                sync = ""
+
             widget = self.query_one("#header-title", Static)
-            widget.update(f"{logo}{proj}{sep}{peer}{sync}")
+            widget.update(f"{logo}{proj}{remote}{sync}")
             widget.refresh()
-            # Manage spinner based on sync activity (header-only, no footer cascade)
+
             if self._sync_status:
                 self._start_spinner()
             else:
@@ -3781,7 +3824,7 @@ class ClavusApp(App):
         try:
             status = self.query_one("#footer-status", Static)
             if not self.project:
-                status.update(f"[{C['dim']}]welcome — :init <path> to open a project[/]")
+                status.update(f"[{C['dim']}]welcome — init <path> to open a project[/]")
                 self._update_welcome()
                 return
 
@@ -3825,25 +3868,25 @@ class ClavusApp(App):
         except NoMatches:
             return
         if not self.project:
-            # ASCII art banner — CLAVUS in doom font
-            banner = [
-                "  _____  _       ___  _   _ _   _ _____ ",
-                " /  __ \\| |     / _ \\| | | | | | /  ___|",
-                " | /  \\/| |    / /_\\ \\ | | | | | \\ `--. ",
-                " | |    | |    |  _  | | | | | | |`--. \\",
-                " | \\__/\\| |____| | | \\ \\_/ / |_| /\\__/ /",
-                "  \\____/\\_____/\\_| |_/\\___/ \\___/\\____/ ",
-            ]
-            art = "\n".join(f"    [{C['accent2']}]{line}[/]" for line in banner)
-            welcome.update(
-                f"\n"
-                f"{art}\n\n"
-                f"    [{C['dim']}]Ableton Live cue management[/]\n"
-                f"    [{C['dim']}]snap and sync your ideas across machines[/]\n\n"
-                f"    [{C['accent']}]:init <path>[/]  [{C['dim']}]open a project[/]\n"
-                f"    [{C['accent']}]:join <URL>[/]  [{C['dim']}]connect to a relay[/]\n\n"
-                f"    [{C['dim']}]S[/] snapshot   [{C['dim']}]p[/] pull   [{C['dim']}]?[/] help\n"
-            )
+            # Clean welcome — box-drawing frame + key hints
+            ft = f"[{C['border_bright']}]"
+            dim = f"[{C['dim']}]"
+            acc = f"[{C['accent']}]"
+            fg = f"[{C['fg_bright']}]"
+            line38 = ft + "─" * 37
+            box = "\n".join([
+                f"  {ft}╭{line38}╮",
+                f"  {ft}│[/]  {acc}◈ Clavus[/]   {dim}v0.1[/]   {ft}│[/]",
+                f"  {ft}│[/]  {fg}Ableton Live cue management[/]  {ft}│[/]",
+                f"  {ft}│[/]  {dim}snap and sync your ideas[/]  {ft}│[/]",
+                f"  {ft}╰{line38}╯",
+                f"",
+                f"  {acc}clavus init <path>[/]   open a project",
+                f"  {acc}clavus join <url>[/]    connect to a relay",
+                f"",
+                f"  {dim}S[/] snapshot   {dim}p[/] pull   {dim}P[/] push   {dim}?[/] help",
+            ])
+            welcome.update(box)
             welcome.styles.display = "block"
             cues_list.styles.display = "none"
             history.styles.display = "none"
@@ -3851,7 +3894,6 @@ class ClavusApp(App):
             welcome.styles.display = "none"
             cues_list.styles.display = "block"
             history.styles.display = "block"
-
 
     BRAILLE = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
@@ -3951,8 +3993,8 @@ class ClavusApp(App):
 
         if not self.cues:
             lv.append(ListItem(Label(
-                f"\n    [{C['dim']}]no cues yet[/]\n"
-                f"    [{C['accent']}]c[/] [{C['dim']}]to place one at the playhead[/]\n"
+                f"\n  [{C['muted']}]no cues yet[/]\n"
+                f"  [{C['accent']}]c[/]   [{C['dim']}]to place one at the playhead[/]\n"
             )))
             return
 
@@ -3980,7 +4022,7 @@ class ClavusApp(App):
                 for j, r in enumerate(c.replies):
                     tag = r.author or "anon"
                     r_ago = self._time_ago(r.timestamp)
-                    conn = "╰─" if j == len(c.replies) - 1 else "├─"
+                    conn = BD["end"] if j == len(c.replies) - 1 else BD["tee"]
                     safe_reply = r.text[:50].replace("[", "\\[").replace("]", "\\]")
                     lines.append(
                         f"  [{C['dim']}]{conn} {tag}[/] [{C['muted']}]{r_ago}[/]"
@@ -3989,7 +4031,7 @@ class ClavusApp(App):
 
             # Meta line: assignee + in-progress
             if assignee_part or in_prog:
-                lines.append(f"  [{C['dim']}]└─{assignee_part}{in_prog}[/]")
+                lines.append(f"  [{C['dim']}]{BD['end']}{assignee_part}{in_prog}[/]")
 
             lv.append(ListItem(Label("\n".join(lines))))
 
@@ -4001,8 +4043,8 @@ class ClavusApp(App):
         lv.remove_children()
         if not self.snaps:
             lv.append(ListItem(Label(
-                f"\n    [{C['dim']}]no snapshots yet[/]\n"
-                f"    [{C['accent']}]S[/] [{C['dim']}]to capture the current state[/]\n"
+                f"\n  [{C['muted']}]no snapshots yet[/]\n"
+                f"  [{C['accent']}]S[/]   [{C['dim']}]to capture the current state[/]\n"
             )))
             return
         for i, s in enumerate(self.snaps[:10]):
