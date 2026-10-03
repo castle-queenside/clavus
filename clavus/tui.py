@@ -522,11 +522,29 @@ class ClavusApp(App):
 
     #cues-area {{ display: grid; grid-size: 1 2; grid-rows: auto 1fr; height: 100%; }}
     #cues-wrapper {{ height: 100%; }}
-    #cues-list {{ height: 100%; min-height: 5; border: solid {C['border']}; background: transparent; }}
-    #cues-list:focus-within {{ border: solid {C['border_bright']}; background: {C['surface']}15; }}
+    #cues-list {{ height: 100%; min-height: 5; border: solid {C['border']}; background: transparent; animation: fadeSlideIn 0.25s ease-out; }}
+
+                        @keyframes fadeSlideIn {{
+        from {{ opacity: 0; transform: translateY(4px); }}
+        to {{ opacity: 1; transform: translateY(0); }}
+    }}
+
+    @keyframes sidebarReveal {{
+        from {{ opacity: 0; transform: translateX(-8px); }}
+        to {{ opacity: 1; transform: translateX(0); }}
+    }}
+
+    @keyframes toastSlide {{
+        from {{ opacity: 0; transform: translateX(20px); }}
+        to {{ opacity: 1; transform: translateX(0); }}
+    }}
+
+    .toast {{ animation: toastSlide 0.2s ease-out; }}
+
     #cues-list ListView {{ height: 100%; border: none; background: transparent; }}
     #cues-list ListItem {{ background: transparent; padding: 0 2; min-height: 1; max-height: 10; }}
     #cues-list ListItem:hover {{ background: {C['surface2']}; }}
+    #clv > ListItem {{ animation: fadeSlideIn 0.15s ease-out; animation-fill-mode: both; }}
     #clv > ListItem.-highlight {{ background: {C['surface2']}; text-style: bold; border-left: solid {C['accent']}; padding-left: 1; }}
     #clv:focus > ListItem.-highlight {{ background: {C['surface3']}; text-style: bold; border-left: solid {C['accent']}; padding-left: 1; }}
     #hlv > ListItem.-highlight {{ background: {C['surface2']}; text-style: bold; border-left: solid {C['muted']}; padding-left: 1; }}
@@ -1100,7 +1118,7 @@ class ClavusApp(App):
         elif cmd == "peers":
             asyncio.create_task(self._run_peers())
         elif cmd in ("help", "h", "?"):
-            self.push_screen(HelpScreen())
+            self.push_screen(HelpScreen(), transition="fade", transition_duration=0.2)
         elif cmd == "p2p-host":
             self._status("starting P2P host in new terminal...")
             subprocess.Popen([
@@ -2215,7 +2233,7 @@ class ClavusApp(App):
             def action_dismiss_popup(self):
                 self.app.pop_screen()
 
-        self.push_screen(DiffScreen())
+        self.push_screen(DiffScreen(), transition="slide", transition_duration=0.25)
 
     def action_snapshot(self):
         """Quick-snapshot — instant capture with auto-timestamp. No prompt."""
@@ -2230,7 +2248,7 @@ class ClavusApp(App):
 
     def action_settings(self):
         """Open settings screen."""
-        self.push_screen(SettingsScreen())
+        self.push_screen(SettingsScreen(), transition="fade", transition_duration=0.2)
 
     def action_assign(self):
         if self._input_mode or time.time() - self._input_debounce < 0.3:
