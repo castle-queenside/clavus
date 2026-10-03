@@ -4,7 +4,9 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+# Test files - only ignore root-level scripts, not pytest suite
 test_*.py
+!tests/test_*.py
 dt2_test.py
 htest.py
 minimal_*.py

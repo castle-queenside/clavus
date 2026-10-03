@@ -36,6 +36,11 @@ REFS_DIR = "refs"
 INDEX_FILE = "index.json"
 CONFIG_FILE = "config.json"
 
+# Schema version for index.json.
+# Increment when adding new ClavusProject fields that need backfilling.
+# Migrations run once on init() — never on every access.
+SCHEMA_VERSION = 2
+
 
 # ─── Data Model ─────────────────────────────────────────────────────────
 
@@ -126,14 +131,48 @@ class BlobStore:
         # Never overwrite an existing healthy index — only restore from backup if missing
         if not self.index_path.exists():
             if not self._try_restore_index():
-                self._write_json(self.index_path, {})
+                self._write_json(self.index_path, {"_schema_version": SCHEMA_VERSION})
 
         if not self.config_path.exists():
             self._write_json(self.config_path, {
                 "version": 1,
                 "created_at": time.time(),
             })
+
+        # Run any pending schema migrations (one-shot, idempotent)
+        self._migrate_index()
         print(f"📁 Initialized Clavus repository at {self.root}")
+
+    def _migrate_index(self) -> None:
+        """Run one-shot schema migrations on index.json.
+
+        Safe to call repeatedly — uses _schema_version to skip completed migrations.
+        Holds a cross-process lock to avoid clobbering concurrent writes.
+        """
+        lock_fd = self._lock_index()
+        if lock_fd is None:
+            return  # Could not acquire lock — skip migration (will retry on next init)
+        try:
+            index = self._read_index()
+            current = index.get("_schema_version", 1)  # v1 = pre-schema-version
+            if current >= SCHEMA_VERSION:
+                return  # Already on latest schema
+
+            # ── Migrate v1 → v2 ───────────────────────────────────────────────
+            if current < 2:
+                # Add fields added in v2 to all existing project entries
+                for name, proj_data in index.items():
+                    if not isinstance(proj_data, dict) or name.startswith("_"):
+                        continue
+                    proj_data.setdefault("active_remote", "")
+                    proj_data.setdefault("last_remote_head", "")
+                    proj_data.setdefault("shared", True)
+                print("  ↻ Migrated index.json to schema v2")
+
+            index["_schema_version"] = SCHEMA_VERSION
+            self._write_json(self.index_path, index)
+        finally:
+            self._unlock_index(lock_fd)
 
     # ── Object Storage ──
 
@@ -247,7 +286,6 @@ class BlobStore:
 
     # ── Helpers ──
 
-    @staticmethod
     @staticmethod
     def _write_json(path: Path, data: dict) -> None:
         """Write JSON data to a file atomically via rename.
@@ -810,6 +848,7 @@ class BlobStore:
             index = self._read_index()
             index[project.name] = asdict(project)
             index["_last_project"] = project.name
+            index["_schema_version"] = SCHEMA_VERSION
             self._write_json(self.index_path, index)
         finally:
             self._unlock_index(lock_fd)
