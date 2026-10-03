@@ -79,6 +79,43 @@ class Cue:
     conflict: bool = False
     replies: list = field(default_factory=list)
 
+# ─── Command Registry ─────────────────────────────────────────────────────────
+
+# Commands available in the command palette (triggered by `:`).
+# kind: "action" = calls action method directly
+#        "input" = switches to an input mode (shows footer prompt)
+#        "modal" = pushes a modal screen
+COMMANDS: list[dict] = [
+    {"id": "snapshot",      "label": "Snapshot",           "key": "S",    "desc": "Save a snapshot of the current .als",  "kind": "input", "input_mode": "snapshot_msg", "prompt": "snapshot message"},
+    {"id": "cue",          "label": "New cue",            "key": "c",    "desc": "Add a timeline-anchored comment",       "kind": "input", "input_mode": "cue",        "prompt": "cue text"},
+    {"id": "reply",        "label": "Reply",              "key": "r",    "desc": "Reply to the selected cue",            "kind": "input", "input_mode": "reply",      "prompt": "reply text"},
+    {"id": "assign",       "label": "Assign cue",         "key": "a",    "desc": "Assign selected cue to someone",       "kind": "input", "input_mode": "assign",     "prompt": "assignee name"},
+    {"id": "resolve",     "label": "Toggle resolve",      "key": "R",    "desc": "Mark selected cue as resolved",        "kind": "action"},
+    {"id": "edit",        "label": "Edit cue text",       "key": "e",    "desc": "Edit the selected cue's text",        "kind": "action"},
+    {"id": "delete",      "label": "Delete cue",          "key": "",     "desc": "Permanently delete the selected cue",  "kind": "input", "input_mode": "confirm_delete", "prompt": "delete? y/n"},
+    {"id": "archive",     "label": "Archive cue",         "key": "x",    "desc": "Archive the selected cue",             "kind": "input", "input_mode": "confirm_archive", "prompt": "archive? y/n"},
+    {"id": "inject",      "label": "Inject cues → Ableton","key": "i",    "desc": "Write pending cues as Ableton markers",  "kind": "action"},
+    {"id": "diff",        "label": "Show diff",            "key": "d",    "desc": "Diff HEAD snapshot vs previous",         "kind": "action"},
+    {"id": "push",        "label": "Push",                 "key": "P",    "desc": "Push to all remotes + git push",       "kind": "action"},
+    {"id": "pull",        "label": "Pull",                 "key": "p",    "desc": "Pull from all remotes + git pull",     "kind": "action"},
+    {"id": "restore",     "label": "Restore snapshot",     "key": "T",    "desc": "Restore the project to a snapshot",    "kind": "action"},
+    {"id": "open",        "label": "Open in Ableton",       "key": "o",    "desc": "Open the current .als in Ableton",     "kind": "action"},
+    {"id": "help",        "label": "Help",                 "key": "?",    "desc": "Show keyboard shortcut reference",      "kind": "action"},
+    {"id": "settings",    "label": "Settings",             "key": "",     "desc": "Open settings",                         "kind": "action"},
+    {"id": "projects",    "label": "Switch project",       "key": "",     "desc": "List and switch to another project",   "kind": "action"},
+    {"id": "init",       "label": "Init new project",     "key": "",     "desc": "Initialize a new Clavus project",     "kind": "action"},
+    {"id": "share",      "label": "Share (relay)",        "key": "",     "desc": "Start a clavus relay for collaborators","kind": "action"},
+    {"id": "join",       "label": "Join share",           "key": "",     "desc": "Join a remote clavus share session",   "kind": "action"},
+    {"id": "branch",     "label": "Branch",              "key": "",     "desc": "List / create branches",               "kind": "action"},
+    {"id": "doctor",     "label": "Doctor",              "key": "",     "desc": "Run diagnostics",                       "kind": "action"},
+    {"id": "log",        "label": "Log",                 "key": "",     "desc": "Show snapshot history",                "kind": "action"},
+    {"id": "repair",     "label": "Repair",              "key": "",     "desc": "Repair storage / recover from backup",  "kind": "action"},
+    {"id": "status",     "label": "Status",              "key": "",     "desc": "Show current project status",          "kind": "action"},
+    {"id": "config",     "label": "Config",              "key": "",     "desc": "Show / edit Clavus configuration",     "kind": "action"},
+    {"id": "quit",       "label": "Quit",                "key": "q",    "desc": "Exit Clavus",                           "kind": "action"},
+]
+
+
 @dataclass
 class Snap:
     hash: str = ""       # truncated (10 chars) — for display
@@ -98,6 +135,147 @@ class Snap:
             track_count=d.get("track_count", 0),
             conflict_message=d.get("conflict_message", None),
         )
+
+# ─── Command Palette ────────────────────────────────────────────────────
+
+def _fuzzy_match(query: str, text: str) -> bool:
+    """Case-insensitive fuzzy match: query chars must appear in order in text."""
+    if not query:
+        return True
+    text = text.lower()
+    q = query.lower()
+    ti = 0
+    for ch in q:
+        ti = text.find(ch, ti)
+        if ti < 0:
+            return False
+        ti += 1
+    return True
+
+
+class CommandPaletteScreen(ModalScreen[None | str]):
+    """Fuzzy-searched command palette — triggered by `:` in the TUI.
+
+    Shows all COMMANDS filtered by the user's query.
+    Enter executes the selected command; Escape dismisses without action.
+    """
+
+    CSS = f"""
+    CommandPaletteScreen {{ background: {C['bg']}ee; align: center middle; }}
+
+    #palette {{
+        width: 64;
+        max-height: 20;
+        background: {C['surface']};
+        border: solid {C['accent']};
+        padding: 1 0;
+    }}
+
+    #palette-input {{
+        width: 100%;
+        padding: 0 2;
+        margin-bottom: 1;
+    }}
+
+    #palette-input Input {{ width: 100%; }}
+
+    #palette-list {{ width: 100%; height: auto; max-height: 16; }}
+
+    .cmd-item {{ padding: 0 2; min-height: 1; }}
+    .cmd-item:hover {{ background: {C['surface2']}; }}
+    .cmd-item.-highlight {{ background: {C['surface2']}; }}
+
+    #palette-footer {{
+        color: {C['muted']};
+        padding: 0 2;
+        text-style: italic;
+    }}
+    """
+
+    BINDINGS = [
+        Binding("escape", "dismiss", "Close"),
+        Binding("enter", "execute", "Run"),
+        Binding("up", "cursor_up", "↑", show=False),
+        Binding("down", "cursor_down", "↓", show=False),
+        Binding("ctrl+h", "dismiss", "Close"),
+    ]
+
+    def __init__(self, app_ref) -> None:
+        super().__init__()
+        self._app = app_ref  # reference to ClavusApp so we can call its actions
+        self._filtered: list[dict] = list(COMMANDS)
+        self._selected: int = 0
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="palette"):
+            yield Input(placeholder="type to filter commands...", id="palette-input")
+            with VerticalScroll(id="palette-list"):
+                for cmd in self._filtered:
+                    yield self._cmd_item(cmd)
+            yield Static("↑↓ navigate · Enter run · Esc close", id="palette-footer")
+
+    def _cmd_item(self, cmd: dict) -> Static:
+        key_str = f" [{cmd['key']}]" if cmd["key"] else ""
+        label = f"{cmd['label']}{key_str}  {C['dim']}{cmd['desc']}[/]"
+        safe = label.replace("[", "\\[").replace("]", "\\]")
+        return Static(safe, classes="cmd-item")
+
+    def on_mount(self) -> None:
+        inp = self.query_one("#palette-input", Input)
+        inp.focus()
+
+    def _refilter(self, query: str) -> None:
+        self._filtered = [c for c in COMMANDS if _fuzzy_match(query, c["label"]) or _fuzzy_match(query, c["id"])]
+        if not self._filtered:
+            self._filtered = [{"id": "", "label": "(no match)", "key": "", "desc": "", "kind": "disabled"}]
+        self._selected = min(self._selected, len(self._filtered) - 1)
+        list_view = self.query_one("#palette-list", VerticalScroll)
+        # Rebuild the list
+        list_view.remove_children()
+        for cmd in self._filtered:
+            list_view.mount(self._cmd_item(cmd))
+        self._highlight_selected()
+
+    def _highlight_selected(self) -> None:
+        list_view = self.query_one("#palette-list", VerticalScroll)
+        items = list(list_view.children)
+        for i, child in enumerate(items):
+            child.remove_class("-highlight")
+            if i == self._selected:
+                child.add_class("-highlight")
+                child.scroll_visible()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        self._refilter(event.value)
+        self._selected = 0
+        self._highlight_selected()
+
+    def action_cursor_up(self) -> None:
+        if self._filtered:
+            self._selected = max(0, self._selected - 1)
+            self._highlight_selected()
+
+    def action_cursor_down(self) -> None:
+        if self._filtered:
+            self._selected = min(len(self._filtered) - 1, self._selected + 1)
+            self._highlight_selected()
+
+    def _execute_selected(self) -> None:
+        if not self._filtered or self._selected < 0:
+            self.dismiss(None)
+            return
+        cmd = self._filtered[self._selected]
+        if cmd["kind"] == "disabled":
+            self.dismiss(None)
+            return
+        self.dismiss(cmd["id"])  # pass command id back to caller
+
+    def action_execute(self) -> None:
+        self._execute_selected()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._execute_selected()
+
 
 # ─── Help Screen ───────────────────────────────────────────────────────
 
@@ -313,7 +491,30 @@ class ClavusApp(App):
 
     #footer {{ height: 1; background: {C['surface']}; padding: 0 1; }}
     #footer.input-mode {{ height: 3; }}
-    #footer-keys {{ display: none; }}
+    #footer-keys { display: none; }
+
+    #toast-container {
+        dock: top;
+        align: right top;
+        width: auto;
+        height: auto;
+        padding: 1 2;
+        layout: vertical;
+        reverse: true;
+    }
+    .toast {
+        width: 42;
+        min-height: 1;
+        background: {C['surface2']};
+        border: solid {C['border']};
+        padding: 1 2;
+        margin-bottom: 1;
+        color: {C['fg']};
+    }
+    .toast-success {{ border-left: solid {C['green']}; }}
+    .toast-error {{ border-left: solid {C['red']}; }}
+    .toast-warn {{ border-left: solid {C['yellow']}; }}
+    .toast-info {{ border-left: solid {C['accent']}; }}
     #footer-status {{ color: {C['dim']}; width: auto; margin-right: 2; }}
     #footer-hint {{ color: {C['muted']}; text-align: right; min-width: 40; }}
     #footer-stats {{ display: none; }}
@@ -352,6 +553,8 @@ class ClavusApp(App):
         Binding("up", "cursor_up", "Up", show=False),
         Binding(":", "command", ":cmd", show=False),
         Binding("?", "help", "Help", show=False),
+        Binding("up", "input_history_up", "↑", show=False),
+        Binding("down", "input_history_down", "↓", show=False),
         Binding("h", "help", "Help", show=False),
         Binding("escape", "cancel_input", "Cancel input", show=False),
         Binding("s", "settings", "Settings", priority=True),
@@ -402,6 +605,10 @@ class ClavusApp(App):
         self._footer_stats: Optional[Static] = None
         self._sticky_error: str = ""  # persistent error shown in footer
         self._sample_counts: tuple[int, int] | None = None  # (total, materialized) from HEAD snapshot
+        # Input history
+        self._input_history: list[str] = []
+        self._input_history_idx: int = -1  # -1 = blank, 0+ = into history list
+        self._input_history_browse: bool = False  # True while ↑/↓ cycling through history
 
     def _load_config(self) -> str:
         from clavus.config import ClavusConfig
@@ -415,6 +622,8 @@ class ClavusApp(App):
     def compose(self):
         with Container(id="main"):
             yield Static("⧩ clavus", id="header-title")
+            # Toast layer — fixed top-right, stacks upward
+            yield Container(id="toast-container")
             yield Container(
                 Container(ListView(id="clv"), id="cues-list"),
                 Container(
@@ -456,6 +665,8 @@ class ClavusApp(App):
         # Remember which pane had focus so we can restore it after submit
         self._pre_input_focus = self._focused_list_view()
         self._input_mode = mode
+        self._input_history_idx = -1   # reset history navigation
+        self._input_history_browse = False
         footer = self.query_one("#footer")
         inp = self.query_one("#footer-input", Input)
         inp.value = prefill
@@ -483,6 +694,14 @@ class ClavusApp(App):
         event.stop()
         text = event.value.strip()
         mode = self._input_mode
+        # Save to input history (skip empty submits and pure yes/no confirmations)
+        if text and mode not in ("confirm_delete", "confirm_archive"):
+            if not self._input_history or self._input_history[-1] != text:
+                self._input_history.append(text)
+                if len(self._input_history) > 100:
+                    self._input_history.pop(0)
+        self._input_history_idx = -1
+        self._input_history_browse = False
         self._hide_input()
         if not text:
             return
@@ -530,6 +749,36 @@ class ClavusApp(App):
             self._cancel_project_picker()
         elif self._remote_picker_active:
             self._cancel_remote_picker()
+
+    def action_input_history_up(self):
+        """Navigate input history up (older)."""
+        if not self._input_history:
+            return
+        inp = self.query_one("#footer-input", Input)
+        if self._input_history_browse and self._input_history_idx > 0:
+            self._input_history_idx -= 1
+        elif not self._input_history_browse:
+            self._input_history_browse = True
+            self._input_history_idx = len(self._input_history) - 1
+        elif self._input_history_idx <= 0:
+            return
+        inp.value = self._input_history[self._input_history_idx]
+        inp.cursor_position = len(inp.value)
+
+    def action_input_history_down(self):
+        """Navigate input history down (newer)."""
+        if not self._input_history or not self._input_history_browse:
+            return
+        self._input_history_idx += 1
+        if self._input_history_idx >= len(self._input_history):
+            self._input_history_idx = -1
+            self._input_history_browse = False
+            inp = self.query_one("#footer-input", Input)
+            inp.value = ""
+            return
+        inp = self.query_one("#footer-input", Input)
+        inp.value = self._input_history[self._input_history_idx]
+        inp.cursor_position = len(inp.value)
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         """Enter key in ListView — switch to project/remote if picker active."""
@@ -663,7 +912,17 @@ class ClavusApp(App):
     # ─── Command mode ──────────────────────────────────────────────────
 
     def action_command(self):
-        self._show_input("command", ":", prefill="")
+        async def _handle_command(result):
+            if result is None:
+                return  # dismissed
+            await self._run_command_id(result)
+
+        async def _run():
+            screen = CommandPaletteScreen(self)
+            result = await self.push_screen_wait(screen)
+            await _handle_command(result)
+
+        self.run_worker(_run(), exclusive=True)
 
     def _do_command(self, text: str):
         # Imports needed by any branch — prevents UnboundLocalError
@@ -869,6 +1128,60 @@ class ClavusApp(App):
             self._debug_log(f"dispatch: unknown cmd='{cmd}' arg='{arg}'")
             self._status(f"unknown: {cmd}")
 
+    async def _run_command_id(self, cmd_id: str) -> None:
+        """Execute a command from the command palette (receives command id string)."""
+        if not cmd_id:
+            return
+
+        # Commands that need input mode
+        INPUT_COMMANDS = {
+            "snapshot":  ("snapshot_msg", "snapshot message"),
+            "cue":       ("cue",        "cue text"),
+            "reply":     ("reply",      "reply text"),
+            "assign":    ("assign",     "assignee name"),
+            "delete":    ("confirm_delete", "delete? y/n"),
+            "archive":   ("confirm_archive", "archive? y/n"),
+        }
+
+        if cmd_id in INPUT_COMMANDS:
+            mode, prompt = INPUT_COMMANDS[cmd_id]
+            self._show_input(mode, prompt)
+            return
+
+        # Action-only commands — call directly
+        ACTION_MAP = {
+            "resolve":    self.action_resolve,
+            "edit":       self.action_edit_item,
+            "inject":     self.action_inject_cues,
+            "diff":       self.action_diff,
+            "push":       self.action_push,
+            "pull":       self.action_pull,
+            "restore":    self.action_restore_snapshot,
+            "open":       self.action_open_selected_or_head,
+            "help":       self.action_help,
+            "settings":   self.action_settings,
+            "projects":    self._run_list_projects,
+            "init":       self._run_init_project,
+            "share":      self._run_share,
+            "join":       self._run_join,
+            "branch":     self._run_branch,
+            "doctor":     self._run_doctor,
+            "log":        self._run_log,
+            "repair":     self._run_repair,
+            "status":     self._run_status,
+            "config":     self._run_config,
+            "quit":       self.action_quit,
+        }
+
+        action = ACTION_MAP.get(cmd_id)
+        if action:
+            import asyncio
+            if asyncio.iscoroutinefunction(action):
+                await action()
+            else:
+                action()
+        else:
+            self._status(f"command not available: {cmd_id}")
     @work(exclusive=True)
     async def _run_switch_project(self, name: str):
         self._status(f"switching to {name}...")
@@ -3271,6 +3584,50 @@ class ClavusApp(App):
         """Clear toast timer and restore footer to default state."""
         self._toast_timer = None
         self._update_footer()
+
+    # ─── Toast Notifications ───────────────────────────────────────────────
+
+    def _toast(self, text: str, kind: str = "info", duration: float = 4.0) -> None:
+        """Show an in-app toast notification in the top-right corner.
+
+        kind: info | success | error | warn
+        """
+        try:
+            container = self.query_one("#toast-container", Container)
+        except NoMatches:
+            return
+
+        icons = {"info": "ℹ", "success": "✔", "error": "✖", "warn": "⚠"}
+        icon = icons.get(kind, "")
+        safe = text.replace("&", "&&").replace("[", "\\[").replace("]", "\\]")
+        toast = Static(f"{icon} {safe}", classes=f"toast toast-{kind}")
+        container.mount(toast)
+
+        # Auto-dismiss after duration
+        async def _dismiss():
+            await asyncio.sleep(duration)
+            try:
+                await toast.remove()
+            except Exception:
+                pass
+
+        self._run_worker(_dismiss(), exclusive=False)
+
+    def _toast_ok(self, msg: str):
+        """Green toast — for successful sync/push/pull operations."""
+        self._toast(msg, kind="success")
+
+    def _toast_err(self, msg: str):
+        """Red toast — for errors."""
+        self._toast(msg, kind="error", duration=6.0)
+
+    def _toast_info(self, msg: str):
+        """Teal toast — for informational messages."""
+        self._toast(msg, kind="info")
+
+    def _toast_warn(self, msg: str):
+        """Amber toast — for warnings."""
+        self._toast(msg, kind="warn")
 
     def _status(self, msg: str):
         """Short footer toast — auto-clears after 3s."""
