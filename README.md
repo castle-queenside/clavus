@@ -113,6 +113,34 @@ Share your Tailscale URL with your collaborator. Clavus prints it when the relay
 > `tailscale serve --bg --http 80 http://localhost:7891`
 > This is optional. The direct port works fine.
 
+### Expose the Relay Globally with Tailscale Funnel
+
+Tailscale Funnel lets collaborators connect to your relay from anywhere on the internet — no port forwarding, no ngrok, no cloud server needed. Your Mac Studio stays the relay, but it's reachable from any network.
+
+**Requirements:** Tailscale v1.56+ ([check with `tailscale version`](https://tailscale.com/download))
+
+```bash
+# 1. Enable Funnel on port 443 (must be 443 for Funnel)
+sudo tailscale funnel 443
+
+# 2. Verify it's working
+tailscale funnel status
+# → Funnel on https://your-machine.tailXXXX.ts.net/
+
+# 3. Start the Clavus relay on port 443
+clavus relay --port 443
+
+# 4. Share the public URL with collaborators
+# https://your-machine.tailXXXX.ts.net/
+```
+
+Collaborators connect from any network:
+```bash
+clavus join https://your-machine.tailXXXX.ts.net/
+```
+
+> **Note:** Funnel requires `sudo` the first time to bind port 443. After that, it persists across reboots via the Tailscale daemon. The relay URL is `https://` (not `http://`) when Funnel is enabled — Clavus handles this automatically.
+
 ### With a Collaborator — Everyone else joins
 
 ```bash

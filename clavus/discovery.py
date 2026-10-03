@@ -204,25 +204,49 @@ class ClavusListener(zeroconf.ServiceListener):
 
 
 def discover_peers(timeout: float = 3.0) -> list[ClavusPeer]:
-    """Scan the LAN for Clavus servers.
+    """Scan for Clavus servers on Tailscale tailnet + LAN.
+
+    Tries Tailscale first (faster, no broadcast needed on tailnet).
+    Falls back to LAN (zeroconf/mDNS) if Tailscale is unavailable.
+    Results are merged and deduplicated by hostname.
 
     Args:
-        timeout: Max seconds to wait for responses
+        timeout: Max seconds for the full scan
 
     Returns:
         List of discovered ClavusPeer objects
     """
-    listener = ClavusListener()
-    zc = zeroconf.Zeroconf()
-
+    # 1. Try Tailscale peer discovery (faster on tailnet)
+    ts_peers: list[ClavusPeer] = []
     try:
-        browser = zeroconf.ServiceBrowser(zc, SERVICE_TYPE, listener)
-        time.sleep(timeout)
-        browser.cancel()
-    finally:
-        zc.close()
+        ts_peers = discover_tailscale_peers(timeout=min(timeout, 5.0))
+    except Exception:
+        pass
 
-    return list(listener.peers.values())
+    # 2. Fall back to LAN discovery via zeroconf
+    lan_peers: list[ClavusPeer] = []
+    try:
+        listener = ClavusListener()
+        zc = zeroconf.Zeroconf()
+        try:
+            browser = zeroconf.ServiceBrowser(zc, SERVICE_TYPE, listener)
+            time.sleep(timeout)
+            browser.cancel()
+        finally:
+            zc.close()
+        lan_peers = list(listener.peers.values())
+    except Exception:
+        pass
+
+    # 3. Merge results, dedup by hostname (Tailscale takes priority)
+    seen: dict[str, ClavusPeer] = {}
+    for peer in ts_peers:
+        seen[peer.name] = peer
+    for peer in lan_peers:
+        if peer.name not in seen:
+            seen[peer.name] = peer
+
+    return list(seen.values())
 
 
 # ─── Share Codes ───────────────────────────────────────────────────────
