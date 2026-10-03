@@ -512,10 +512,16 @@ class ClavusApp(App):
         text-style: bold;
     }}
 
-    #content {{ layout: grid; grid-size: 2 1; grid-columns: 5fr 2fr; height: 100%; }}
+    #content {{ layout: grid; grid-size: 3 1; grid-columns: 18 1fr 16; height: 100%; }}
 
-    #welcome {{ display: none; column-span: 2; content-align: center middle; height: 100%; color: {C['dim']}; text-style: bold; }}
+    #sidebar {{ background: {C['surface']}; border-right: solid {C['border']}; padding: 1 1; }}
 
+    #welcome {{ display: none; column-span: 3; content-align: center middle; height: 100%; color: {C['dim']}; text-style: bold; }}
+
+    #dashboard {{ display: none; height: 100%; background: transparent; padding: 1 2; }}
+
+    #cues-area {{ display: grid; grid-size: 1 2; grid-rows: auto 1fr; height: 100%; }}
+    #cues-wrapper {{ height: 100%; }}
     #cues-list {{ height: 100%; min-height: 5; border: solid {C['border']}; background: transparent; }}
     #cues-list:focus-within {{ border: solid {C['border_bright']}; background: {C['surface']}15; }}
     #cues-list ListView {{ height: 100%; border: none; background: transparent; }}
@@ -603,6 +609,16 @@ class ClavusApp(App):
         Binding("escape", "cancel_input", "Cancel input", show=False),
         Binding("s", "settings", "Settings", priority=True),
         Binding("ctrl+s", "settings", "Settings", priority=True),
+        # ── vim navigation ─────────────────────────────────────────────────
+        Binding("g", "vim_top", "gg", show=False),
+        Binding("G", "vim_bottom", "G", show=False),
+        Binding("/", "vim_search", "/", show=False),
+        Binding("n", "vim_next_match", "n", show=False),
+        Binding("N", "vim_prev_match", "N", show=False),
+        Binding("ctrl+d", "page_down", "PgDn", show=False),
+        Binding("ctrl+u", "page_up", "PgUp", show=False),
+        Binding("l", "focus_history", "→/l", show=False),
+        Binding("ctrl+o", "navigate_back", "←", show=False),
     ]
 
     def __init__(self, url: str = "", debug: bool = False):
@@ -654,6 +670,10 @@ class ClavusApp(App):
         self._input_history_idx: int = -1  # -1 = blank, 0+ = into history list
         self._input_history_browse: bool = False  # True while ↑/↓ cycling through history
 
+        # ── Activity feed ────────────────────────────────────────────────
+        self._activity_log: list[tuple[float, str, str]] = []  # (timestamp, event, detail)
+        self._last_view: str = "cues"  # for Ctrl+o back navigation
+
     def _load_config(self) -> str:
         from clavus.config import ClavusConfig
         return ClavusConfig.load().author
@@ -669,9 +689,14 @@ class ClavusApp(App):
             # Toast layer — fixed top-right, stacks upward
             yield Container(id="toast-container")
             yield Container(
-                Container(ListView(id="clv"), id="cues-list"),
+                Static("", id="sidebar"),
                 Container(
-                    Static(" History", id="history-label"),
+                    Container(Static("", id="dashboard"), id="cues-area"),
+                    Container(ListView(id="clv"), id="cues-list"),
+                    id="cues-wrapper",
+                ),
+                Container(
+                    Static(" Activity", id="history-label"),
                     Container(ListView(id="hlv"), id="history-list"),
                     id="history",
                 ),
@@ -1762,6 +1787,7 @@ class ClavusApp(App):
                 else:
                     self._sync_status = "● snap ok"
                     self._log_event(f"● {snap_hash[:10]} -- '{message}'")
+                    self._record_event("snapshot", f"{message[:40]}")
                     self.notify(f"[ok] snapshot saved", timeout=3.0)
                 status_text = self._sync_status
                 asyncio.create_task(self._delayed_clear_snapshot_status(status_text))
@@ -1829,6 +1855,8 @@ class ClavusApp(App):
         self._render()
         self._status(f"cue added @ {pos}")
         self._log_event(f"cue: {text[:30]} @ {pos}")
+        self._record_event("cue_added", f"{text[:30]} @ {pos}")
+        self._render_sidebar()
         self._save()
 
     def _do_edit(self, text: str):
@@ -1908,6 +1936,7 @@ class ClavusApp(App):
         cue.status = "resolved" if cue.status == "pending" else "pending"
         self._render()
         self._status("resolved" if cue.status == "resolved" else "unresolved")
+        self._record_event("cue_resolved", "cue resolved")
         self._save()
 
     def action_resolve_conflict(self):
@@ -3608,6 +3637,21 @@ class ClavusApp(App):
 
     # ─── Status / Header / Footer ───────────────────────────────────────
 
+    def _enter_input_mode(self, mode: str, prompt: str = "") -> None:
+        """Enter input mode: show the footer input bar, set focus."""
+        self._input_mode = mode
+        try:
+            footer = self.query_one("#footer", Container)
+            footer.set_class(True, "input-mode")
+            inp = self.query_one("#footer-input", Input)
+            inp.focus()
+            if prompt:
+                inp.placeholder = prompt
+            else:
+                inp.placeholder = "type here..."
+        except NoMatches:
+            pass
+
     def _footer_toast(self, msg: str, duration: float = 4.0):
         """Write to footer, auto-restore project info after duration seconds."""
         self._sticky_error = ""  # clear any sticky error
@@ -3623,6 +3667,79 @@ class ClavusApp(App):
                 pass  # sentinel object, not a real timer
         self._toast_timer = self.set_timer(duration, lambda: self._restore_footer())
         self._toast_set_at = time.time()  # safety net timestamp
+
+
+    # ─── Vim navigation ────────────────────────────────────────────────
+
+    def action_vim_top(self) -> None:
+        """Go to top of current list (vim gg)."""
+        try:
+            lv = self.query_one("#clv", ListView)
+            lv.index = 0
+        except Exception:
+            pass
+
+    def action_vim_bottom(self) -> None:
+        """Go to bottom of current list (vim G)."""
+        try:
+            lv = self.query_one("#clv", ListView)
+            if self.cues:
+                lv.index = len(self.cues) - 1
+        except Exception:
+            pass
+
+    def action_vim_search(self) -> None:
+        """Start search: focus footer input with /."""
+        self._enter_input_mode("search", prompt="/ ")
+
+    def action_vim_next_match(self) -> None:
+        """Jump to next search match (vim n)."""
+        # TODO: implement when search state is tracked
+        self._footer_toast(f"[{C['dim']}]n — next match[/]", 2.0)
+
+    def action_vim_prev_match(self) -> None:
+        """Jump to previous search match (vim N)."""
+        self._footer_toast(f"[{C['dim']}]N — prev match[/]", 2.0)
+
+    def action_page_down(self) -> None:
+        """Scroll half a page down."""
+        try:
+            lv = self.query_one("#clv", ListView)
+            height = max(1, getattr(lv, 'size', 10) // 2)
+            lv.scroll_down(lines=height)
+        except Exception:
+            pass
+
+    def action_page_up(self) -> None:
+        """Scroll half a page up."""
+        try:
+            lv = self.query_one("#clv", ListView)
+            height = max(1, getattr(lv, 'size', 10) // 2)
+            lv.scroll_up(lines=height)
+        except Exception:
+            pass
+
+    def action_focus_history(self) -> None:
+        """Focus the history panel."""
+        self._last_view = "cues"
+        try:
+            lv = self.query_one("#hlv", ListView)
+            lv.focus()
+        except Exception:
+            pass
+
+    def action_navigate_back(self) -> None:
+        """Navigate back to previous view (vim Ctrl+O)."""
+        if self._last_view == "history":
+            try:
+                lv = self.query_one("#clv", ListView)
+                lv.focus()
+                self._last_view = "cues"
+            except Exception:
+                pass
+        else:
+            self.action_focus_history()
+            self._last_view = "history"
 
     def _restore_footer(self):
         """Clear toast timer and restore footer to default state."""
@@ -3748,7 +3865,138 @@ class ClavusApp(App):
             self._sync_status = ""
             self._update_header()
 
+
+    def _render_sidebar(self) -> None:
+        """Render the persistent left sidebar with project stats and remote status."""
+        try:
+            widget = self.query_one("#sidebar", Static)
+        except NoMatches:
+            return
+
+        lines = []
+        D = C
+        dim = f"[{D['dim']}]"
+        acc = f"[{D['accent']}]"
+        fg = f"[{D['fg']}]"
+        green = f"[{D['green']}]"
+        yellow = f"[{D['yellow']}]"
+        muted = f"[{D['muted']}]"
+        h9 = BD['h'] * 9
+
+        lines.append(f"{acc}◈[/]  {fg}clavus[/]")
+        if self.project:
+            proj_short = self.project[:16]
+            lines.append(f"{dim}{h9}")
+            lines.append(f"{fg}{proj_short}[/]")
+            lines.append("")
+            if self._peer_name:
+                if self._peer_reachable:
+                    lines.append(f"{green}●[/]  remote")
+                    lines.append(f"{dim}  {self._peer_name}[/]")
+                else:
+                    lines.append(f"{yellow}○[/]  remote")
+                    lines.append(f"{dim}  {self._peer_name}[/]")
+            else:
+                lines.append(f"{muted}○[/]  local[/]")
+            lines.append("")
+            pending = sum(1 for c in self.cues if c.status == "pending")
+            lines.append(f"{fg}{pending}[/]  pending")
+            lines.append(f"{fg}{len(self.snaps)}[/]  snapshots")
+            lines.append(f"{fg}{len(self.cues)}[/]  total cues")
+            if self._last_snap_time:
+                lines.append("")
+                lines.append(f"{dim}last snap[/]")
+                lines.append(f"{dim}{self._time_ago(self._last_snap_time)}[/]")
+        else:
+            lines.append("")
+            lines.append(f"{muted}no project[/]")
+            lines.append(f"{dim}init <path>[/]")
+
+        widget.update("\n".join(lines))
+
+    def _render_dashboard(self) -> None:
+        """Render the dashboard shown when a project first loads."""
+        try:
+            widget = self.query_one("#dashboard", Static)
+        except NoMatches:
+            return
+
+        if not self.project:
+            widget.update("")
+            return
+
+        D = C
+        dim = f"[{D['dim']}]"
+        acc = f"[{D['accent']}]"
+        fg = f"[{D['fg_bright']}]"
+        green = f"[{D['green']}]"
+        yellow = f"[{D['yellow']}]"
+        muted = f"[{D['muted']}]"
+        cyan = f"[{D['cyan']}]"
+        h30 = BD['h'] * 30
+        h28 = BD['h'] * 28
+
+        lines = []
+        lines.append(f"{acc}╭{h30}╮")
+        lines.append(f"{acc}│[/]  {fg}{self.project[:28]}[/]")
+        lines.append(f"{acc}╰{h30}╯")
+        lines.append("")
+
+        pending = sum(1 for c in self.cues if c.status == "pending")
+        resolved = sum(1 for c in self.cues if c.status == "resolved")
+        active = sum(1 for c in self.cues if c.in_progress)
+        lines.append(f"  {acc}◈[/]  {fg}Project Health[/]")
+        lines.append(f"  {dim}{h28}")
+        clr = yellow if pending > 0 else dim
+        lines.append(f"  {clr}● {pending}[/]  pending cues")
+        lines.append(f"  {green}● {resolved}[/]  resolved")
+        if active > 0:
+            lines.append(f"  {cyan}▶ {active}[/]  in progress")
+        lines.append(f"  {fg}{len(self.snaps)}[/]  snapshots")
+        lines.append("")
+
+        if self.snaps:
+            snap = self.snaps[0]
+            ago = self._time_ago(snap.timestamp)
+            msg = snap.message[:30] if snap.message else "no message"
+            lines.append(f"  {acc}╭{h30}╮")
+            lines.append(f"  {acc}│[/]  {fg}Latest Snapshot[/]")
+            lines.append(f"  {acc}╰{h30}╯")
+            lines.append(f"  {dim}{ago}[/]  {fg}{msg}[/]")
+            lines.append("")
+        else:
+            lines.append(f"  {dim}no snapshots yet[/]")
+            lines.append("")
+
+        lines.append(f"  {acc}╭{h30}╮")
+        lines.append(f"  {acc}│[/]  {fg}Connection[/]")
+        lines.append(f"  {acc}╰{h30}╯")
+        if self._peer_name and self._peer_reachable:
+            lines.append(f"  {green}●[/]  connected to {self._peer_name}")
+        elif self._peer_name:
+            lines.append(f"  {yellow}○[/]  {self._peer_name} (unreachable)")
+        else:
+            lines.append(f"  {dim}○  working locally[/]")
+            lines.append(f"  {dim}  :join <url> to connect[/]")
+        lines.append("")
+
+        lines.append(f"  {dim}key shortcuts[/]")
+        lines.append(f"  {dim}{h28}")
+        lines.append(f"  {acc}S[/]  snapshot    {acc}c[/]  new cue")
+        lines.append(f"  {acc}p[/]  pull       {acc}P[/]  push")
+        lines.append(f"  {acc}Tab[/]  switch pane    {acc}?[/]  help")
+
+        widget.update("\n".join(lines))
+
+    def _record_event(self, event: str, detail: str = "") -> None:
+        """Record an activity event for the feed."""
+        self._activity_log.append((time.time(), event, detail))
+        if len(self._activity_log) > 30:
+            self._activity_log = self._activity_log[-30:]
+
     def _update_header(self):
+
+
         """Header: ◈ logo, project, remote status, sync activity."""
         try:
             # ── Logo + project ─────────────────────────────────────────────
@@ -3888,11 +4136,27 @@ class ClavusApp(App):
             ])
             welcome.update(box)
             welcome.styles.display = "block"
-            cues_list.styles.display = "none"
+            try:
+                dashboard = self.query_one("#dashboard", Static)
+                cues_wrapper = self.query_one("#cues-wrapper", Container)
+                dashboard.styles.display = "none"
+                cues_wrapper.styles.display = "none"
+                self.query_one("#sidebar", Static).update("")
+            except NoMatches:
+                pass
             history.styles.display = "none"
         else:
             welcome.styles.display = "none"
-            cues_list.styles.display = "block"
+            try:
+                dashboard = self.query_one("#dashboard", Static)
+                cues_wrapper = self.query_one("#cues-wrapper", Container)
+                dashboard.styles.display = "block"
+                cues_wrapper.styles.display = "block"
+                self._render_dashboard()
+                self._render_sidebar()
+                self._render_sidebar()
+            except NoMatches:
+                pass
             history.styles.display = "block"
 
     BRAILLE = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -4041,9 +4305,25 @@ class ClavusApp(App):
     def _render_history(self):
         lv = self.query_one("#hlv", ListView)
         lv.remove_children()
-        if not self.snaps:
+
+        # ── Activity feed (last 8 events) ──────────────────────────────
+        if self._activity_log:
+            for ts, event, detail in self._activity_log[-8:]:
+                icon = {"snapshot": "◈", "cue_added": "●", "cue_resolved": "✔",
+                        "sync": "⇄", "peer": "◎"}.get(event, "○")
+                ago = self._time_ago(ts)
+                safe = detail[:35].replace("[", "\[")
+                lv.append(ListItem(Label(
+                    f"  [{C['muted']}]{icon}[/]  [{C['dim']}]{ago}[/]  {safe}"
+                )))
+
+            # Separator
+            lv.append(ListItem(Label(f"  [{C['muted']}]─── snapshots ───[/]")))
+            lv.scroll_end(animate=False)
+
+        if not self.snaps and not self._activity_log:
             lv.append(ListItem(Label(
-                f"\n  [{C['muted']}]no snapshots yet[/]\n"
+                f"\n  [{C['muted']}]no activity yet[/]\n"
                 f"  [{C['accent']}]S[/]   [{C['dim']}]to capture the current state[/]\n"
             )))
             return
