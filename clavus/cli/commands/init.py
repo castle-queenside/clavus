@@ -69,9 +69,13 @@ def init_project(path_str: str | None, auto_confirm: bool = False) -> tuple[Opti
     project.file_path = str(als_path)
 
     config = ClavusConfig.load()
+    # Detect project type from file extension
+    project_type = "bitwig" if als_path.suffix.lower() == ".bwproject" else "ableton"
+
     clavus_proj = ClavusProject(
         name=project_name,
         root_als=str(als_path),
+        project_type=project_type,
         created_at=time.time(),
         description="",
     )
@@ -247,9 +251,13 @@ def cmd_init(args: argparse.Namespace) -> None:
     print(f"   [ok] Copied -> {target_dir}")
     print()
 
+    # Detect project type from file extension
+    project_type = "bitwig" if als_path.suffix.lower() == ".bwproject" else "ableton"
+
     clavus_proj = ClavusProject(
         name=project_name,
         root_als=str(als_path),
+        project_type=project_type,
         created_at=time.time(),
         description=desc_input,
     )

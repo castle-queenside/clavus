@@ -39,7 +39,7 @@ CONFIG_FILE = "config.json"
 # Schema version for index.json.
 # Increment when adding new ClavusProject fields that need backfilling.
 # Migrations run once on init() — never on every access.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 # ─── Data Model ─────────────────────────────────────────────────────────
@@ -69,12 +69,18 @@ class Snapshot:
         return bool(self.notes.strip())
 
 
+class ProjectType:
+    ABLETON = "ableton"
+    BITWIG = "bitwig"
+
+
 @dataclass
 class ClavusProject:
-    """Metadata about a tracked Ableton project."""
+    """Metadata about a tracked Ableton or Bitwig project."""
     name: str
-    root_als: str  # Path to the .als file
+    root_als: str  # Path to the .als or .bwproject file
     created_at: float
+    project_type: str = ProjectType.ABLETON  # "ableton" or "bitwig"
     head: Optional[str] = None  # Current snapshot hash
     description: str = ""  # Optional human-readable notes
     branch: str = "main"
@@ -168,6 +174,19 @@ class BlobStore:
                     proj_data.setdefault("last_remote_head", "")
                     proj_data.setdefault("shared", True)
                 print("  ↻ Migrated index.json to schema v2")
+
+            # ── Migrate v2 → v3 ─────────────────────────────────────────────
+            if current < 3:
+                for name, proj_data in index.items():
+                    if not isinstance(proj_data, dict) or name.startswith("_"):
+                        continue
+                    # Backfill project_type from file extension
+                    root = proj_data.get("root_als", "")
+                    if root.lower().endswith(".bwproject"):
+                        proj_data["project_type"] = ProjectType.BITWIG
+                    else:
+                        proj_data["project_type"] = ProjectType.ABLETON
+                print("  ↻ Migrated index.json to schema v3")
 
             index["_schema_version"] = SCHEMA_VERSION
             self._write_json(self.index_path, index)

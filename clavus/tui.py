@@ -96,6 +96,9 @@ BD = {
     "end": "└──",  # tree, last child
     "bar": "│  ",  # continuation bar (with spacing)
     "spc": "   ",  # spacing for no continuation
+    # Project type icons (Tokyo Night palette)
+    "ableton": "[A]",  # Ableton project indicator
+    "bitwig": "[B]",   # Bitwig project indicator
 }
 
 # ─── Data Models ────────────────────────────────────────────────────────────
@@ -635,6 +638,7 @@ class ClavusApp(App):
         Binding("N", "vim_prev_match", "N", show=False),
         Binding("ctrl+d", "page_down", "PgDn", show=False),
         Binding("ctrl+u", "page_up", "PgUp", show=False),
+        Binding("f", "filter_project_type", "Filter"),
         Binding("l", "focus_history", "→/l", show=False),
         Binding("ctrl+o", "navigate_back", "←", show=False),
     ]
@@ -680,6 +684,8 @@ class ClavusApp(App):
         get_projects_dir()
         self._cue_store = None  # Lazy init per project
         self._header_title: Optional[Static] = None
+        self._project_type: str = "ableton"  # Current project type for filtering
+        self._filter_mode: str = "all"  # "all" | "ableton" | "bitwig"
         self._footer_stats: Optional[Static] = None
         self._sticky_error: str = ""  # persistent error shown in footer
         self._sample_counts: tuple[int, int] | None = None  # (total, materialized) from HEAD snapshot
@@ -1282,6 +1288,7 @@ class ClavusApp(App):
             index["_last_project"] = name
             self.store.index_path.write_text(json.dumps(index, indent=2, default=str))
         self.project = name
+        self._project_type = getattr(proj, 'project_type', 'ableton')
         self._log_event(f"switched to project '{name}'")
         # Load active remote from project config
         self._peer_name = getattr(proj, 'active_remote', '') or ''
@@ -1323,13 +1330,20 @@ class ClavusApp(App):
         lv = self.query_one("#clv", ListView)
         lv.clear()
         for p in projects:
+            # Apply filter
+            ptype = getattr(p, 'project_type', 'ableton')
+            if self._filter_mode != "all" and ptype != self._filter_mode:
+                continue
             head = p.head or ""
             active = " ◀" if p.name == self.project else ""
             share_icon = "[NET]" if p.shared else "[PK]"
-            line = f"  {share_icon} {p.name}  @ {head[:12] if head else '(no snaps)':12s}{active}"
+            ptype_icon = "🎛" if ptype == "bitwig" else "🎹"
+            ptype_color = C["purple"] if ptype == "bitwig" else C["accent"]
+            line = f"  [{ptype_color}]{ptype_icon}[/] {share_icon} {p.name}  @ {head[:12] if head else '(no snaps)':12s}{active}"
             lv.append(ListItem(Label(line, classes="project-picker-item")))
         # Footer hint
-        self._footer_toast(f"[{C['accent']}]pick a project -> enter   [{C['dim']}]esc to cancel[/]", 10.0)
+        filter_label = "all" if self._filter_mode == "all" else f"[{C['purple'] if self._filter_mode == 'bitwig' else C['accent']}]{self._filter_mode}[/]"
+        self._footer_toast(f"[{C['accent']}]pick a project -> enter   [{C['dim']}]f: filter({filter_label})   esc: cancel[/]", 10.0)
         self._update_footer_hint()
 
     def _clear_project_list(self):
@@ -2824,6 +2838,7 @@ class ClavusApp(App):
             match = projects[0]
 
         self.project = match.name
+        self._project_type = getattr(match, 'project_type', 'ableton')
         self._status(f"loaded: {self.project}")
         # Load active remote from project config
         self._peer_name = getattr(match, 'active_remote', '') or ''
@@ -3737,6 +3752,20 @@ class ClavusApp(App):
         except Exception:
             pass
 
+    def action_filter_project_type(self) -> None:
+        """Toggle filter: all -> ableton -> bitwig -> all."""
+        modes = ["all", "ableton", "bitwig"]
+        idx = modes.index(self._filter_mode) if self._filter_mode in modes else 0
+        self._filter_mode = modes[(idx + 1) % len(modes)]
+        
+        labels = {
+            "all": "showing all projects",
+            "ableton": "showing Ableton only",
+            "bitwig": "showing Bitwig only",
+        }
+        self._footer_toast(f"[{C['accent']}]filter:[/] {labels[self._filter_mode]}", 2.0)
+        self._render()
+
     def action_focus_history(self) -> None:
         """Focus the history panel."""
         self._last_view = "cues"
@@ -3903,9 +3932,16 @@ class ClavusApp(App):
 
         lines.append(f"{acc}◈[/]  {fg}clavus[/]")
         if self.project:
-            proj_short = self.project[:16]
+            proj_short = self.project[:14]
+            # Project type indicator with color coding
+            if self._project_type == "bitwig":
+                ptype = f"[{D['purple']}]🎛 Bitwig[/]"
+                ptype_short = "🎛"
+            else:
+                ptype = f"[{D['accent']}]🎹 Ableton[/]"
+                ptype_short = "🎹"
             lines.append(f"{dim}{h9}")
-            lines.append(f"{fg}{proj_short}[/]")
+            lines.append(f"{fg}{proj_short}[/]  {ptype}")
             lines.append("")
             if self._peer_name:
                 if self._peer_reachable:
@@ -3955,8 +3991,14 @@ class ClavusApp(App):
         h28 = BD['h'] * 28
 
         lines = []
+        # Project type badge
+        if self._project_type == "bitwig":
+            ptype_badge = f"[{D['purple']}]🎛 Bitwig[/]"
+        else:
+            ptype_badge = f"[{D['accent']}]🎹 Ableton[/]"
+
         lines.append(f"{acc}╭{h30}╮")
-        lines.append(f"{acc}│[/]  {fg}{self.project[:28]}[/]")
+        lines.append(f"{acc}│[/]  {fg}{self.project[:20]}[/]  {ptype_badge}")
         lines.append(f"{acc}╰{h30}╯")
         lines.append("")
 
@@ -4018,10 +4060,15 @@ class ClavusApp(App):
         """Header: ◈ logo, project, remote status, sync activity."""
         try:
             # ── Logo + project ─────────────────────────────────────────────
+            # Project type icon: 🎹 Ableton (accent blue), 🎛 Bitwig (purple)
+            if self._project_type == "bitwig":
+                ptype_icon = f"[bold {C['purple']}]🎛[/]"
+            else:
+                ptype_icon = f"[bold {C['accent']}]🎹[/]"
             logo = f"[bold {C['accent']}]◈[/] "
             proj = f"[bold {C['fg_bright']}]clavus[/]"
             if self.project:
-                proj += f"  [{C['muted']}]·[/]  [bold {C['fg_bright']}]{self.project}[/]"
+                proj += f"  [{C['muted']}]·[/]  {ptype_icon}  [bold {C['fg_bright']}]{self.project}[/]"
 
             # ── Remote status ────────────────────────────────────────────────
             if self._peer_name and self._peer_reachable:
@@ -4044,8 +4091,15 @@ class ClavusApp(App):
             else:
                 sync = ""
 
+            # Filter indicator in header
+            filter_indicator = ""
+            if self._filter_mode != "all":
+                fcolor = C["purple"] if self._filter_mode == "bitwig" else C["accent"]
+                ficon = "🎛" if self._filter_mode == "bitwig" else "🎹"
+                filter_indicator = f"  [{fcolor}]{ficon} {self._filter_mode}[/]"
+            
             widget = self.query_one("#header-title", Static)
-            widget.update(f"{logo}{proj}{remote}{sync}")
+            widget.update(f"{logo}{proj}{remote}{sync}{filter_indicator}")
             widget.refresh()
 
             if self._sync_status:

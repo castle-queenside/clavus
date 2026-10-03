@@ -38,4 +38,4 @@ def test_schema_version_in_new_index(temp_store):
     """New index should have _schema_version set."""
     import json
     index = json.loads(temp_store.index_path.read_text())
-    assert index.get("_schema_version") == 2
+    assert index.get("_schema_version") == 3

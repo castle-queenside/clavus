@@ -48,6 +48,6 @@ def test_schema_version_migration(temp_clavus):
     proj = ClavusProject(name="SchemaTest", root_als="/tmp/x.als", created_at=0.0)
     store.set_index(proj)
     index = json.loads(store.index_path.read_text())
-    assert index["_schema_version"] == 2
+    assert index["_schema_version"] == 3
     assert index["SchemaTest"]["active_remote"] == ""
     assert index["SchemaTest"]["shared"] is True
