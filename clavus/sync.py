@@ -22,13 +22,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Callable
 
-import httpx
-
 from clavus.store import (
     BlobStore, ClavusProject, Snapshot, DEFAULT_CLAVUS_DIR, StemStore,
 )
 from clavus.helpers import get_desktop_path, get_projects_dir
 from clavus.cues import CueStore, Cue, CueReply as CueReplyData, CueFilter
+
+from clavus.http_client import http_get, http_post, http_get_raw
 
 
 # ─── Remote Config ────────────────────────────────────────────────────
@@ -70,15 +70,13 @@ def save_remotes(store: BlobStore, remotes: list[Remote]) -> None:
 
 # ─── Sync Client ──────────────────────────────────────────────────────
 
-# Retryable exceptions: transient network failures, not semantic errors
-_RETRYABLE = (
-    httpx.ConnectError,
-    httpx.TimeoutException,
-    httpx.RemoteProtocolError,
-    httpx.NetworkError,
+# Retryable errors: transient network failures, not semantic errors.
+# urllib.error.URLError wraps socket errors (DNS, refused, reset).
+_RETRYABLE_NETWORK = (
+    OSError,         # "Connection reset by peer", broken pipe, etc.
     ConnectionError,
     TimeoutError,
-    OSError,  # "Connection reset by peer" etc
+    socket.timeout,
 )
 _MAX_RETRIES = 3
 _RETRY_BACKOFF = [1.0, 2.0, 4.0]  # seconds between attempts
@@ -90,112 +88,95 @@ class SyncClient:
     All HTTP calls get automatic retry on transient network failures
     (timeouts, connection resets, DNS blips). Semantic errors (409, 404)
     are never retried — they mean something that retrying won't fix.
+    Uses stdlib urllib.request (via http_client module).
     """
 
     def __init__(self, remote_url: str):
         self.base_url = remote_url.rstrip("/")
-        self.client = httpx.Client(timeout=30.0)
+        # urllib.request opens a fresh connection per request — no persistent client needed
 
     def _retry(self, fn, *args, **kwargs):
         """Call fn() up to _MAX_RETRIES times with backoff on transient errors.
 
-        Returns (response, None) on success, (None, error_message) on failure.
+        fn must be a callable that returns (data, error_msg, status_code)
+        matching http_get/http_post's return signature.
+
+        Returns (data, None) on success, (None, error_message) on failure.
         Semantic errors (4xx except 429) return immediately without retry.
         """
         last_error = None
         for attempt in range(_MAX_RETRIES):
-            try:
-                r = fn(*args, **kwargs)
-                # 4xx errors (except 429 rate-limit) are semantic — don't retry
-                if 400 <= r.status_code < 500 and r.status_code != 429:
-                    return r, None
-                if r.status_code < 500:
-                    return r, None
-                # 5xx — retryable
-                last_error = f"HTTP {r.status_code}"
-            except _RETRYABLE as e:
-                last_error = str(e)[:120]
-            except Exception as e:
-                # Unexpected — don't retry
-                return None, str(e)[:120]
+            data, err, status = fn(*args, **kwargs)
+            if err is not None:
+                # Network error — retry
+                last_error = err
+            elif status >= 500:
+                # 5xx server error — retry
+                last_error = f"HTTP {status}"
+            elif 400 <= status < 500 and status != 429:
+                # 4xx semantic error (not rate-limit) — return immediately
+                return data, None
+            else:
+                # 2xx / 3xx / 429 — success or rate-limit, no retry
+                return data, None
 
             if attempt < _MAX_RETRIES - 1:
                 time.sleep(_RETRY_BACKOFF[attempt])
 
         return None, last_error or "unknown"
 
+    def _get(self, path: str, params: Optional[dict] = None,
+              timeout: float = 30.0) -> tuple[Optional[dict], Optional[str], int]:
+        """GET request with retry. Returns (data, error, status)."""
+        return http_get(f"{self.base_url}{path}", params=params, timeout=timeout)
+
+    def _post(self, path: str, json_data: Optional[dict] = None,
+               params: Optional[dict] = None,
+               timeout: float = 30.0) -> tuple[Optional[dict], Optional[str], int]:
+        """POST request with retry. Returns (data, error, status)."""
+        return http_post(f"{self.base_url}{path}", json_data=json_data,
+                         params=params, timeout=timeout)
+
     def ping(self) -> bool:
-        """Health check with retries. Use fast_ping() for pre-flight checks."""
-        r, _ = self._retry(
-            lambda: self.client.get(f"{self.base_url}/api/ping", timeout=5)
-        )
-        return r is not None and r.status_code == 200
+        """Health check with retries."""
+        data, err, status = self._retry(self._get, "/api/ping", timeout=5.0)
+        return status == 200
 
     def fast_ping(self, timeout: float = 3.0) -> bool:
         """Single-shot health check — no retries. For parallel pre-flight."""
-        try:
-            r = self.client.get(f"{self.base_url}/api/ping", timeout=timeout)
-            return r.status_code == 200
-        except Exception:
-            return False
+        data, err, status = http_get(f"{self.base_url}/api/ping", timeout=timeout)
+        return status == 200
 
     def get_relay_head(self, project: str) -> str | None:
-        """Fetch the current HEAD hash for a project on the relay.
-
-        Used before pushing when local state has no expected_parent — probes
-        the relay so we can send expected_parent=relay_head to enable conflict
-        detection even on the first push after a pull.
-        """
-        try:
-            r = self.client.get(
-                f"{self.base_url}/api/sync/head/{project}",
-                timeout=10,
-            )
-            if r.status_code == 200:
-                return r.json().get("head")
-        except Exception:
-            pass
+        """Fetch the current HEAD hash for a project on the relay."""
+        data, err, status = http_get(
+            f"{self.base_url}/api/sync/head/{project}", timeout=10.0
+        )
+        if status == 200 and data is not None:
+            return data.get("head")
         return None
 
     def pull(self, project: str) -> Optional[dict]:
-        r, err = self._retry(
-            lambda: self.client.get(
-                f"{self.base_url}/api/sync/pull",
-                params={"name": project},
-                timeout=30,
-            )
+        data, err, status = self._retry(
+            self._get, "/api/sync/pull", params={"name": project}, timeout=30.0
         )
-        if r is not None and r.status_code == 200:
-            try:
-                return r.json()
-            except Exception:
-                return None
-        return None
+        return data if status == 200 else None
 
     def push_cues(self, project: str, cues: list[dict]) -> bool:
-        r, _ = self._retry(
-            lambda: self.client.post(
-                f"{self.base_url}/api/sync/push",
-                params={"name": project},
-                json={"cues": cues},
-                timeout=30,
-            )
+        data, err, status = self._retry(
+            self._post, "/api/sync/push",
+            json_data={"cues": cues},
+            params={"name": project}, timeout=30.0
         )
-        return r is not None and r.status_code == 200
+        return status == 200
 
     def push_snapshots(self, project: str, snapshots: list[dict],
                         expected_parent: str | None = None,
                         force: bool = False) -> tuple[bool, str | None, str | None]:
         """Push snapshot metadata to remote.
 
-        Args:
-            expected_parent: Hash the peer expects to be HEAD on the relay.
-                             If set and doesn't match, relay returns 409 Conflict.
-            force: Skip optimistic lock and force HEAD update on relay.
-
         Returns:
-            (success, conflict_message, relay_head) — conflict_message set on 409,
-            relay_head is the current relay HEAD from the 409 response (for auto-recovery).
+            (success, conflict_message, relay_head) — conflict_message set on 409.
         """
         body: dict = {"snapshots": snapshots}
         if expected_parent:
@@ -203,40 +184,38 @@ class SyncClient:
         if force:
             body["force"] = True
 
-        snap_count = len(snapshots)
-        print(f"  [client] push_snapshots: force={force} expected_parent={expected_parent[:10] if expected_parent else 'none'} snaps={snap_count} body_keys={list(body.keys())}")
-
-        r, _ = self._retry(
-            lambda: self.client.post(
-                f"{self.base_url}/api/sync/push-snapshots",
-                params={"name": project},
-                json=body,
-                timeout=60,
-            )
+        data, err, status = self._retry(
+            self._post, "/api/sync/push-snapshots",
+            json_data=body,
+            params={"name": project}, timeout=60.0
         )
-        if r is None:
-            return False, None, None
-        if r.status_code == 200:
+        if status == 200:
             return True, None, None
-        if r.status_code == 409:
-            try:
-                resp_body = r.json()
-                # FastAPI wraps detail in {"detail": ...}
-                detail = resp_body.get("detail", resp_body) if isinstance(resp_body, dict) else resp_body
-                if isinstance(detail, dict):
-                    err = detail.get("message", detail.get("error", "Conflict — pull first"))
-                    relay_head = detail.get("relay_head")
-                else:
-                    err = str(detail)
-                    relay_head = None
-            except Exception:
-                err = "Conflict — pull first"
+        if status == 409:
+            detail = (data or {}).get("detail", data or {})
+            if isinstance(detail, dict):
+                err_msg = detail.get("message", detail.get("error", "Conflict — pull first"))
+                relay_head = detail.get("relay_head")
+            else:
+                err_msg = str(detail) if detail else "Conflict — pull first"
                 relay_head = None
-            return False, err, relay_head
+            return False, err_msg, relay_head
         return False, None, None
 
+    def request_with_retry(self, method: str, path: str,
+                          json_data: Optional[dict] = None,
+                          params: Optional[dict] = None,
+                          timeout: float = 30.0
+                          ) -> tuple[Optional[dict], Optional[str], int]:
+        """Make an HTTP request with retry. method: GET or POST."""
+        if method.upper() == "POST":
+            return self._retry(self._post, path,
+                               json_data=json_data, params=params, timeout=timeout)
+        return self._retry(self._get, path, params=params, timeout=timeout)
+
     def close(self):
-        self.client.close()
+        """No-op — urllib.request opens a fresh connection per request."""
+        pass
 
     def request_with_retry(self, method: str, path: str, **kwargs):
         """Make an HTTP request with retry. Use this for raw API calls
@@ -1165,27 +1144,26 @@ class SyncDaemon:
         ws_url = remote.url.replace("http://", "ws://").replace("https://", "wss://")
         ws_url = f"{ws_url}/ws?project={self.proj.name}"
 
-        import httpx
-
-        with httpx.Client() as client:
-            try:
-                # Initial sync: pull all cues
-                resp = client.get(
-                    f"{remote.url}/api/sync/pull",
-                    params={"name": self.proj.name},
-                    timeout=15,
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    for c in data.get("cues", []):
-                        _apply_cue_event(self.store, self.proj, "cue_new", c)
-                    cue_count = len(data.get("cues", []))
-                    snap_count = len(data.get("snapshots", []))
-                    if cue_count or snap_count:
-                        print(f"  📥 Initial sync from '{remote.name}': {cue_count} cues, {snap_count} snapshots")
-            except Exception as e:
-                print(f"  ⚠️  Initial sync from '{remote.name}' failed: {e}")
+        try:
+            # Initial sync: pull all cues
+            data, err, status = http_get(
+                f"{remote.url}/api/sync/pull",
+                params={"name": self.proj.name},
+                timeout=15.0,
+            )
+            if status == 200 and data:
+                for c in data.get("cues", []):
+                    _apply_cue_event(self.store, self.proj, "cue_new", c)
+                cue_count = len(data.get("cues", []))
+                snap_count = len(data.get("snapshots", []))
+                if cue_count or snap_count:
+                    print(f"  📥 Initial sync from '{remote.name}': {cue_count} cues, {snap_count} snapshots")
+            elif err:
+                print(f"  ⚠️  Initial sync from '{remote.name}' failed: {err}")
                 return
+        except Exception as e:
+            print(f"  ⚠️  Initial sync from '{remote.name}' failed: {e}")
+            return
 
         # Now listen for real-time events via websocket
         try:

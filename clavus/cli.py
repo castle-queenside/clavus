@@ -1938,9 +1938,9 @@ def cmd_relay(args: argparse.Namespace) -> None:
         time.sleep(0.5)
         # Verify it started
         try:
-            import httpx
-            r = httpx.get(f'http://127.0.0.1:{port}/api/ping', timeout=3)
-            if r.status_code == 200:
+            from clavus.http_client import http_get
+            data, err, status = http_get(f'http://127.0.0.1:{port}/api/ping', timeout=3.0)
+            if status == 200:
                 print(f'[ok] Relay running in background (PID {pid})')
                 print(f'   Share URL: http://127.0.0.1:{port}')
                 return
@@ -2054,9 +2054,9 @@ def cmd_share(args: argparse.Namespace) -> None:
     if port_open:
         killed = False
         try:
-            import httpx
-            r = httpx.get(f"http://127.0.0.1:{port}/api/sync/pull", params={"name": "_"}, timeout=2)
-            if r.status_code in (200, 404):
+            from clavus.http_client import http_get
+            data, err, status = http_get(f"http://127.0.0.1:{port}/api/sync/pull", params={"name": "_"}, timeout=2.0)
+            if status in (200, 404):
                 print(f"Restarting stale Clavus relay on port {port}...")
                 if platform.system() == "Windows":
                     # Find PID using port and kill it
@@ -2223,9 +2223,9 @@ def cmd_share(args: argparse.Namespace) -> None:
         time.sleep(0.5)
         # Verify it started
         try:
-            import httpx
-            r = httpx.get(f'http://127.0.0.1:{port}/api/ping', timeout=3)
-            if r.status_code == 200:
+            from clavus.http_client import http_get
+            data, err, status = http_get(f'http://127.0.0.1:{port}/api/ping', timeout=3.0)
+            if status == 200:
                 print(f'[ok] Relay running in background (PID {pid})')
                 print(f'   Share URL: http://127.0.0.1:{port}')
                 return

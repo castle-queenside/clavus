@@ -320,23 +320,23 @@ def _tailscale_api(path: str) -> Optional[dict]:
     Tries MagicDNS first, then the localhost IP.
     Returns parsed JSON or None on failure.
     """
+    from clavus.http_client import http_get
     for base in [TAILSCALE_MAGICDNS, TAILSCALE_LOCALHOST]:
         try:
-            import httpx
-            r = httpx.get(f"{base}/localapi/v0/{path}", timeout=5)
-            if r.status_code == 200:
-                return r.json()
+            data, err, status = http_get(f"{base}/localapi/v0/{path}", timeout=5.0)
+            if status == 200 and data:
+                return data
         except Exception:
             continue
 
-    # Also try Unix socket
+    # Also try Unix socket (httpx required for UDS transport — no stdlib equivalent)
     for sock in ["/var/run/tailscale/tailscaled.sock",
                  "/run/tailscale/tailscaled.sock"]:
         try:
             import httpx
             transport = httpx.HTTPTransport(uds=sock)
-            with httpx.Client(transport=transport) as client:
-                r = client.get(f"http://localhost/localapi/v0/{path}", timeout=5)
+            with httpx.Client(transport=transport, timeout=5.0) as client:
+                r = client.get(f"http://localhost/localapi/v0/{path}")
                 if r.status_code == 200:
                     return r.json()
         except Exception:
@@ -381,36 +381,30 @@ def discover_tailscale_peers(timeout: float = 5.0) -> list[ClavusPeer]:
 
         ts_ip = ips[0]
         # Try default Clavus port
+        from clavus.http_client import http_get
         for port in [7890]:
-            try:
-                import httpx
-                url = f"http://[{ts_ip}]:{port}" if ":" in ts_ip else f"http://{ts_ip}:{port}"
-                r = httpx.get(f"{url}/api/ping", timeout=3)
-                if r.status_code == 200:
-                    # Get project/user info from share endpoint
-                    try:
-                        sr = httpx.get(f"{url}/api/share", timeout=3)
-                        if sr.status_code == 200:
-                            info = sr.json()
-                            return ClavusPeer(
-                                name=hostname,
-                                host=ts_ip,
-                                port=port,
-                                project=info.get("project", {}).get("name", "") or "",
-                                user=info.get("author", "") or "",
-                                version=info.get("version", ""),
-                                last_seen=_time.time(),
-                            )
-                    except Exception:
-                        pass
+            url = f"http://[{ts_ip}]:{port}" if ":" in ts_ip else f"http://{ts_ip}:{port}"
+            data, err, status = http_get(f"{url}/api/ping", timeout=3.0)
+            if status == 200 and data:
+                # Get project/user info from share endpoint
+                share_data, _, share_status = http_get(f"{url}/api/share", timeout=3.0)
+                if share_status == 200 and share_data:
                     return ClavusPeer(
                         name=hostname,
                         host=ts_ip,
                         port=port,
+                        project=share_data.get("project", {}).get("name", "") or "",
+                        user=share_data.get("author", "") or "",
+                        version=share_data.get("version", ""),
                         last_seen=_time.time(),
                     )
-            except Exception:
-                continue
+                return ClavusPeer(
+                    name=hostname,
+                    host=ts_ip,
+                    port=port,
+                    last_seen=_time.time(),
+                )
+        return None
         return None
 
     start = _time.time()
