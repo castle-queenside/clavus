@@ -29,6 +29,8 @@ classifiers = [
     "Topic :: Multimedia :: Sound/Audio :: Editors",
 ]
 dependencies = [
+    # httpx: required for Tailscale Unix Domain Socket transport (no stdlib alternative).
+    # All other HTTP calls use stdlib urllib (see clavus/http_client.py).
     "httpx",
     "textual",
     "zeroconf",
@@ -36,6 +38,30 @@ dependencies = [
     "uvicorn",
     "websockets",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7",
+    "pyright>=1.1",
+    "pre-commit>=3",
+]
+
+[tool.pyright]
+include = ["clavus", "tests"]
+exclude = ["**/__pycache__", "tests/fixtures"]
+pythonVersion = "3.10"
+typeCheckingMode = "strict"
+reportMissingImports = true
+reportMissingTypeStubs = false
+reportUnknownMemberType = false
+reportUnknownParameterType = false
+reportUnknownVariableType = false
+pythonPlatform = "Darwin"
+
+[tool.pre-commit]
+# Run manually: pre-commit run --all-files
+# Install: pre-commit install
+
 
 [tool.setuptools.packages.find]
 include = ["clavus*"]

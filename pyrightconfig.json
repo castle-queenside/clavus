@@ -1,0 +1,20 @@
+{
+  "include": ["clavus"],
+  "exclude": [
+    "**/__pycache__",
+    "**/.git",
+    "tests"
+  ],
+  "pythonVersion": "3.10",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": true,
+  "reportMissingTypeStubs": false,
+  "reportMissingParameterType": false,
+  "pythonPlatform": "Darwin",
+  "executionEnvironments": [
+    {
+      "root": "."
+    }
+  ],
+  "onTypeErrors": ["ignore"]
+}

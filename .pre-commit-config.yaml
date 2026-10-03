@@ -1,0 +1,12 @@
+# .pre-commit-config.yaml
+# Install: cd ~/Projects/clavus && pre-commit install
+# Run: pre-commit run --all-files
+repos:
+  - repo: local
+    hooks:
+      - id: verify
+        name: verify
+        entry: bash
+        args: [scripts/verify.sh]
+        language: system
+        stages: [pre-commit, commit-msg]
