@@ -1,0 +1,56 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/parser-als",
+    "crates/parser-bw",
+    "crates/sync",
+    "crates/relay",
+    "crates/tui",
+]
+
+[[bin]]
+name = "clavus"
+path = "src/main.rs"
+
+[package]
+name = "clavus"
+version = "0.1.0"
+edition = "2021"
+description = "Version control for DAW projects"
+
+[dependencies]
+# Clavus crates
+clavus-core = { path = "crates/core" }
+clavus-parser-als = { path = "crates/parser-als" }
+clavus-parser-bw = { path = "crates/parser-bw" }
+clavus-sync = { path = "crates/sync" }
+clavus-relay = { path = "crates/relay" }
+clavus-tui = { path = "crates/tui" }
+
+# CLI & TUI
+clap = { version = "4", features = ["derive"] }
+ratatui = "0.26"
+crossterm = "0.27"
+dirs = "5"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Networking
+reqwest = { version = "0.11", features = ["json", "stream"] }
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+
+# Async
+tokio = { version = "1", features = ["full"] }
+
+# File watching
+notify = "6"
+mdns-sd = "0.9"
+
+# Misc
+anyhow = "1"
+tempfile = "3"

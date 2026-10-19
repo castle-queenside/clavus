@@ -1,0 +1,20 @@
+[package]
+name = "clavus-parser-bw"
+version = "0.1.0"
+edition = "2021"
+description = "Bitwig .bwproject parser for Clavus"
+
+[dependencies]
+clavus-core = { path = "../core" }
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+quick-xml = "0.31"
+zip = "2"
+flate2 = "1"
+tracing = "0.1"
+thiserror = "1"
+anyhow = "1"
+
+[dev-dependencies]
+tempfile = "3"

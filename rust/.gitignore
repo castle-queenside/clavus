@@ -1,0 +1,15 @@
+# Build artifacts
+/target/
+
+# Cargo.lock is checked in for reproducibility
+# cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

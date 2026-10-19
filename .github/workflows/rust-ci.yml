@@ -1,0 +1,44 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [rust]
+    paths:
+      - 'rust/**'
+      - '.github/workflows/rust-ci.yml'
+  pull_request:
+    branches: [rust]
+    paths:
+      - 'rust/**'
+      - '.github/workflows/rust-ci.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: rust
+
+      - name: Install Rust
+        run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: 'rust -> rust'
+
+      - name: Generate test fixture
+        run: python3 fixtures/gen_fixture.py
+
+      - name: Test
+        run: cargo test --all
+        working-directory: rust
+
+      - name: Check
+        run: cargo check --all-targets
+        working-directory: rust
+
+      - name: Clippy
+        run: cargo clippy --all -- -D warnings
+        working-directory: rust

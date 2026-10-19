@@ -3,6 +3,9 @@ name: CI
 on:
   push:
     branches: [main, feature/*]
+    paths-ignore:
+      - 'rust/**'
+      - '.github/workflows/rust-ci.yml'
   pull_request:
     branches: [main]
     paths-ignore:
