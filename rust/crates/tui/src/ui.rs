@@ -582,7 +582,8 @@ fn unix_to_rel(secs: i64) -> String {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
     let d = now - secs;
-    if d < 60    { format!("{}s ago", d) }
+    if d < 5      { "just now".to_string() }
+    else if d < 60    { format!("{}s ago", d) }
     else if d < 3600  { format!("{}m ago", d / 60) }
     else if d < 86400  { format!("{}h ago", d / 3600) }
     else if d < 2592000 { format!("{}d ago", d / 86400) }
