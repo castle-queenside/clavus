@@ -45,6 +45,8 @@ pub struct App {
     pub input_buf: String,
     /// Loading indicator.
     pub loading: bool,
+    /// Idle phrase index — cycles through idle messages.
+    pub idle_index: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -85,6 +87,7 @@ impl App {
             info: None,
             input_buf: String::new(),
             loading: false,
+            idle_index: 0,
         }
     }
 
