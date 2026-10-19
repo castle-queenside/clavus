@@ -250,6 +250,14 @@ fn handle_key(key: &crossterm::event::KeyEvent, app: &mut App) -> bool {
 // ─── Commands ────────────────────────────────────────────────────
 
 fn cmd_snapshot(project: &Path, message: &Option<String>) -> anyhow::Result<()> {
+    use clavus_core::blob::BlobStore;
+    use clavus_core::snapshot::SnapshotStore;
+
+    let name = project
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+
     let parser = if project.extension().and_then(|s| s.to_str()) == Some("bwproject") {
         clavus_parser_bw::BitwigParser::new(project)?.project
     } else {
@@ -260,11 +268,44 @@ fn cmd_snapshot(project: &Path, message: &Option<String>) -> anyhow::Result<()> 
     report.ensure_clean()
         .map_err(|e| anyhow::anyhow!("Audio audit failed: {}", e))?;
 
-    println!("✓ {} samples clean", report.collected.len());
-    println!("  {}  ·  {} tracks  ·  {:.0} BPM", parser.name, parser.track_count, parser.bpm);
-    if let Some(m) = message {
-        println!("  {}", m);
-    }
+    let store = BlobStore::new(clavus_root().join("blobs"))
+        .map_err(|e| anyhow::anyhow!("BlobStore: {}", e))?;
+    let snap_store = SnapshotStore::new(store, &name);
+
+    // Parent: current HEAD
+    let parent = snap_store.head().map(|s| s.hash);
+
+    // Build sample info from audit (collected + outside_project, all with hashes)
+    let all_present: Vec<_> = report
+        .collected
+        .iter()
+        .chain(report.outside_project.iter())
+        .filter_map(|s| s.hash.as_ref().map(|h| (h.clone(), s.path.to_string_lossy().to_string())))
+        .collect::<Vec<_>>();
+    let sample_hashes: Vec<_> = all_present.iter().map(|(h, _)| h.clone()).collect();
+    let sample_paths: std::collections::HashMap<_, _> = all_present.into_iter().collect();
+
+    let msg = message
+        .as_deref()
+        .unwrap_or("auto snapshot");
+
+    let snapshot = snap_store.save(
+        project,
+        msg,
+        parent.as_deref(),
+        parser.track_count,
+        parser.bpm,
+        sample_hashes,
+        sample_paths,
+    )?;
+
+    println!(
+        "✓ snapshot {}  ·  {}  ·  {} tracks  ·  {:.0} BPM",
+        &snapshot.hash[..8],
+        format_timestamp(snapshot.timestamp),
+        snapshot.track_count,
+        snapshot.bpm,
+    );
     Ok(())
 }
 

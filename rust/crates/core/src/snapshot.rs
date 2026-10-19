@@ -42,11 +42,14 @@ impl SnapshotStore {
     /// returns the existing snapshot without creating a duplicate.
     ///
     /// Returns `Err` if the file doesn't exist or can't be read.
+    #[allow(clippy::too_many_arguments)]
     pub fn save(
         &self,
         project_path: &Path,
         message: &str,
         parent: Option<&str>,
+        track_count: usize,
+        bpm: f64,
         sample_hashes: Vec<String>,
         sample_paths: std::collections::HashMap<String, String>,
     ) -> Result<Snapshot, ClavusError> {
@@ -79,8 +82,8 @@ impl SnapshotStore {
                 .map(|d| d.as_secs_f64())
                 .unwrap_or(0.0),
             message: message.to_string(),
-            track_count: 0, // caller fills this from parsed project
-            bpm: 120.0,    // caller fills this from parsed project
+            track_count,
+            bpm,
             tags: vec![],
             notes: String::new(),
             sample_hashes,
