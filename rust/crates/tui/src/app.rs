@@ -86,6 +86,12 @@ impl SyncState {
     pub fn is_connected(&self) -> bool {
         self.cmd_tx.is_some() && self.connected
     }
+
+    /// Send a command to the sync thread. Returns true if sent.
+    #[allow(dead_code)]
+    pub fn send_cmd(&self, cmd: SyncCmd) -> bool {
+        self.cmd_tx.as_ref().map(|tx| tx.send(cmd).is_ok()).unwrap_or(false)
+    }
 }
 
 impl App {

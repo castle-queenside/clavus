@@ -258,17 +258,23 @@ fn render_cue_add(frame: &mut Frame, app: &mut App) {
     render_title_bar(frame, header, "new cue", app);
     render_footer(frame, footer, app);
 
+    let pos = app.input_buf.trim();
+    let pos_display = if pos.is_empty() { "…" } else { pos };
+
     let form_lines = vec![
         l("", MUTED),
-        l("  POSITION", MUTED),
+        l("  POSITION  (beats / bars.beats.sixteenths)", MUTED),
         l("", MUTED),
-        Line::raw(format!("  {}", app.input_buf.as_str().replace('\n', " ")))
-            .style(Style::new().fg(TEXT)),
+        Line::raw(format!("  {}█", pos_display))
+            .style(Style::new().fg(ACCENT)),
         l("", MUTED),
         l("  TEXT", MUTED),
+        l("  ", TEXT),
         l("", MUTED),
         l("  TRACK", MUTED),
         l("  Arrangement", TEXT),
+        l("", MUTED),
+        l("  author: tui", MUTED),
     ];
 
     let form = Paragraph::new(form_lines)

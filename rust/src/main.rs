@@ -219,6 +219,38 @@ fn handle_key(key: &crossterm::event::KeyEvent, app: &mut App) -> bool {
             let _ = app.load_cues();
         }
 
+        // ── Cue Add ──────────────────────────────
+        (KeyCode::Enter, _) if app.screen == Screen::CueAdd => {
+            if !app.input_buf.is_empty() && app.project_detail.is_some() {
+                // Save cue: position from input_buf, empty text, Arrangement track
+                let root = clavus_root();
+                let name = app.project_detail.as_ref()
+                    .and_then(|p| p.path.file_stem())
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("unknown");
+                if let Ok(store) = clavus_core::CueStore::new(&root, name) {
+                    if store.add(
+                        "",
+                        &app.input_buf,
+                        "tui",
+                        "",
+                        "Arrangement",
+                    ).is_ok() {
+                        app.set_info("cue saved".into());
+                        let _ = app.load_cues();
+                    }
+                }
+            }
+            app.input_buf.clear();
+            app.screen = Screen::CueList;
+        }
+        (KeyCode::Char(c), KeyModifiers::NONE) if app.screen == Screen::CueAdd => {
+            app.input_buf.push(c);
+        }
+        (KeyCode::Backspace, _) if app.screen == Screen::CueAdd => {
+            app.input_buf.pop();
+        }
+
         // ── Sync ──────────────────────────────────
         (KeyCode::Char('c'), KeyModifiers::NONE) if app.screen == Screen::Sync => {
             if app.sync_state.is_connected() {
@@ -228,17 +260,19 @@ fn handle_key(key: &crossterm::event::KeyEvent, app: &mut App) -> bool {
             }
         }
         (KeyCode::Char('P'), KeyModifiers::NONE) if app.screen == Screen::Sync => {
-            if !app.sync_state.is_connected() {
-                app.set_info("press c to connect first".into());
+            if app.sync_state.is_connected() {
+                app.sync_state.send_cmd(clavus_tui::app::SyncCmd::Push);
+                app.set_info("push sent".into());
             } else {
-                app.set_info("push: todo".into());
+                app.set_info("press c to connect first".into());
             }
         }
         (KeyCode::Char('G'), KeyModifiers::NONE) if app.screen == Screen::Sync => {
-            if !app.sync_state.is_connected() {
-                app.set_info("press c to connect first".into());
+            if app.sync_state.is_connected() {
+                app.sync_state.send_cmd(clavus_tui::app::SyncCmd::Pull);
+                app.set_info("pull sent".into());
             } else {
-                app.set_info("pull: todo".into());
+                app.set_info("press c to connect first".into());
             }
         }
 
