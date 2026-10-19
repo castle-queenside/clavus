@@ -8,10 +8,16 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use std::path::{Path, PathBuf};
 use std::panic;
 
-/// Clavus — version control for DAW projects.
+// ─── CLI definition ─────────────────────────────────────────────────
+
+/// Clavus — version control for DAW projects (Ableton Live + Bitwig Studio).
 #[derive(Parser)]
-#[command(name = "clavus")]
-#[command(version = "0.1.0")]
+#[command(
+    name = "clavus",
+    version,
+    about = "Version control for your DAW projects",
+    long_about = None,
+)]
 struct Cli {
     /// Projects directory
     #[arg(short, long)]
@@ -29,13 +35,14 @@ struct Cli {
 enum Commands {
     /// Launch the terminal UI
     Tui,
-    /// Create a snapshot of a project
+    /// Audit audio samples and create a snapshot
     Snapshot {
         project: PathBuf,
+        /// Snapshot message
         #[arg(short, long)]
         message: Option<String>,
     },
-    /// List snapshots for a project
+    /// List the snapshot chain
     Log { project: PathBuf },
     /// Add a cue marker
     Cue {
@@ -61,31 +68,28 @@ enum Commands {
     /// Audit audio sample references
     Audit {
         project: PathBuf,
-        /// Fail-fast on missing samples
+        /// Fail fast if any sample is missing
         #[arg(short, long)]
         strict: bool,
     },
-    /// Collect missing samples into project folder
+    /// Collect missing audio samples into the project folder
     Collect { project: PathBuf },
 }
+
+// ─── Entry point ─────────────────────────────────────────────────
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env()
-            .add_directive("clavus=info".parse()?))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("clavus=info".parse()?),
+        )
         .init();
 
-    let default_projects = dirs::audio_dir()
-        .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")));
-
-    let projects_dir = cli.dir.unwrap_or(default_projects);
-    let clavus_root = cli.data.unwrap_or_else(|| {
-        dirs::home_dir()
-            .map(|h| h.join(".clavus"))
-            .unwrap_or_else(|| PathBuf::from(".clavus"))
-    });
+    let projects_dir = cli.dir.unwrap_or_else(projects_dir);
+    let clavus_root = cli.data.unwrap_or_else(clavus_root);
 
     match cli.command.unwrap_or(Commands::Tui) {
         Commands::Tui => run_tui(projects_dir),
@@ -101,13 +105,14 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-// ─── TUI ────────────────────────────────────────────────────────────
+// ─── TUI ─────────────────────────────────────────────────────────
 
 fn run_tui(projects_dir: PathBuf) -> anyhow::Result<()> {
     let mut app = App::new(projects_dir);
-    app.refresh_projects().map_err(anyhow::Error::msg)?;
+    app.refresh_projects()
+        .map_err(|e| anyhow::anyhow!("Failed to scan projects: {}", e))?;
 
-    // Set up panic hook to restore terminal
+    // Restore terminal on panic
     panic::set_hook(Box::new(|_| {
         let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
         let _ = crossterm::terminal::disable_raw_mode();
@@ -130,8 +135,8 @@ fn run_tui(projects_dir: PathBuf) -> anyhow::Result<()> {
         }
     }
 
-    let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
-    let _ = crossterm::terminal::disable_raw_mode();
+    crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen)?;
+    crossterm::terminal::disable_raw_mode()?;
     Ok(())
 }
 
@@ -140,6 +145,7 @@ fn handle_key(key: &crossterm::event::KeyEvent, app: &mut App) -> bool {
     use crossterm::event::{KeyCode, KeyModifiers};
 
     match (key.code, key.modifiers) {
+        // ── Quit / back ──────────────────────────────────
         (KeyCode::Esc, _) | (KeyCode::Char('q'), KeyModifiers::NONE) => {
             if app.screen == Screen::ProjectList {
                 return true;
@@ -147,12 +153,37 @@ fn handle_key(key: &crossterm::event::KeyEvent, app: &mut App) -> bool {
             app.screen = Screen::ProjectList;
             app.clear_messages();
         }
-        (KeyCode::Enter, _) | (KeyCode::Char('o'), KeyModifiers::NONE) if app.screen == Screen::ProjectList => {
+
+        // ── Navigation ────────────────────────────────
+        (KeyCode::Enter, _) | (KeyCode::Char('o'), KeyModifiers::NONE)
+            if app.screen == Screen::ProjectList =>
+        {
             if let Some(idx) = app.selected_project {
                 if app.load_project(idx).is_ok() {
                     app.screen = Screen::ProjectDetail;
                 }
             }
+        }
+        (KeyCode::Down, _) if app.screen == Screen::ProjectList => {
+            if let Some(i) = app.selected_project {
+                if i + 1 < app.projects.len() {
+                    app.selected_project = Some(i + 1);
+                }
+            } else if !app.projects.is_empty() {
+                app.selected_project = Some(0);
+            }
+        }
+        (KeyCode::Up, _) if app.screen == Screen::ProjectList => {
+            if let Some(i) = app.selected_project {
+                if i > 0 {
+                    app.selected_project = Some(i - 1);
+                }
+            }
+        }
+
+        // ── Project Detail ───────────────────────────
+        (KeyCode::Char('c'), KeyModifiers::NONE) if app.screen == Screen::ProjectDetail => {
+            app.set_info("snapshot: use CLI".into());
         }
         (KeyCode::Char('l'), KeyModifiers::NONE) if app.screen == Screen::ProjectDetail => {
             if app.load_cues().is_ok() {
@@ -164,22 +195,20 @@ fn handle_key(key: &crossterm::event::KeyEvent, app: &mut App) -> bool {
                 app.screen = Screen::SnapshotList;
             }
         }
-        (KeyCode::Char('s'), KeyModifiers::NONE) if app.screen == Screen::ProjectList || app.screen == Screen::ProjectDetail => {
+        (KeyCode::Char('s'), KeyModifiers::NONE)
+            if app.screen == Screen::ProjectList || app.screen == Screen::ProjectDetail =>
+        {
             app.screen = Screen::Sync;
         }
-        (KeyCode::Char('c'), KeyModifiers::NONE) if app.screen == Screen::ProjectDetail => {
-            // TODO: trigger snapshot from TUI
-            app.set_info("snapshot: use CLI".into());
-        }
+
+        // ── Cue List ───────────────────────────────
         (KeyCode::Char('a'), KeyModifiers::NONE) if app.screen == Screen::CueList => {
             app.screen = Screen::CueAdd;
         }
         (KeyCode::Char('r'), KeyModifiers::NONE) if app.screen == Screen::CueList => {
-            // TODO: resolve selected cue
             app.set_info("cue resolve: use CLI".into());
         }
         (KeyCode::Char('f'), KeyModifiers::NONE) if app.screen == Screen::CueList => {
-            // TODO: cycle filter
             use clavus_core::types::CueStatus;
             app.cue_filter = match app.cue_filter {
                 None => Some(CueStatus::Pending),
@@ -189,6 +218,8 @@ fn handle_key(key: &crossterm::event::KeyEvent, app: &mut App) -> bool {
             };
             let _ = app.load_cues();
         }
+
+        // ── Sync ──────────────────────────────────
         (KeyCode::Char('c'), KeyModifiers::NONE) if app.screen == Screen::Sync => {
             if app.sync_state.is_connected() {
                 app.sync_disconnect();
@@ -210,28 +241,13 @@ fn handle_key(key: &crossterm::event::KeyEvent, app: &mut App) -> bool {
                 app.set_info("pull: todo".into());
             }
         }
-        (KeyCode::Down, _) if app.screen == Screen::ProjectList => {
-            if let Some(i) = app.selected_project {
-                if i + 1 < app.projects.len() {
-                    app.selected_project = Some(i + 1);
-                }
-            } else if !app.projects.is_empty() {
-                app.selected_project = Some(0);
-            }
-        }
-        (KeyCode::Up, _) if app.screen == Screen::ProjectList => {
-            if let Some(i) = app.selected_project {
-                if i > 0 {
-                    app.selected_project = Some(i - 1);
-                }
-            }
-        }
+
         _ => {}
     }
     false
 }
 
-// ─── Commands ───────────────────────────────────────────────────────
+// ─── Commands ────────────────────────────────────────────────────
 
 fn cmd_snapshot(project: &Path, message: &Option<String>) -> anyhow::Result<()> {
     let parser = if project.extension().and_then(|s| s.to_str()) == Some("bwproject") {
@@ -244,13 +260,10 @@ fn cmd_snapshot(project: &Path, message: &Option<String>) -> anyhow::Result<()> 
     report.ensure_clean()
         .map_err(|e| anyhow::anyhow!("Audio audit failed: {}", e))?;
 
-    println!("✓ All {} samples clean — ready to snapshot", report.collected.len());
-    println!(
-        "Project: {} · {} tracks · {:.0} BPM",
-        parser.name, parser.track_count, parser.bpm
-    );
+    println!("✓ {} samples clean", report.collected.len());
+    println!("  {}  ·  {} tracks  ·  {:.0} BPM", parser.name, parser.track_count, parser.bpm);
     if let Some(m) = message {
-        println!("Message: {}", m);
+        println!("  {}", m);
     }
     Ok(())
 }
@@ -265,13 +278,13 @@ fn cmd_log(project: &Path, clavus_root: &Path) -> anyhow::Result<()> {
         .unwrap_or_default();
 
     let store = BlobStore::new(clavus_root.join("blobs"))
-        .map_err(anyhow::Error::msg)?;
+        .map_err(|e| anyhow::anyhow!("BlobStore: {}", e))?;
     let snap_store = SnapshotStore::new(store, &name);
 
     let head = match snap_store.head() {
         Some(h) => h,
         None => {
-            println!("No snapshots yet. Run `clavus snapshot <path>` first.");
+            println!("No snapshots yet — run `clavus snapshot <path>` first.");
             return Ok(());
         }
     };
@@ -281,10 +294,11 @@ fn cmd_log(project: &Path, clavus_root: &Path) -> anyhow::Result<()> {
 
     for s in &chain {
         let parent = s.parent.as_ref().map(|p| format!(" <- {}", &p[..8])).unwrap_or_default();
+        let ts = format_timestamp(s.timestamp);
         println!(
-            "  {}  {}  {}{}  [{} tracks, {:.0} BPM]",
+            "  {}  {}  {}{}  [{} tracks · {:.0} BPM]",
             &s.hash[..8],
-            s.timestamp,
+            ts,
             s.message.replace('\n', " "),
             parent,
             s.track_count,
@@ -300,23 +314,19 @@ fn cmd_cue(
     position: &str,
     track: Option<&str>,
 ) -> anyhow::Result<()> {
-    let root = dirs::home_dir()
-        .map(|h| h.join(".clavus"))
-        .unwrap_or_else(|| PathBuf::from(".clavus"));
+    let root = clavus_root();
     let name = project
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
     let store = clavus_core::CueStore::new(&root, &name)?;
     let cue = store.add(text, position, "cli", "", track.unwrap_or("Arrangement"))?;
-    println!("✓ Cue added: {} ({})", cue.id, cue.position);
+    println!("✓ cue {}  @ {}  ({})", &cue.id[..8], cue.position, cue.status.as_str());
     Ok(())
 }
 
 fn cmd_cues(project: &Path, status: Option<&str>) -> anyhow::Result<()> {
-    let root = dirs::home_dir()
-        .map(|h| h.join(".clavus"))
-        .unwrap_or_else(|| PathBuf::from(".clavus"));
+    let root = clavus_root();
     let name = project
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
@@ -325,25 +335,30 @@ fn cmd_cues(project: &Path, status: Option<&str>) -> anyhow::Result<()> {
     let cues = store.list(status)?;
 
     if cues.is_empty() {
-        println!("No cues found.");
+        println!("No cues.");
     } else {
         for c in &cues {
+            let text = if c.text.len() > 22 {
+                format!("{}…", &c.text[..22])
+            } else {
+                c.text.clone()
+            };
             println!(
-                "  {:8} [{:9}] {:25} @ {:>8}  ({})",
+                "  {}  [{:9}]  {:22}  @ {:>8}  {}",
                 &c.id[..8],
                 c.status.as_str(),
-                &c.text[..c.text.len().min(25)],
+                text,
                 c.position,
                 c.author
             );
         }
-        println!("{} cue(s)", cues.len());
+        println!("\n{} cue(s)", cues.len());
     }
     Ok(())
 }
 
 fn cmd_relay(bind: &str) -> anyhow::Result<()> {
-    println!("Starting relay on {}...", bind);
+    println!("Listening on {}…", bind);
     clavus_relay::run(bind)?;
     Ok(())
 }
@@ -358,25 +373,22 @@ fn cmd_audit(project: &Path, strict: bool) -> anyhow::Result<()> {
     let report = sample::audit_project(project, &parser)?;
 
     if report.is_clean() {
-        println!(
-            "✓ All {} samples present and inside project folder",
-            report.collected.len()
-        );
+        println!("✓ {} samples present", report.collected.len());
     } else {
         if !report.missing.is_empty() {
-            eprintln!("✗ {} samples missing:", report.missing.len());
+            eprintln!("✗ {} missing:", report.missing.len());
             for s in &report.missing {
-                eprintln!("  - {}", s.path.display());
+                eprintln!("  {}", s.path.display());
             }
         }
         if !report.outside_project.is_empty() {
-            eprintln!("✗ {} samples outside project folder:", report.outside_project.len());
+            eprintln!("✗ {} outside project:", report.outside_project.len());
             for s in &report.outside_project {
-                eprintln!("  - {}", s.path.display());
+                eprintln!("  {}", s.path.display());
             }
         }
         if strict {
-            return Err(anyhow::anyhow!("Audio audit FAILED"));
+            return Err(anyhow::anyhow!("Audio audit failed"));
         }
     }
     Ok(())
@@ -390,16 +402,92 @@ fn cmd_collect(project: &Path, _clavus_root: &Path) -> anyhow::Result<()> {
     };
 
     let report = sample::audit_project(project, &parser)?;
-    let missing = report.missing.len();
 
-    if missing == 0 && report.outside_project.is_empty() {
-        println!("✓ All {} samples already present", report.collected.len());
+    if report.is_clean() {
+        println!("✓ {} samples already present", report.collected.len());
     } else {
         println!(
-            "Need to collect: {} missing, {} outside project",
-            missing,
+            "  {} missing  ·  {} outside project",
+            report.missing.len(),
             report.outside_project.len()
         );
+        println!("  (collect: copy samples into project folder — TODO)");
     }
     Ok(())
+}
+
+// ─── Helpers ────────────────────────────────────────────────────
+
+/// Default projects directory: audio dir, or home.
+fn projects_dir() -> PathBuf {
+    dirs::audio_dir()
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Default Clavus data directory: ~/.clavus
+fn clavus_root() -> PathBuf {
+    dirs::home_dir()
+        .map(|h| h.join(".clavus"))
+        .unwrap_or_else(|| PathBuf::from(".clavus"))
+}
+
+/// Format a Unix timestamp as YYYY-MM-DD HH:MM (no external deps).
+fn format_timestamp(secs: f64) -> String {
+    let secs = secs as i64;
+    let days = secs / 86400;
+    let rem = secs % 86400;
+    let hour = rem / 3600;
+    let min = rem % 3600 / 60;
+
+    // Zeller-like month calculation from days since Unix epoch
+    // 1970-01-01 was a Thursday (weekday=4)
+    let mut year = 1970;
+    let mut ydays = days;
+    loop {
+        let ylen = if (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0) {
+            366
+        } else {
+            365
+        };
+        if ydays < ylen {
+            break;
+        }
+        ydays -= ylen;
+        year += 1;
+    }
+
+    // Days per month (non-leap), we'll adjust below
+    static MPD: [i64; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    #[allow(unused_mut)]
+    let mut month = 11;
+    let mut mday = ydays;
+    if (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0) {
+        // leap year — Feb has 29 days
+        let days = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        for (i, &d) in days.iter().enumerate() {
+            if mday < d {
+                month = i;
+                break;
+            }
+            mday -= d;
+        }
+    } else {
+        for (i, &d) in MPD.iter().enumerate() {
+            if mday < d {
+                month = i;
+                break;
+            }
+            mday -= d;
+        }
+    }
+
+    format!(
+        "{}-{:02}-{:02} {:02}:{:02}",
+        year,
+        month + 1,
+        mday + 1,
+        hour,
+        min
+    )
 }
