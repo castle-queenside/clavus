@@ -1,5 +1,7 @@
 //! Clavus TUI application state.
 
+use clavus_core::blob::BlobStore;
+use clavus_core::snapshot::SnapshotStore;
 use clavus_core::types::{Cue, CueStatus, Project, Snapshot};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -58,6 +60,8 @@ pub struct ProjectEntry {
     pub name: String,
     pub project_type: String,
     pub head: Option<String>,
+    /// Number of snapshots in the chain (0 if never snapshotted).
+    pub snap_count: usize,
     pub bpm: f64,
     pub track_count: usize,
     pub modified_secs: i64,
@@ -140,11 +144,15 @@ impl App {
 
                 let project_type = if ext == "als" { "Ableton" } else { "Bitwig" };
 
+                // Check for existing snapshots
+                let (head, snap_count) = Self::snap_info(&self.clavus_root, &name);
+
                 entries.push(ProjectEntry {
                     path,
                     name,
                     project_type: project_type.to_string(),
-                    head: None,
+                    head,
+                    snap_count,
                     bpm: 120.0,
                     track_count: 0,
                     modified_secs,
@@ -343,5 +351,18 @@ impl App {
         self.sync_state.connected = false;
         self.sync_state.relay_addr = None;
         self.set_info("disconnected".into());
+    }
+
+    /// Get the HEAD snapshot hash and chain count for a project.
+    /// Returns `(head_hash, snap_count)`, both `None`/`0` if no snapshots exist.
+    fn snap_info(clavus_root: &std::path::Path, project_name: &str) -> (Option<String>, usize) {
+        let blobs = match BlobStore::new(clavus_root.join("blobs")) {
+            Ok(b) => b,
+            Err(_) => return (None, 0),
+        };
+        let store = SnapshotStore::new(blobs, project_name);
+        let head = store.head().map(|s| s.hash);
+        let count = store.chain_length(None);
+        (head, count)
     }
 }

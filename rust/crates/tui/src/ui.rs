@@ -44,6 +44,7 @@ fn render_project_list(frame: &mut Frame, app: &mut App) {
     let header_row = Row::new(vec![
         Span::raw("TYPE"),
         Span::raw("NAME"),
+        Span::raw("SNAPS"),
         Span::raw("BPM"),
         Span::raw("TRACKS"),
         Span::raw("MODIFIED"),
@@ -56,14 +57,23 @@ fn render_project_list(frame: &mut Frame, app: &mut App) {
         let sel = Some(i) == app.selected_project;
         let bg = if sel { ACCENT } else { PANEL_0 };
         let fg = if sel { BG } else { TEXT };
-        let _muted_fg = if sel { PANEL_1 } else { MUTED };
 
         let type_badge = if p.project_type == "Ableton" { "ALS" } else { "BW" };
+
+        // Snapshot badge: count + short hash, or muted dash
+        let (snap_text, snap_fg) = if p.snap_count > 0 {
+            let hash = p.head.as_ref().map(|h| &h[..8]).unwrap_or("?");
+            (format!("{}·{}", p.snap_count, hash), ACCENT)
+        } else {
+            ("—".to_string(), MUTED)
+        };
+
         let modified = unix_to_rel(p.modified_secs);
 
         Row::new(vec![
             Span::raw(type_badge),
             Span::raw(&p.name),
+            Span::raw(snap_text).style(Style::new().fg(snap_fg)),
             Span::raw(format!("{:.0}", p.bpm)),
             Span::raw(p.track_count.to_string()),
             Span::raw(modified),
@@ -75,9 +85,10 @@ fn render_project_list(frame: &mut Frame, app: &mut App) {
     let table = Table::new(rows, &[
         Constraint::Length(5),
         Constraint::Min(20),
+        Constraint::Length(12),
+        Constraint::Length(5),
         Constraint::Length(6),
-        Constraint::Length(7),
-        Constraint::Length(10),
+        Constraint::Length(9),
     ])
     .header(header_row)
     .block(Block::default().borders(Borders::ALL).border_style(Style::new().fg(LINE)))
