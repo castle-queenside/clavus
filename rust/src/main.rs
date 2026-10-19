@@ -90,7 +90,7 @@ fn main() -> anyhow::Result<()> {
     match cli.command.unwrap_or(Commands::Tui) {
         Commands::Tui => run_tui(projects_dir),
         Commands::Snapshot { project, message } => cmd_snapshot(&project, &message),
-        Commands::Log { project } => cmd_log(&project),
+        Commands::Log { project } => cmd_log(&project, &clavus_root),
         Commands::Cue { project, text, position, track } => {
             cmd_cue(&project, &text, &position, track.as_deref())
         }
@@ -164,8 +164,51 @@ fn handle_key(key: &crossterm::event::KeyEvent, app: &mut App) -> bool {
                 app.screen = Screen::SnapshotList;
             }
         }
-        (KeyCode::Char('s'), KeyModifiers::NONE) if app.screen == Screen::ProjectDetail => {
+        (KeyCode::Char('s'), KeyModifiers::NONE) if app.screen == Screen::ProjectList || app.screen == Screen::ProjectDetail => {
             app.screen = Screen::Sync;
+        }
+        (KeyCode::Char('c'), KeyModifiers::NONE) if app.screen == Screen::ProjectDetail => {
+            // TODO: trigger snapshot from TUI
+            app.set_info("snapshot: use CLI".into());
+        }
+        (KeyCode::Char('a'), KeyModifiers::NONE) if app.screen == Screen::CueList => {
+            app.screen = Screen::CueAdd;
+        }
+        (KeyCode::Char('r'), KeyModifiers::NONE) if app.screen == Screen::CueList => {
+            // TODO: resolve selected cue
+            app.set_info("cue resolve: use CLI".into());
+        }
+        (KeyCode::Char('f'), KeyModifiers::NONE) if app.screen == Screen::CueList => {
+            // TODO: cycle filter
+            use clavus_core::types::CueStatus;
+            app.cue_filter = match app.cue_filter {
+                None => Some(CueStatus::Pending),
+                Some(CueStatus::Pending) => Some(CueStatus::Resolved),
+                Some(CueStatus::Resolved) => Some(CueStatus::Skipped),
+                _ => None,
+            };
+            let _ = app.load_cues();
+        }
+        (KeyCode::Char('c'), KeyModifiers::NONE) if app.screen == Screen::Sync => {
+            if app.sync_state.is_connected() {
+                app.sync_disconnect();
+            } else {
+                app.sync_connect("127.0.0.1:4477");
+            }
+        }
+        (KeyCode::Char('P'), KeyModifiers::NONE) if app.screen == Screen::Sync => {
+            if !app.sync_state.is_connected() {
+                app.set_info("press c to connect first".into());
+            } else {
+                app.set_info("push: todo".into());
+            }
+        }
+        (KeyCode::Char('G'), KeyModifiers::NONE) if app.screen == Screen::Sync => {
+            if !app.sync_state.is_connected() {
+                app.set_info("press c to connect first".into());
+            } else {
+                app.set_info("pull: todo".into());
+            }
         }
         (KeyCode::Down, _) if app.screen == Screen::ProjectList => {
             if let Some(i) = app.selected_project {
@@ -212,8 +255,42 @@ fn cmd_snapshot(project: &Path, message: &Option<String>) -> anyhow::Result<()> 
     Ok(())
 }
 
-fn cmd_log(_project: &PathBuf) -> anyhow::Result<()> {
-    println!("No snapshots yet. Run `clavus snapshot <path>` first.");
+fn cmd_log(project: &Path, clavus_root: &Path) -> anyhow::Result<()> {
+    use clavus_core::blob::BlobStore;
+    use clavus_core::snapshot::SnapshotStore;
+
+    let name = project
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let store = BlobStore::new(clavus_root.join("blobs"))
+        .map_err(anyhow::Error::msg)?;
+    let snap_store = SnapshotStore::new(store, &name);
+
+    let head = match snap_store.head() {
+        Some(h) => h,
+        None => {
+            println!("No snapshots yet. Run `clavus snapshot <path>` first.");
+            return Ok(());
+        }
+    };
+
+    let chain = snap_store.walk_chain(Some(&head.hash));
+    println!("{} snapshot(s) in chain\n", chain.len());
+
+    for s in &chain {
+        let parent = s.parent.as_ref().map(|p| format!(" <- {}", &p[..8])).unwrap_or_default();
+        println!(
+            "  {}  {}  {}{}  [{} tracks, {:.0} BPM]",
+            &s.hash[..8],
+            s.timestamp,
+            s.message.replace('\n', " "),
+            parent,
+            s.track_count,
+            s.bpm,
+        );
+    }
     Ok(())
 }
 

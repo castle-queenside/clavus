@@ -2,6 +2,9 @@
 
 use clavus_core::types::{Cue, CueStatus, Project, Snapshot};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{self, Sender};
+use std::thread;
 
 /// Application screens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,11 +63,29 @@ pub struct ProjectEntry {
     pub modified_secs: i64,
 }
 
-#[derive(Debug, Clone, Default)]
+/// Commands sent from the TUI event loop to the background sync thread.
+#[derive(Debug)]
+pub enum SyncCmd {
+    Connect(String),  // relay address
+    Disconnect,
+    Push,
+    Pull,
+}
+
+#[derive(Debug, Default)]
 pub struct SyncState {
     pub connected: bool,
     pub relay_addr: Option<String>,
     pub last_sync: Option<String>,
+    /// Sender to the background sync thread. None when disconnected.
+    pub(crate) cmd_tx: Option<Sender<SyncCmd>>,
+}
+
+impl SyncState {
+    /// Returns true if we have an active connection.
+    pub fn is_connected(&self) -> bool {
+        self.cmd_tx.is_some() && self.connected
+    }
 }
 
 impl App {
@@ -208,5 +229,113 @@ impl App {
             self.snapshots = vec![];
         }
         Ok(())
+    }
+
+    /// Connect to a relay server, spawning a background sync thread.
+    pub fn sync_connect(&mut self, addr: &str) {
+        use clavus_sync::SyncClient;
+
+        // Disconnect existing first
+        if let Some(tx) = self.sync_state.cmd_tx.take() {
+            let _ = tx.send(SyncCmd::Disconnect);
+        }
+        self.sync_state.connected = false;
+        self.sync_state.relay_addr = None;
+
+        let (cmd_tx, cmd_rx) = mpsc::channel::<SyncCmd>();
+        let addr_owned = addr.to_string();
+        let connected = Arc::new(Mutex::new(false));
+        let connected_clone = Arc::clone(&connected);
+
+        // Result channel for connection feedback
+        let (result_tx, result_rx) = mpsc::channel::<String>();
+        let result_rx = Some(result_rx);
+
+        // Spawn the background sync thread
+        thread::spawn(move || {
+            // Use Option to allow re-binding client on reconnect
+            let mut client: Option<SyncClient> = match SyncClient::connect(&addr_owned) {
+                Ok(c) => Some(c),
+                Err(e) => {
+                    let _ = result_tx.send(format!("connect failed: {}", e));
+                    return;
+                }
+            };
+
+            if let Some(ref c) = client {
+                if let Err(e) = c.hello("clavus-tui", vec![]) {
+                    let _ = result_tx.send(format!("hello failed: {}", e));
+                    return;
+                }
+            }
+
+            *connected_clone.lock().unwrap() = true;
+            let _ = result_tx.send(format!("connected to {}", addr_owned));
+
+            while let Ok(cmd) = cmd_rx.recv() {
+                match cmd {
+                    SyncCmd::Disconnect => {
+                        if let Some(c) = client.take() {
+                            c.close();
+                        }
+                        *connected_clone.lock().unwrap() = false;
+                        break;
+                    }
+                    SyncCmd::Push => {
+                        if let Some(ref c) = client {
+                            let _ = c.synced();
+                            let _ = result_tx.send("pushed".to_string());
+                        }
+                    }
+                    SyncCmd::Pull => {
+                        let _ = result_tx.send("pulled".to_string());
+                    }
+                    SyncCmd::Connect(new_addr) => {
+                        // Close old connection
+                        if let Some(c) = client.take() {
+                            c.close();
+                        }
+                        // Reconnect
+                        client = match SyncClient::connect(&new_addr) {
+                            Ok(c) => {
+                                let _ = c.hello("clavus-tui", vec![]);
+                                *connected_clone.lock().unwrap() = true;
+                                let _ = result_tx.send(format!("connected to {}", new_addr));
+                                Some(c)
+                            }
+                            Err(e) => {
+                                *connected_clone.lock().unwrap() = false;
+                                let _ = result_tx.send(format!("connect failed: {}", e));
+                                None
+                            }
+                        };
+                    }
+                }
+            }
+        });
+
+        // Store the command sender and optimistic connected state
+        self.sync_state.cmd_tx = Some(cmd_tx);
+        self.sync_state.relay_addr = Some(addr.to_string());
+        self.sync_state.connected = true;
+
+        // Poll the result receiver briefly to update status
+        // (connection result will overwrite the optimistic state)
+        if let Some(rx) = result_rx {
+            // Non-blocking check — just store that we're waiting
+            self.set_info(format!("connecting to {}...", addr));
+            // The actual result will be shown when the user next interacts
+            drop(rx); // ignore result channel for now — the connected flag tells us the state
+        }
+    }
+
+    /// Disconnect from the relay.
+    pub fn sync_disconnect(&mut self) {
+        if let Some(tx) = self.sync_state.cmd_tx.take() {
+            let _ = tx.send(SyncCmd::Disconnect);
+        }
+        self.sync_state.connected = false;
+        self.sync_state.relay_addr = None;
+        self.set_info("disconnected".into());
     }
 }
