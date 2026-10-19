@@ -173,7 +173,7 @@ fn render_cue_list(frame: &mut Frame, app: &mut App) {
 
     let filter = app.cue_filter.clone();
     let filtered: Vec<_> = app.cues.iter().filter(|c| {
-        filter.as_ref().map_or(true, |f| c.status == *f)
+        filter.as_ref().is_none() || filter.as_ref().is_some_and(|f| c.status == *f)
     }).collect();
 
     let items: Vec<ListItem> = filtered.iter().map(|c| {

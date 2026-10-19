@@ -13,7 +13,7 @@ use tracing::{debug, error, info, warn};
 
 /// A connected client.
 #[derive(Debug, Clone)]
-struct Client {
+pub struct Client {
     addr: SocketAddr,
     name: String,
     known_heads: Vec<String>,
@@ -35,7 +35,7 @@ impl Client {
 
     fn send(&self, msg: &SyncMsg) -> std::io::Result<()> {
         let json = serde_json::to_vec(msg)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
         let len = json.len() as u32;
         let mut stream = self.stream.lock().unwrap();
         stream.write_all(&len.to_be_bytes())?;

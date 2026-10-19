@@ -291,20 +291,17 @@ impl AlsParser {
                     }
 
                     // Skip nested content of structural elements
-                    match reader.read_event_into(buf) {
-                        Ok(Event::Start(_)) => {
-                            loop {
-                                match reader.read_event_into(buf) {
-                                    Ok(Event::End(e)) => {
-                                        if bytes_end_name(&e) == etag { break; }
-                                    }
-                                    Ok(Event::Eof) => break,
-                                    _ => {}
+                    if let Ok(Event::Start(_)) = reader.read_event_into(buf) {
+                        loop {
+                            match reader.read_event_into(buf) {
+                                Ok(Event::End(e)) => {
+                                    if bytes_end_name(&e) == etag { break; }
                                 }
-                                buf.clear();
+                                Ok(Event::Eof) => break,
+                                _ => {}
                             }
+                            buf.clear();
                         }
-                        _ => {}
                     }
                 }
                 Ok(Event::End(e)) => {

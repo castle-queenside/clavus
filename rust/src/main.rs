@@ -5,7 +5,7 @@ use clavus_core::sample;
 use clavus_tui::app::App;
 use clavus_tui::ui;
 use ratatui::{backend::CrosstermBackend, Terminal};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::panic;
 
 /// Clavus — version control for DAW projects.
@@ -183,7 +183,7 @@ fn handle_key(key: &crossterm::event::KeyEvent, app: &mut App) -> bool {
 
 // ─── Commands ───────────────────────────────────────────────────────
 
-fn cmd_snapshot(project: &PathBuf, message: &Option<String>) -> anyhow::Result<()> {
+fn cmd_snapshot(project: &Path, message: &Option<String>) -> anyhow::Result<()> {
     let parser = if project.extension().and_then(|s| s.to_str()) == Some("bwproject") {
         clavus_parser_bw::BitwigParser::new(project)?.project
     } else {
@@ -211,7 +211,7 @@ fn cmd_log(_project: &PathBuf) -> anyhow::Result<()> {
 }
 
 fn cmd_cue(
-    project: &PathBuf,
+    project: &Path,
     text: &str,
     position: &str,
     track: Option<&str>,
@@ -240,7 +240,7 @@ fn cmd_relay(bind: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cmd_audit(project: &PathBuf, strict: bool) -> anyhow::Result<()> {
+fn cmd_audit(project: &Path, strict: bool) -> anyhow::Result<()> {
     let parser = if project.extension().and_then(|s| s.to_str()) == Some("bwproject") {
         clavus_parser_bw::BitwigParser::new(project)?.project
     } else {
@@ -274,7 +274,7 @@ fn cmd_audit(project: &PathBuf, strict: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cmd_collect(project: &PathBuf, _clavus_root: &PathBuf) -> anyhow::Result<()> {
+fn cmd_collect(project: &Path, _clavus_root: &Path) -> anyhow::Result<()> {
     let parser = if project.extension().and_then(|s| s.to_str()) == Some("bwproject") {
         clavus_parser_bw::BitwigParser::new(project)?.project
     } else {

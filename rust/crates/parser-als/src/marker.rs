@@ -76,7 +76,7 @@ pub fn inject_markers(
                 format!("{}{}{}", &xml[..insert_pos], new_markers, &xml[insert_pos..])
             } else {
                 // No inner Locators — insert after opening <Locators>
-                format!("{}{}", &xml[..pos + "<Locators>".len()], format!("{}{}", new_markers, &xml[pos + "<Locators>".len()..]))
+                format!("{}{}{}", &xml[..pos + "<Locators>".len()], new_markers, &xml[pos + "<Locators>".len()..])
             }
         } else {
             xml // No Locators element — can't inject

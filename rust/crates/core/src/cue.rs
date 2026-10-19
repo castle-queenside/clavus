@@ -6,7 +6,7 @@
 use crate::types::{ClavusError, Cue, CueReply, CueStatus};
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
 /// Manages cue files for a single project.
@@ -17,7 +17,7 @@ pub struct CueStore {
 
 impl CueStore {
     /// Create a CueStore for a project.
-    pub fn new(clavus_root: &PathBuf, project_name: &str) -> std::io::Result<Self> {
+    pub fn new(clavus_root: &Path, project_name: &str) -> std::io::Result<Self> {
         let cues_dir = clavus_root.join("cues").join(project_name);
         fs::create_dir_all(&cues_dir)?;
         Ok(Self { cues_dir })

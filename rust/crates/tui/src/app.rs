@@ -1,7 +1,6 @@
 //! Clavus TUI application state.
 
 use clavus_core::types::{Cue, CueStatus, Project};
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Application screens.
@@ -115,7 +114,7 @@ impl App {
         }
 
         // Sort by modified time descending
-        entries.sort_by(|a, b| b.modified_secs.cmp(&a.modified_secs));
+        entries.sort_by_key(|a| std::cmp::Reverse(a.modified_secs));
         self.projects = entries;
         Ok(())
     }

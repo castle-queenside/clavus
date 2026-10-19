@@ -88,7 +88,7 @@ fn audit_als(project_path: &Path, project_root: &Path) -> Result<SampleAuditRepo
         .map_err(|e| ClavusError::ParseError(format!("gzip decompress: {}", e)))?;
 
     let xml = String::from_utf8(xml_bytes)
-        .map_err(|e| ClavusError::Utf8Error(e))?;
+        .map_err(ClavusError::Utf8Error)?;
 
     let sample_refs = extract_als_sample_refs(&xml);
 
@@ -116,7 +116,7 @@ fn audit_bwproject(project_path: &Path, project_root: &Path) -> Result<SampleAud
                 .map_err(|e| ClavusError::ParseError(format!("read project.xml: {}", e)))?;
 
             let xml = String::from_utf8(xml_bytes)
-                .map_err(|e| ClavusError::Utf8Error(e))?;
+                .map_err(ClavusError::Utf8Error)?;
 
             // Parse sample refs from Bitwig project.xml
             // Bitwig stores audio paths in <AudioSource> or <ExternalFile> elements
@@ -393,10 +393,8 @@ fn _find_files_by_name(dir: &Path, name: &str, results: &mut Vec<PathBuf>, depth
             let path = entry.path();
             if path.is_dir() && !path.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(false) {
                 _find_files_by_name(&path, name, results, depth + 1);
-            } else if path.is_file() {
-                if path.file_name().map(|n| n == name).unwrap_or(false) {
-                    results.push(path);
-                }
+            } else if path.is_file() && path.file_name().map(|n| n == name).unwrap_or(false) {
+                results.push(path);
             }
         }
     }

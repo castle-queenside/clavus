@@ -80,7 +80,7 @@ impl BlobStore {
 
     /// Check if a blob exists.
     pub fn has(&self, hash: &str) -> bool {
-        self.resolve_path(hash).map_or(false, |p| p.exists())
+        self.resolve_path(hash).map(|p| p.exists()).unwrap_or(false)
     }
 
     /// Compute SHA256 of `data` as a hex string.
@@ -252,6 +252,7 @@ impl BlobStore {
         let file = fs::OpenOptions::new()
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&lock_path)
             .ok()?;
         let fd = file.as_raw_fd();
