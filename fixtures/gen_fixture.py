@@ -17,7 +17,10 @@ def make_als(tracks=8, markers=None, bpm=128, filename="test_project.als"):
 
     root = ET.Element("LiveSet")
 
-    # --- Master track with tempo ---
+    # --- Tempo (top-level, what the parser reads) ---
+    ET.SubElement(root, "Tempo").set("Value", str(bpm))
+
+    # --- Master track with tempo envelope ---
     master = ET.SubElement(root, "MasterTrack")
     ET.SubElement(master, "Name").set("Value", "Master")
     device_chain = ET.SubElement(master, "DeviceChain")

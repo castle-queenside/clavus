@@ -1,0 +1,27 @@
+# Rust pre-commit hooks for the clavus workspace.
+# Install: cd rust && pre-commit install
+
+repos:
+  - repo: local
+    hooks:
+      - id: cargo-test
+        name: cargo test
+        entry: cargo test --all
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit, pre-push]
+      - id: cargo-check
+        name: cargo check
+        entry: cargo check --all-targets
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --all -- -D warnings
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit, pre-push]

@@ -124,6 +124,13 @@ impl AlsParser {
                                 self.project.markers.push(Marker { time, name });
                             }
                         }
+                        "Tempo" => {
+                            if let Some(bpm) = attr_val(&e, "Value")
+                                .and_then(|v| v.parse::<f64>().ok())
+                            {
+                                self.project.bpm = bpm;
+                            }
+                        }
                         _ => {}
                     }
                 }

@@ -30,8 +30,7 @@
 //! snapshotting. This guarantees every snapshot is self-contained.
 
 use crate::blob::BlobStore;
-use crate::types::{ClavusError, CollectReport, Project, SampleAuditReport, SampleError, SampleRef};
-use std::collections::HashMap;
+use crate::types::{ClavusError, CollectReport, Project, SampleAuditReport, SampleRef};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -452,7 +451,7 @@ pub fn collect_samples(
 
 /// Rewrite sample paths in a project file to point to the collected copies.
 fn rewrite_project_sample_paths(
-    project_path: &Path,
+    _project_path: &Path,
     _copied: &[PathBuf],
     _project_root: &Path,
 ) -> Result<(), ClavusError> {
