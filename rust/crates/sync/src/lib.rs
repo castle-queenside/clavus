@@ -4,4 +4,4 @@
 
 pub mod client;
 
-pub use client::SyncMsg;
+pub use client::{SyncClient, SyncMsg, SyncEvent};

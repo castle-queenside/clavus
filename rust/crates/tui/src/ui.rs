@@ -254,9 +254,41 @@ fn render_snapshot_list(frame: &mut Frame, app: &mut App) {
     render_header(frame, chunks[0], &title, app);
     render_status_bar(frame, chunks[2], app);
 
-    let para = Paragraph::new("No snapshots yet.\n\n:c to create one")
-        .block(Block::default().title("Snapshots").borders(Borders::ALL));
-    frame.render_widget(para, chunks[1]);
+    if app.snapshots.is_empty() {
+        let para = Paragraph::new("No snapshots yet.\n\n:c to create one")
+            .block(Block::default().title("Snapshots").borders(Borders::ALL));
+        frame.render_widget(para, chunks[1]);
+        return;
+    }
+
+    let items: Vec<ListItem> = app.snapshots.iter().map(|s| {
+        let hash_short = &s.hash[..8];
+        let parent = s.parent.as_ref().map(|p| format!(" ← {}", &p[..8])).unwrap_or_default();
+        let line1 = Line::raw(format!(
+            "{}  {}{}",
+            hash_short,
+            s.message.replace('\n', " "),
+            parent
+        ));
+        let line2 = Line::raw(format!(
+            "    #{:.0} · {} tracks · {:.1} BPM · {} samples · {}",
+            s.timestamp,
+            s.track_count,
+            s.bpm,
+            s.sample_hashes.len(),
+            std::path::Path::new(&s.project_path).file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_else(|| std::borrow::Cow::Borrowed(&s.project_path)),
+        )).style(Color::DarkGray);
+        ListItem::new(vec![line1, line2])
+    }).collect();
+
+    let list = List::new(items)
+        .block(Block::default()
+            .title(format!("Snapshots ({})", app.snapshots.len()))
+            .borders(Borders::ALL))
+        .style(Style::default());
+    frame.render_widget(list, chunks[1]);
 }
 
 // ─── Sync ───────────────────────────────────────────────────────────
@@ -300,31 +332,29 @@ fn render_sync(frame: &mut Frame, app: &mut App) {
 // ─── Shared ─────────────────────────────────────────────────────────
 
 fn render_header(frame: &mut Frame, area: Rect, title: &str, app: &App) {
-    let (left, right) = {
-        let _chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
-            .split(area);
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(80), Constraint::Percentage(20)])
+        .split(area);
+    let left_area = chunks[0];
+    let right_area = chunks[1];
 
-        let title_line = Line::from(vec![
-            Span::raw(" clavus "),
-            Span::raw(title),
-        ]).style(Style::new().fg(Color::White).bg(Color::Blue).add_modifier(Modifier::BOLD));
+    let title_line = Line::from(vec![
+        Span::raw(" clavus "),
+        Span::raw(title),
+    ]).style(Style::new().fg(Color::White).bg(Color::Blue).add_modifier(Modifier::BOLD));
 
-        let hint_line = Line::from(vec![
-            Span::raw(format!(" {} ", app.screen_help())),
-        ]).style(Color::DarkGray);
-
-        (title_line, hint_line)
-    };
-
-    let header = ratatui::widgets::Paragraph::new(vec![left])
+    let header = ratatui::widgets::Paragraph::new(vec![title_line])
         .block(Block::default().borders(Borders::TOP | Borders::LEFT | Borders::RIGHT));
-    frame.render_widget(header, area);
+    frame.render_widget(header, left_area);
 
-    let hint = ratatui::widgets::Paragraph::new(vec![right])
+    let hint_line = Line::from(vec![
+        Span::raw(format!(" {} ", app.screen_help())),
+    ]).style(Color::DarkGray);
+
+    let hint = ratatui::widgets::Paragraph::new(vec![hint_line])
         .block(Block::default().borders(Borders::TOP | Borders::RIGHT));
-    frame.render_widget(hint, area);
+    frame.render_widget(hint, right_area);
 }
 
 fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
@@ -369,8 +399,8 @@ fn render_error(frame: &mut Frame, area: Rect, msg: &str) {
 impl App {
     pub fn screen_help(&self) -> String {
         match self.screen {
-            Screen::ProjectList => "↑↓ navigate · Enter open · c create · s sync · q quit",
-            Screen::ProjectDetail => "c snapshot · l cues · p push · r relay · Esc back",
+            Screen::ProjectList => "↑↓ navigate · Enter open · s sync · q quit",
+            Screen::ProjectDetail => "c snapshot · l cues · n snapshots · s sync · Esc back",
             Screen::CueList => "a add · r resolve · s skip · f filter · Esc back",
             Screen::CueAdd => "Enter save · Esc cancel",
             Screen::SnapshotList => "Enter inspect · Esc back",
@@ -380,8 +410,8 @@ impl App {
 
     pub fn screen_help_short(&self) -> String {
         match self.screen {
-            Screen::ProjectList => "↑↓ Enter c s q",
-            Screen::ProjectDetail => "c l p Esc",
+            Screen::ProjectList => "↑↓ Enter s q",
+            Screen::ProjectDetail => "c l n s Esc",
             Screen::CueList => "a r s f Esc",
             Screen::CueAdd => "Enter Esc",
             Screen::SnapshotList => "Enter Esc",

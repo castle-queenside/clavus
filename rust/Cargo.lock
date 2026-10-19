@@ -450,6 +450,7 @@ dependencies = [
  "clavus-parser-bw",
  "clavus-sync",
  "crossterm",
+ "dirs",
  "notify",
  "ratatui",
  "serde",

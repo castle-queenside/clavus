@@ -1,6 +1,6 @@
 //! Clavus TUI application state.
 
-use clavus_core::types::{Cue, CueStatus, Project};
+use clavus_core::types::{Cue, CueStatus, Project, Snapshot};
 use std::path::PathBuf;
 
 /// Application screens.
@@ -17,6 +17,8 @@ pub enum Screen {
 /// Main application state.
 #[derive(Debug)]
 pub struct App {
+    /// Clavus data root (default: ~/.clavus).
+    pub clavus_root: PathBuf,
     /// Projects directory.
     pub projects_dir: PathBuf,
     /// Discovered projects.
@@ -27,6 +29,8 @@ pub struct App {
     pub project_detail: Option<Project>,
     /// Cues for the selected project.
     pub cues: Vec<Cue>,
+    /// Snapshots for the selected project.
+    pub snapshots: Vec<Snapshot>,
     /// Cue filter.
     pub cue_filter: Option<CueStatus>,
     /// Current screen.
@@ -63,12 +67,17 @@ pub struct SyncState {
 
 impl App {
     pub fn new(projects_dir: PathBuf) -> Self {
+        let clavus_root = dirs::home_dir()
+            .map(|h| h.join(".clavus"))
+            .unwrap_or_else(|| PathBuf::from(".clavus"));
         Self {
+            clavus_root: clavus_root.clone(),
             projects_dir,
             projects: vec![],
             selected_project: None,
             project_detail: None,
             cues: vec![],
+            snapshots: vec![],
             cue_filter: None,
             screen: Screen::ProjectList,
             sync_state: SyncState::default(),
@@ -161,5 +170,40 @@ impl App {
     pub fn clear_messages(&mut self) {
         self.error = None;
         self.info = None;
+    }
+
+    /// Load cues for the selected project from the cue store.
+    pub fn load_cues(&mut self) -> Result<(), String> {
+        let entry = self.selected_entry()
+            .ok_or_else(|| "No project selected".to_string())?;
+
+        let store = clavus_core::CueStore::new(&self.clavus_root, &entry.name)
+            .map_err(|e| format!("CueStore: {}", e))?;
+
+        let filter = self.cue_filter.as_ref().map(|s| s.as_str());
+        self.cues = store
+            .list(filter)
+            .map_err(|e| format!("list cues: {}", e))?;
+        Ok(())
+    }
+
+    /// Load the snapshot chain for the selected project.
+    pub fn load_snapshots(&mut self) -> Result<(), String> {
+        use clavus_core::blob::BlobStore;
+        use clavus_core::snapshot::SnapshotStore;
+
+        let entry = self.selected_entry()
+            .ok_or_else(|| "No project selected".to_string())?;
+
+        let store = BlobStore::new(self.clavus_root.join("blobs"))
+            .map_err(|e| format!("BlobStore: {}", e))?;
+        let snap_store = SnapshotStore::new(store, &entry.name);
+
+        if let Some(head) = snap_store.head() {
+            self.snapshots = snap_store.walk_chain(Some(&head.hash));
+        } else {
+            self.snapshots = vec![];
+        }
+        Ok(())
     }
 }

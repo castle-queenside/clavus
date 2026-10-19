@@ -147,7 +147,7 @@ fn handle_key(key: &crossterm::event::KeyEvent, app: &mut App) -> bool {
             app.screen = Screen::ProjectList;
             app.clear_messages();
         }
-        (KeyCode::Char('c'), KeyModifiers::NONE) if app.screen == Screen::ProjectList => {
+        (KeyCode::Enter, _) | (KeyCode::Char('o'), KeyModifiers::NONE) if app.screen == Screen::ProjectList => {
             if let Some(idx) = app.selected_project {
                 if app.load_project(idx).is_ok() {
                     app.screen = Screen::ProjectDetail;
@@ -155,7 +155,14 @@ fn handle_key(key: &crossterm::event::KeyEvent, app: &mut App) -> bool {
             }
         }
         (KeyCode::Char('l'), KeyModifiers::NONE) if app.screen == Screen::ProjectDetail => {
-            app.screen = Screen::CueList;
+            if app.load_cues().is_ok() {
+                app.screen = Screen::CueList;
+            }
+        }
+        (KeyCode::Char('n'), KeyModifiers::NONE) if app.screen == Screen::ProjectDetail => {
+            if app.load_snapshots().is_ok() {
+                app.screen = Screen::SnapshotList;
+            }
         }
         (KeyCode::Char('s'), KeyModifiers::NONE) if app.screen == Screen::ProjectDetail => {
             app.screen = Screen::Sync;
@@ -229,8 +236,32 @@ fn cmd_cue(
     Ok(())
 }
 
-fn cmd_cues(_project: &PathBuf, _status: Option<&str>) -> anyhow::Result<()> {
-    println!("(cue list)");
+fn cmd_cues(project: &Path, status: Option<&str>) -> anyhow::Result<()> {
+    let root = dirs::home_dir()
+        .map(|h| h.join(".clavus"))
+        .unwrap_or_else(|| PathBuf::from(".clavus"));
+    let name = project
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let store = clavus_core::CueStore::new(&root, &name)?;
+    let cues = store.list(status)?;
+
+    if cues.is_empty() {
+        println!("No cues found.");
+    } else {
+        for c in &cues {
+            println!(
+                "  {:8} [{:9}] {:25} @ {:>8}  ({})",
+                &c.id[..8],
+                c.status.as_str(),
+                &c.text[..c.text.len().min(25)],
+                c.position,
+                c.author
+            );
+        }
+        println!("{} cue(s)", cues.len());
+    }
     Ok(())
 }
 

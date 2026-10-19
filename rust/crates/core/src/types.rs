@@ -348,6 +348,7 @@ pub enum SampleError {
 }
 
 /// All Clavus error types.
+/// All errors produced by clavus-core.
 #[derive(Debug, Error)]
 pub enum ClavusError {
     #[error("Project not found: {0}")]
@@ -376,4 +377,10 @@ pub enum ClavusError {
 
     #[error("UTF-8 decode error: {0}")]
     Utf8Error(#[from] std::string::FromUtf8Error),
+
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("Protocol error: {0}")]
+    Protocol(String),
 }
