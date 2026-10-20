@@ -16,7 +16,7 @@ pub mod cue;
 pub use cue::CueStore;
 
 pub mod sample;
-pub use sample::audit_project;
+pub use sample::{audit_project, collect_samples, CollectReport};
 
 pub mod error;
 pub use error::ClavusResult;

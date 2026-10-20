@@ -513,15 +513,35 @@ fn cmd_collect(project: &Path, _clavus_root: &Path) -> anyhow::Result<()> {
     let report = sample::audit_project(project, &parser)?;
 
     if report.is_clean() {
-        println!("✓ {} samples already present", report.collected.len());
-    } else {
-        println!(
-            "  {} missing  ·  {} outside project",
-            report.missing.len(),
-            report.outside_project.len()
-        );
-        println!("  (collect: copy samples into project folder — TODO)");
+        println!("✓ {} samples already present, all inside project folder", report.collected.len());
+        return Ok(());
     }
+
+    println!(
+        "  {} missing  ·  {} outside project",
+        report.missing.len(),
+        report.outside_project.len()
+    );
+
+    // Copy outside-project samples into project/Samples/ and rewrite paths
+    let collect = sample::collect_samples(project, &report)?;
+
+    if collect.copied.is_empty() && !collect.failed.is_empty() {
+        println!("\n✗ Failed to collect any samples:");
+        for (path, err) in &collect.failed {
+            println!("  {} — {}", path.display(), err);
+        }
+    } else if !collect.copied.is_empty() {
+        println!("\n✓ Collected {} sample(s) into project/Samples/", collect.copied.len());
+        println!("  Paths in .als rewritten — restart Ableton to reload");
+        if !collect.failed.is_empty() {
+            println!("  ⚠ {} sample(s) could not be copied:", collect.failed.len());
+            for (path, err) in &collect.failed {
+                println!("    {} — {}", path.display(), err);
+            }
+        }
+    }
+
     Ok(())
 }
 
