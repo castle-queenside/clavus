@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: clavus-macos-arm64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact: clavus-linux-x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: rust
+
+      - name: Install Rust
+        run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build
+        run: |
+          cargo build --release --target ${{ matrix.target }} --manifest-path rust/Cargo.toml
+          strip rust/target/${{ matrix.target }}/release/clavus 2>/dev/null || true
+        env:
+          CARGO_INCREMENTAL: '0'
+
+      - name: Rename
+        run: cp rust/target/${{ matrix.target }}/release/clavus ${{ matrix.artifact }}
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.artifact }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
