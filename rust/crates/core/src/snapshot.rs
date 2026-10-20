@@ -75,7 +75,6 @@ impl SnapshotStore {
         // 4. Create and write snapshot metadata
         let snapshot = Snapshot {
             hash: als_hash.clone(),
-            content_hash: BlobStore::sha256(&raw_bytes), // same — raw is identity
             parent: parent.map(String::from),
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

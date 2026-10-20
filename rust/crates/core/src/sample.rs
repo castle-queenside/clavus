@@ -287,19 +287,21 @@ fn audit_sample_refs(
 
         // Try multiple resolution strategies:
         // 1. As-is from the .als (may be relative or absolute)
-        // 2. Relative to project root
-        // 3. Filename-only glob in project root (Live 10 absolute path bug)
+        // Try multiple resolution strategies:
+        // 1. Relative to project root (most common)
+        // 2. Filename search (handles Live 10 absolute path bug, case-insensitive on macOS)
+        // 3. As-is from the .als (may be absolute)
         let mut candidates: Vec<PathBuf> = vec![
-            path.clone(),
             project_root.join(path),
+            path.clone(),
         ];
 
-        // Add filename-only matches (handles Live 10 path corruption bug)
+        // Filename-only search: on macOS this is case-insensitive thanks to APFS,
+        // on Linux it finds exact matches
         let fname = path.file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
         if !fname.is_empty() {
-            // rglob would need walkdir — do a simple recursive search
             if let Ok(entries) = find_files_by_name(project_root, &fname) {
                 for f in entries {
                     if !candidates.contains(&f) {
@@ -384,6 +386,18 @@ fn find_files_by_name(root: &Path, name: &str) -> std::io::Result<Vec<PathBuf>> 
     Ok(results)
 }
 
+fn matches_name(name: &str, entry_name: &str) -> bool {
+    // On macOS (APFS/HFS+), filename comparison is case-insensitive
+    #[cfg(target_os = "macos")]
+    {
+        entry_name.eq_ignore_ascii_case(name)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        entry_name == name
+    }
+}
+
 fn _find_files_by_name(dir: &Path, name: &str, results: &mut Vec<PathBuf>, depth: usize) {
     if depth > 4 {
         return; // Limit recursion depth
@@ -393,7 +407,7 @@ fn _find_files_by_name(dir: &Path, name: &str, results: &mut Vec<PathBuf>, depth
             let path = entry.path();
             if path.is_dir() && !path.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(false) {
                 _find_files_by_name(&path, name, results, depth + 1);
-            } else if path.is_file() && path.file_name().map(|n| n == name).unwrap_or(false) {
+            } else if path.is_file() && path.file_name().map(|n| matches_name(name, &n.to_string_lossy())).unwrap_or(false) {
                 results.push(path);
             }
         }

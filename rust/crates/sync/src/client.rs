@@ -130,8 +130,17 @@ impl SyncClient {
 
     /// Receive the next message from the relay.
     ///
-    /// Blocks until a message is available. Returns `None` if the connection
-    /// was closed.
+    /// Blocks for up to `timeout`. Returns `None` if no message arrived
+    /// within the timeout or if the connection was closed.
+    pub fn recv_timeout(&self, timeout: Duration) -> Option<SyncMsg> {
+        self.rx.recv_timeout(timeout).ok()
+    }
+
+    /// Receive the next message, blocking indefinitely.
+    /// Returns `None` if the channel was closed.
+    ///
+    /// Prefer [`recv_timeout`] with a bounded timeout to avoid blocking forever
+    /// if the relay becomes unresponsive.
     pub fn recv(&self) -> Option<SyncMsg> {
         self.rx.recv().ok()
     }

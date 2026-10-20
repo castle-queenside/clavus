@@ -144,8 +144,6 @@ pub struct TempoEvent {
 pub struct Snapshot {
     /// SHA256 of raw project file bytes (the true snapshot identity)
     pub hash: String,
-    /// SHA256 of the serialized project structure (for diff/compare)
-    pub content_hash: String,
     /// Parent snapshot hash. None for the first/root snapshot.
     pub parent: Option<String>,
     /// Unix timestamp when this snapshot was created

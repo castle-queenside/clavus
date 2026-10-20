@@ -15,7 +15,7 @@ fn test_parse_test_project_track_count() {
     let parser = AlsParser::new(&fixture_path()).expect("fixture should parse");
     let p = &parser.project;
 
-    assert_eq!(p.track_count, 7, "expected 7 tracks (gen_fixture.py generates 8 but one may be implicit master)");
+    assert_eq!(p.track_count, 8, "expected 8 AudioTracks in fixture (2 return tracks parsed separately, 1 master)");
     assert!((p.bpm - 128.0).abs() < 0.1, "expected BPM 128, got {}", p.bpm);
 }
 

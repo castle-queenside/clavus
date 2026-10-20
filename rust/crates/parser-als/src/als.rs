@@ -203,6 +203,42 @@ impl AlsParser {
                             if attr_val(&e, "Value") == Some("true".to_string()) {
                                 track.is_muted = true;
                             }
+                            skip_to_end(reader, buf, &etag);
+                        }
+                        "Solo" => {
+                            if attr_val(&e, "Value") == Some("true".to_string()) {
+                                track.is_solo = true;
+                            }
+                            skip_to_end(reader, buf, &etag);
+                        }
+                        "IsFrozen" => {
+                            if attr_val(&e, "Value") == Some("true".to_string()) {
+                                track.is_frozen = true;
+                            }
+                            skip_to_end(reader, buf, &etag);
+                        }
+                        "Color" => {
+                            if let Some(v) = attr_val(&e, "Value") {
+                                if let Ok(c) = v.parse::<u32>() {
+                                    track.color = c;
+                                }
+                            }
+                        }
+                        "MidiClip" | "AudioClip" => {
+                            if let Some(clip) = Self::parse_clip(reader, &etag, buf) {
+                                track.clips.push(clip);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(Event::Empty(e)) => {
+                    let etag = tag_name(&e);
+                    match etag.as_str() {
+                        "Mute" => {
+                            if attr_val(&e, "Value") == Some("true".to_string()) {
+                                track.is_muted = true;
+                            }
                         }
                         "Solo" => {
                             if attr_val(&e, "Value") == Some("true".to_string()) {
@@ -272,36 +308,41 @@ impl AlsParser {
     }
 
     fn parse_device_chain(reader: &mut Reader<&[u8]>, buf: &mut Vec<u8>) -> Vec<clavus_core::types::Device> {
+        // Blocklist: structural/sequencer elements whose Start tags must skip
+        // their entire nested subtree so children aren't treated as devices.
+        let skip_blocklist = ["AudioTrack", "MidiTrack", "GroupTrack", "ReturnTrack",
+            "DeviceChain", "Track", "MasterTrack", "MasterChain",
+            "MidiIO", "Sequencer", "NoteStream", "DeviceGenerator",
+            "NoteRow", "ClipSlotList", "ClipSlot",
+            "Mute", "Solo", "IsFrozen", "Freeze", "FreezeState",
+            "Value", "PresenterState", "LockedDevices", "Locators", "Locator",
+            "DrumChain", "InstrumentRef", "Sender", "Receiver", "Annotation",
+            "Name"];
+
         let mut devices = Vec::new();
         loop {
             match reader.read_event_into(buf) {
-                Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                Ok(Event::Start(e)) => {
                     let etag = tag_name(&e);
-                    // Skip structural/sequencer elements — collect plugin/device names
-                    if !["AudioTrack", "MidiTrack", "GroupTrack", "ReturnTrack",
-                         "DeviceChain", "Track", "MasterTrack", "MasterChain",
-                         "MidiIO", "Sequencer", "NoteStream", "DeviceGenerator",
-                         "Track", "NoteRow", "ClipSlotList", "ClipSlot"].contains(&etag.as_str()) {
+                    if skip_blocklist.contains(&etag.as_str()) {
+                        // Structural element: skip all nested content
+                        skip_to_end(reader, buf, &etag);
+                    } else {
+                        // Device: add it, let nested content be processed by outer loop
+                        // so intermediate tags (e.g. <Name> inside <Compressor>) are
+                        // handled correctly without being treated as top-level devices.
                         let name = attr_val(&e, "Value").unwrap_or_else(|| etag.clone());
                         let device_type = etag.clone();
-                        devices.push(clavus_core::types::Device {
-                            name,
-                            device_type,
-                        });
+                        devices.push(clavus_core::types::Device { name, device_type });
+                        // DO NOT skip nested content — let outer loop handle child elements
                     }
-
-                    // Skip nested content of structural elements
-                    if let Ok(Event::Start(_)) = reader.read_event_into(buf) {
-                        loop {
-                            match reader.read_event_into(buf) {
-                                Ok(Event::End(e)) => {
-                                    if bytes_end_name(&e) == etag { break; }
-                                }
-                                Ok(Event::Eof) => break,
-                                _ => {}
-                            }
-                            buf.clear();
-                        }
+                }
+                Ok(Event::Empty(e)) => {
+                    let etag = tag_name(&e);
+                    if !skip_blocklist.contains(&etag.as_str()) {
+                        let name = attr_val(&e, "Value").unwrap_or_else(|| etag.clone());
+                        let device_type = etag.clone();
+                        devices.push(clavus_core::types::Device { name, device_type });
                     }
                 }
                 Ok(Event::End(e)) => {
@@ -314,7 +355,8 @@ impl AlsParser {
             }
             buf.clear();
         }
-        devices
+        // Filter out <Devices> container (it's not a real device)
+        devices.into_iter().filter(|d| d.device_type != "Devices").collect()
     }
 
     fn parse_clip(reader: &mut Reader<&[u8]>, tag: &str, buf: &mut Vec<u8>) -> Option<clavus_core::types::Clip> {
@@ -404,4 +446,24 @@ fn attr_val(e: &quick_xml::events::BytesStart<'_>, key: &str) -> Option<String> 
         .flatten()
         .find(|attr| String::from_utf8_lossy(attr.key.as_ref()) == key)
         .map(|attr| String::from_utf8_lossy(attr.value.as_ref()).to_string())
+}
+
+/// Skip all events until the matching `End` tag for `target`.
+/// Correctly handles arbitrarily nested content.
+fn skip_to_end(reader: &mut Reader<&[u8]>, buf: &mut Vec<u8>, target: &str) {
+    let mut depth = 1usize;
+    loop {
+        match reader.read_event_into(buf) {
+            Ok(Event::Start(_)) => { depth += 1; }
+            Ok(Event::End(e)) => {
+                if bytes_end_name(&e) == target {
+                    if depth == 1 { break; }
+                    depth -= 1;
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
 }
