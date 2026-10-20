@@ -42,6 +42,9 @@ enum Commands {
         /// Snapshot message
         #[arg(short, long)]
         message: Option<String>,
+        /// Auto-run `collect` before snapshot if any samples are outside project
+        #[arg(short = 'c', long)]
+        collect: bool,
     },
     /// List the snapshot chain
     Log { project: PathBuf },
@@ -119,7 +122,7 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command.unwrap_or(Commands::Tui) {
         Commands::Tui => run_tui(projects_dir),
-        Commands::Snapshot { project, message } => cmd_snapshot(&project, &message),
+        Commands::Snapshot { project, message, collect } => cmd_snapshot(&project, &message, collect),
         Commands::Log { project } => cmd_log(&project, &clavus_root),
         Commands::Cue { project, text, position, track } => {
             cmd_cue(&project, &text, &position, track.as_deref())
@@ -346,7 +349,7 @@ fn handle_key(key: &crossterm::event::KeyEvent, app: &mut App) -> bool {
 
 // ─── Commands ────────────────────────────────────────────────────
 
-fn cmd_snapshot(project: &Path, message: &Option<String>) -> anyhow::Result<()> {
+fn cmd_snapshot(project: &Path, message: &Option<String>, collect: bool) -> anyhow::Result<()> {
     use clavus_core::blob::BlobStore;
     use clavus_core::snapshot::SnapshotStore;
 
@@ -367,9 +370,25 @@ fn cmd_snapshot(project: &Path, message: &Option<String>) -> anyhow::Result<()> 
         for line in e.detail_lines() {
             eprintln!("{}", line);
         }
-        eprintln!("\nRun `clavus collect {:?}` to copy missing/outside-project samples.", project);
-        anyhow::bail!("sample audit failed");
-    };
+        if collect {
+            eprintln!("\n→ Running `clavus collect` to copy samples into project folder...");
+            sample::collect_samples(project, &report)?;
+            // Re-audit after collecting
+            let report = sample::audit_project(project)?;
+            if let Err(e) = report.ensure_clean() {
+                eprintln!("✗ Even after collecting, audit still failed:");
+                for line in e.detail_lines() {
+                    eprintln!("{}", line);
+                }
+                anyhow::bail!("sample audit failed even after collecting");
+            }
+            println!("✓ Collect complete — proceeding with snapshot");
+        } else {
+            eprintln!("\nRun `clavus collect {:?}` to copy missing/outside-project samples.", project);
+            eprintln!("Or: clavus snapshot {:?} --collect  (auto-collects before snapshot)", project);
+            anyhow::bail!("sample audit failed");
+        }
+    }
 
     let store = BlobStore::new(clavus_root().join("blobs"))
         .map_err(|e| anyhow::anyhow!("BlobStore: {}", e))?;
