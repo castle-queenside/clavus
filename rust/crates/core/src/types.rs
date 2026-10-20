@@ -333,16 +333,30 @@ pub struct CollectReport {
 /// Errors from sample resolution and collection.
 #[derive(Debug, Error)]
 pub enum SampleError {
-    #[error("{0} sample(s) not found on disk — run `clavus collect` first: {1:?}")]
+    #[error("{0} sample(s) not found on disk — run `clavus collect` first")]
     MissingSamples(usize, Vec<PathBuf>),
 
     #[error(
-        "{0} sample(s) are outside the project folder — run `clavus collect --copy-missing`: {1:?}"
+        "{0} sample(s) are outside the project folder — run `clavus collect --copy-missing`"
     )]
     OutsideProjectDir(usize, Vec<PathBuf>),
 
     #[error("IO error while accessing sample: {0}")]
     IoError(#[from] std::io::Error),
+}
+
+impl SampleError {
+    /// Human-readable detail lines for all paths in this error.
+    pub fn detail_lines(&self) -> Vec<String> {
+        match self {
+            SampleError::MissingSamples(_, paths) | SampleError::OutsideProjectDir(_, paths) => {
+                paths.iter()
+                    .map(|p| format!("  {}", p.display()))
+                    .collect()
+            }
+            SampleError::IoError(e) => vec![format!("  IO error: {}", e)],
+        }
+    }
 }
 
 /// All Clavus error types.

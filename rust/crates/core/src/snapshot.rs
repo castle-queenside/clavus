@@ -199,4 +199,19 @@ impl SnapshotStore {
         info!("HEAD {}→{} (source={})", self.store.read_ref("HEAD").unwrap_or_default(), new_head, source);
         Ok(())
     }
+
+    /// Check whether a snapshot hash exists locally.
+    pub fn has(&self, hash: &str) -> bool {
+        self.store.load_meta(hash).is_some()
+    }
+
+    /// Save a pre-built snapshot (from relay pull) without re-reading the file.
+    /// Does NOT update HEAD — caller decides when to do that.
+    pub fn save_raw(&self, snapshot: Snapshot) -> Result<(), ClavusError> {
+        self.store
+            .write_meta(&snapshot)
+            .map_err(|e| ClavusError::IndexCorrupted(e.to_string()))?;
+        info!("Saved snapshot {}: {}", snapshot.short_hash(8), snapshot.message);
+        Ok(())
+    }
 }

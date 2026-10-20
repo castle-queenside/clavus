@@ -2,7 +2,7 @@
 
 use clavus_core::{
     types::{Marker, Project, ProjectType, SampleAuditReport, SampleRef, Snapshot},
-    BlobStore,
+    BlobStore, SnapshotStore,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -308,4 +308,40 @@ fn test_marker_default() {
     };
     assert_eq!(m.time, "1.1.1");
     assert_eq!(m.name, "Intro");
+}
+
+// ─── SnapshotStore.has / save_raw (relay pull support) ──────────────────────
+
+#[test]
+fn test_snapshot_store_has_false_for_unknown() {
+    let (store, _tmp) = temp_store();
+    let snap_store = SnapshotStore::new(store, "test");
+    assert!(!snap_store.has("nonexistent"));
+}
+
+#[test]
+fn test_snapshot_store_save_raw_and_has() {
+    let (store, _tmp) = temp_store();
+    let snap_store = SnapshotStore::new(store, "test");
+
+    let snap = clavus_core::types::Snapshot {
+        hash: "abc123def456".to_string(),
+        parent: None,
+        timestamp: 1700000000.0,
+        message: "relay pull".to_string(),
+        track_count: 4,
+        bpm: 120.0,
+        tags: vec![],
+        notes: String::new(),
+        sample_hashes: vec![],
+        sample_paths: std::collections::HashMap::new(),
+        project_path: "/tmp/test.als".to_string(),
+    };
+
+    assert!(!snap_store.has("abc123def456"));
+    snap_store.save_raw(snap).unwrap();
+    assert!(snap_store.has("abc123def456"));
+
+    // save_raw does not update HEAD
+    assert!(snap_store.head().is_none());
 }

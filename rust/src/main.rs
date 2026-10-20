@@ -2,6 +2,7 @@
 
 use clap::{Parser, Subcommand};
 use clavus_core::sample;
+use clavus_sync::SyncClient;
 use clavus_tui::app::App;
 use clavus_tui::ui;
 use ratatui::{backend::CrosstermBackend, Terminal};
@@ -77,6 +78,22 @@ enum Commands {
     },
     /// Collect missing audio samples into the project folder
     Collect { project: PathBuf },
+    /// Push local snapshots to the relay server
+    Push {
+        /// Relay address (e.g. 192.168.1.10:4477)
+        #[arg(short = 'r', long, default_value = "127.0.0.1:4477")]
+        relay: String,
+        /// Project path (required — needed to identify which snapshots to push)
+        project: PathBuf,
+    },
+    /// Pull snapshots from the relay server
+    Pull {
+        /// Relay address
+        #[arg(short = 'r', long, default_value = "127.0.0.1:4477")]
+        relay: String,
+        /// Project path
+        project: PathBuf,
+    },
 }
 
 // ─── Entry point ─────────────────────────────────────────────────
@@ -105,6 +122,8 @@ fn main() -> anyhow::Result<()> {
         Commands::Relay { bind, state_dir } => cmd_relay(&bind, state_dir),
         Commands::Audit { project, strict } => cmd_audit(&project, strict),
         Commands::Collect { project } => cmd_collect(&project, &clavus_root),
+        Commands::Push { relay, project } => cmd_push(&relay, &project, &clavus_root),
+        Commands::Pull { relay, project } => cmd_pull(&relay, &project, &clavus_root),
     }
 }
 
@@ -336,8 +355,14 @@ fn cmd_snapshot(project: &Path, message: &Option<String>) -> anyhow::Result<()> 
     };
 
     let report = sample::audit_project(project)?;
-    report.ensure_clean()
-        .map_err(|e| anyhow::anyhow!("Audio audit failed: {}", e))?;
+    if let Err(e) = report.ensure_clean() {
+        eprintln!("✗ {}", e);
+        for line in e.detail_lines() {
+            eprintln!("{}", line);
+        }
+        eprintln!("\nRun `clavus collect {:?}` to copy missing/outside-project samples.", project);
+        anyhow::bail!("sample audit failed");
+    };
 
     let store = BlobStore::new(clavus_root().join("blobs"))
         .map_err(|e| anyhow::anyhow!("BlobStore: {}", e))?;
@@ -533,6 +558,184 @@ fn cmd_collect(project: &Path, _clavus_root: &Path) -> anyhow::Result<()> {
                 println!("    {} — {}", path.display(), err);
             }
         }
+    }
+
+    Ok(())
+}
+
+// ─── Sync commands ────────────────────────────────────────────────────
+
+fn cmd_push(relay: &str, project: &Path, clavus_root: &Path) -> anyhow::Result<()> {
+    use clavus_core::blob::BlobStore;
+    use clavus_core::snapshot::SnapshotStore;
+    use clavus_sync::SyncMsg;
+
+    let name = project
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    // Load local snapshot store
+    let store = BlobStore::new(clavus_root.join("blobs"))
+        .map_err(|e| anyhow::anyhow!("BlobStore: {}", e))?;
+    let snap_store = SnapshotStore::new(store, &name);
+
+    // Collect all local snapshots in the chain
+    let mut snapshots = Vec::new();
+    let mut current = snap_store.head();
+    let mut seen = std::collections::HashSet::new();
+    while let Some(head) = current {
+        if seen.contains(&head.hash) {
+            break; // prevent loop
+        }
+        seen.insert(head.hash.clone());
+        snapshots.push(head.clone());
+        current = head.parent.as_ref().and_then(|p| snap_store.load(p));
+    }
+    snapshots.reverse(); // root → latest
+
+    if snapshots.is_empty() {
+        println!("No local snapshots to push for '{}'", name);
+        return Ok(());
+    }
+
+    println!("Connecting to {}...", relay);
+    let client = SyncClient::connect(relay)
+        .map_err(|e| anyhow::anyhow!("Failed to connect to {}: {}", relay, e))?;
+
+    // Say hello with empty known_heads so relay sends us everything
+    client.hello(&name, vec![])
+        .map_err(|e| anyhow::anyhow!("Hello: {}", e))?;
+
+    // Receive relay's state
+    let resp = client.recv_timeout(std::time::Duration::from_secs(5));
+    match resp {
+        Some(SyncMsg::Push { snapshots: _, cues: _ }) => {
+            println!("  relay has {} snapshot(s), {} cue(s)", 0, 0);
+        }
+        Some(_) | None => {
+            // Relay sent something else or nothing — that's fine
+        }
+    }
+
+    // Push our local snapshots
+    let push_snaps: Vec<_> = snapshots.into_iter().map(|s| {
+        // Reconstruct a minimal Snapshot from what's in the store
+        clavus_core::types::Snapshot {
+            hash: s.hash.clone(),
+            parent: s.parent.clone(),
+            timestamp: s.timestamp,
+            message: s.message.clone(),
+            track_count: s.track_count,
+            bpm: s.bpm,
+            tags: s.tags.clone(),
+            notes: s.notes.clone(),
+            sample_hashes: s.sample_hashes.clone(),
+            sample_paths: s.sample_paths.clone(),
+            project_path: s.project_path.clone(),
+        }
+    }).collect();
+
+    println!("Pushing {} snapshot(s)...", push_snaps.len());
+    client.pull_resp(push_snaps, vec![])
+        .map_err(|e| anyhow::anyhow!("Push: {}", e))?;
+
+    // Wait for Synced or Conflict
+    let timeout = std::time::Duration::from_secs(10);
+    loop {
+        match client.recv_timeout(timeout) {
+            Some(SyncMsg::Synced) => {
+                println!("✓ All snapshots pushed successfully");
+                break;
+            }
+            Some(SyncMsg::Conflict { project, relay_head, push_head }) => {
+                println!("⚠ Conflict detected on '{}': relay head {} vs our latest {}",
+                    project, &relay_head[..8], &push_head[..8]);
+                println!("  Run `clavus pull --relay {}` first to merge.", relay);
+                break;
+            }
+            Some(msg) => {
+                println!("  relay: {:?}", msg);
+            }
+            None => {
+                println!("⚠ Relay timed out waiting for acknowledgement");
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path) -> anyhow::Result<()> {
+    use clavus_core::blob::BlobStore;
+    use clavus_core::snapshot::SnapshotStore;
+    use clavus_sync::SyncMsg;
+
+    let name = project
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    // Load local snapshot store
+    let store = BlobStore::new(clavus_root.join("blobs"))
+        .map_err(|e| anyhow::anyhow!("BlobStore: {}", e))?;
+    let snap_store = SnapshotStore::new(store, &name);
+
+    // Get local HEAD(s) so we tell relay what we already have
+    let known_heads: Vec<String> = snap_store
+        .head()
+        .map(|h| h.hash)
+        .into_iter()
+        .collect();
+
+    println!("Connecting to {}...", relay);
+    let client = SyncClient::connect(relay)
+        .map_err(|e| anyhow::anyhow!("Failed to connect to {}: {}", relay, e))?;
+
+    // Announce what we know
+    client.hello(&name, known_heads)
+        .map_err(|e| anyhow::anyhow!("Hello: {}", e))?;
+
+    // Receive relay's response (Push with missing snapshots)
+    let timeout = std::time::Duration::from_secs(10);
+    let mut pulled_count = 0;
+    loop {
+        match client.recv_timeout(timeout) {
+            Some(SyncMsg::Push { snapshots, cues: _ }) => {
+                for snap in &snapshots {
+                    if !snap_store.has(&snap.hash) {
+                        snap_store.save_raw(snap.clone())?;
+                        println!("  ↳ {}  {}", &snap.hash[..8], snap.message);
+                        pulled_count += 1;
+                    }
+                }
+                if snapshots.is_empty() {
+                    println!("  Relay has no new snapshots");
+                }
+                client.synced().ok();
+                break;
+            }
+            Some(SyncMsg::Conflict { project, relay_head, push_head }) => {
+                println!("⚠ Conflict detected on '{}'", project);
+                println!("  relay HEAD: {}  your HEAD: {}",
+                    &relay_head[..8], &push_head[..8]);
+                break;
+            }
+            Some(msg) => {
+                println!("  relay: {:?}", msg);
+            }
+            None => {
+                println!("⚠ Relay timed out — no response");
+                break;
+            }
+        }
+    }
+
+    if pulled_count > 0 {
+        println!("✓ Pulled {} new snapshot(s)", pulled_count);
+    } else {
+        println!("✓ Already up to date");
     }
 
     Ok(())
