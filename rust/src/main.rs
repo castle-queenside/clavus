@@ -64,6 +64,9 @@ enum Commands {
     Relay {
         #[arg(default_value = "127.0.0.1:4477")]
         bind: String,
+        /// Directory for persisted relay state
+        #[arg(long)]
+        state_dir: Option<PathBuf>,
     },
     /// Audit audio sample references
     Audit {
@@ -99,7 +102,7 @@ fn main() -> anyhow::Result<()> {
             cmd_cue(&project, &text, &position, track.as_deref())
         }
         Commands::Cues { project, status } => cmd_cues(&project, status.as_deref()),
-        Commands::Relay { bind } => cmd_relay(&bind),
+        Commands::Relay { bind, state_dir } => cmd_relay(&bind, state_dir),
         Commands::Audit { project, strict } => cmd_audit(&project, strict),
         Commands::Collect { project } => cmd_collect(&project, &clavus_root),
     }
@@ -466,9 +469,11 @@ fn cmd_cues(project: &Path, status: Option<&str>) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cmd_relay(bind: &str) -> anyhow::Result<()> {
+fn cmd_relay(bind: &str, state_dir: Option<PathBuf>) -> anyhow::Result<()> {
+    let dir = state_dir.unwrap_or_else(clavus_root).join("relay-state");
     println!("Listening on {}…", bind);
-    clavus_relay::run(bind)?;
+    println!("State: {}", dir.display());
+    clavus_relay::run(bind, dir)?;
     Ok(())
 }
 

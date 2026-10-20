@@ -44,20 +44,87 @@ impl Client {
     }
 }
 
-/// In-memory relay state.
-#[derive(Default)]
+/// Relay state, persisted to disk as JSON.
 pub struct RelayState {
     /// All snapshots known to the relay, keyed by hash.
     pub snapshots: HashMap<String, Snapshot>,
     /// All cues known to the relay, keyed by project.
     pub cues: HashMap<String, Vec<Cue>>,
-    /// Connected clients.
+    /// Connected clients (not persisted).
     clients: Vec<Client>,
+    /// Directory for persisted state.
+    state_dir: std::path::PathBuf,
 }
 
 impl RelayState {
-    pub fn new() -> Self {
-        Self::default()
+    /// Load from disk or create a fresh state.
+    pub fn new(state_dir: std::path::PathBuf) -> std::io::Result<Self> {
+        std::fs::create_dir_all(&state_dir).ok();
+        let snapshots = Self::load_snaps(&state_dir).unwrap_or_default();
+        let cues = Self::load_cues(&state_dir).unwrap_or_default();
+        info!(
+            "Relay state loaded: {} snapshots, {} cue lists",
+            snapshots.len(),
+            cues.len()
+        );
+        Ok(Self {
+            snapshots,
+            cues,
+            clients: Vec::new(),
+            state_dir,
+        })
+    }
+
+    fn snaps_path(dir: &std::path::Path) -> std::path::PathBuf {
+        dir.join("snapshots.json")
+    }
+
+    fn cues_path(dir: &std::path::Path) -> std::path::PathBuf {
+        dir.join("cues.json")
+    }
+
+    fn load_snaps(dir: &std::path::Path) -> std::io::Result<HashMap<String, Snapshot>> {
+        let path = Self::snaps_path(dir);
+        if !path.exists() {
+            return Ok(HashMap::new());
+        }
+        let data = std::fs::read_to_string(&path)?;
+        let snaps: Vec<Snapshot> = serde_json::from_str(&data)
+            .map_err(|e| std::io::Error::other(format!("snapshots parse: {}", e)))?;
+        Ok(snaps.into_iter().map(|s| (s.hash.clone(), s)).collect())
+    }
+
+    fn load_cues(dir: &std::path::Path) -> std::io::Result<HashMap<String, Vec<Cue>>> {
+        let path = Self::cues_path(dir);
+        if !path.exists() {
+            return Ok(HashMap::new());
+        }
+        let data = std::fs::read_to_string(&path)?;
+        serde_json::from_str(&data)
+            .map_err(|e| std::io::Error::other(format!("cues parse: {}", e)))
+    }
+
+    /// Persist snapshots and cues to disk (atomic: temp file + rename).
+    fn persist(&self) -> std::io::Result<()> {
+        Self::atomic_json_write(
+            &Self::snaps_path(&self.state_dir),
+            &self.snapshots.values().cloned().collect::<Vec<_>>(),
+        )?;
+        Self::atomic_json_write(
+            &Self::cues_path(&self.state_dir),
+            &self.cues,
+        )?;
+        debug!("Relay state persisted");
+        Ok(())
+    }
+
+    fn atomic_json_write<T: serde::Serialize>(path: &std::path::Path, value: &T) -> std::io::Result<()> {
+        let tmp = std::path::PathBuf::from(path.to_string_lossy().to_string() + ".tmp");
+        let json = serde_json::to_string(value)
+            .map_err(|e| std::io::Error::other(format!("json serialize: {}", e)))?;
+        std::fs::write(&tmp, json)?;
+        std::fs::rename(&tmp, path)?;
+        Ok(())
     }
 
     /// Register or update a client.
@@ -80,7 +147,7 @@ impl RelayState {
             .collect()
     }
 
-    /// Store incoming snapshots and cues.
+    /// Store incoming snapshots and cues. Persists to disk.
     pub fn store(&mut self, snapshots: Vec<Snapshot>, cues: Vec<Cue>) {
         for snap in snapshots {
             self.snapshots.insert(snap.hash.clone(), snap);
@@ -92,15 +159,22 @@ impl RelayState {
                 .or_default()
                 .push(cue);
         }
+        // Persist after every store to ensure durability
+        if let Err(e) = self.persist() {
+            warn!("Relay persist failed: {}", e);
+        }
     }
 }
 
 /// Run the relay server.
-pub fn run(bind_addr: &str) -> std::io::Result<()> {
+pub fn run(bind_addr: &str, state_dir: std::path::PathBuf) -> std::io::Result<()> {
     let listener = TcpListener::bind(bind_addr)?;
     info!("Relay listening on {}", bind_addr);
 
-    let state = Arc::new(Mutex::new(RelayState::new()));
+    let state = Arc::new(Mutex::new(match RelayState::new(state_dir) {
+        Ok(s) => s,
+        Err(e) => return Err(std::io::Error::other(format!("init relay state: {}", e))),
+    }));
 
     for stream in listener.incoming() {
         match stream {

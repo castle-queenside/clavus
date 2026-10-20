@@ -146,30 +146,120 @@ fn flate2_decode(data: &[u8]) -> std::io::Result<Vec<u8>> {
     Ok(out)
 }
 
-/// Run a full sample audit on an `.als` project file.
+/// Run a full sample audit on a project file.
 /// Returns a report with collected, missing, and outside-project samples.
 pub fn audit_project(
     project_path: &Path,
-    parser_project: &crate::types::Project,
+    _parser_project: &crate::types::Project,
 ) -> Result<SampleAuditReport, ClavusError> {
     let project_root = project_path
         .parent()
         .ok_or_else(|| ClavusError::ParseError("no parent directory for project".into()))?;
 
-    // Re-read the raw XML to extract sample paths (we need raw paths, not resolved)
-    let raw = fs::read(project_path)
-        .map_err(|e| ClavusError::ParseError(format!("read {}: {}", project_path.display(), e)))?;
+    let ext = project_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
 
-    let xml_bytes = flate2_decode(&raw)
-        .map_err(|e| ClavusError::ParseError(format!("gzip: {}", e)))?;
+    let refs = if ext == "bwproject" {
+        extract_bitwig_sample_paths(project_path)?
+    } else {
+        // Ableton .als: gzip-compressed XML
+        let raw = fs::read(project_path)
+            .map_err(|e| ClavusError::ParseError(format!("read {}: {}", project_path.display(), e)))?;
+        let xml_bytes = flate2_decode(&raw)
+            .map_err(|e| ClavusError::ParseError(format!("gzip: {}", e)))?;
+        let xml = String::from_utf8(xml_bytes)
+            .map_err(ClavusError::from)?;
+        extract_als_sample_paths_from_xml(&xml)
+    };
+
+    debug!("audit_project: {} sample refs from {}", refs.len(), project_path.display());
+    audit_sample_refs(&refs, project_root)
+}
+
+/// Extract audio sample paths from a Bitwig `.bwproject` ZIP archive.
+///
+/// Bitwig stores sample references in `project.xml` with various tag/attribute
+/// combinations. We extract all attribute values that look like absolute paths
+/// or contain audio file extensions.
+fn extract_bitwig_sample_paths(project_path: &Path) -> Result<Vec<PathBuf>, ClavusError> {
+    use std::io::Read;
+
+    let file = std::fs::File::open(project_path)
+        .map_err(|e| ClavusError::ParseError(format!("open {}: {}", project_path.display(), e)))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| ClavusError::ParseError(format!("zip open: {}", e)))?;
+
+    let mut xml_bytes: Vec<u8> = Vec::new();
+    let mut found = false;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i)
+            .map_err(|e| ClavusError::ParseError(format!("zip entry: {}", e)))?;
+        let name = entry.name();
+        if name == "project.xml" || name.ends_with("/project.xml") || name.ends_with("\\project.xml") {
+            entry.read_to_end(&mut xml_bytes)
+                .map_err(|e| ClavusError::ParseError(format!("read project.xml: {}", e)))?;
+            found = true;
+            break;
+        }
+    }
+
+    if !found || xml_bytes.is_empty() {
+        return Ok(Vec::new()); // No project.xml — no samples
+    }
 
     let xml = String::from_utf8(xml_bytes)
         .map_err(ClavusError::from)?;
 
-    let refs = extract_als_sample_paths_from_xml(&xml);
+    // Parse the XML and extract attribute values that look like audio paths
+    let mut refs = Vec::new();
+    let mut reader = quick_xml::Reader::from_str(&xml);
+    reader.trim_text(true);
+    let mut buf = Vec::new();
 
-    debug!("audit_project: {} sample refs from {}", refs.len(), project_path.display());
-    audit_sample_refs(&refs, project_root)
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(quick_xml::events::Event::Start(e)) | Ok(quick_xml::events::Event::Empty(e)) => {
+                for attr in e.attributes().flatten() {
+                    let val = String::from_utf8_lossy(attr.value.as_ref()).to_string();
+                    if looks_like_audio_path(&val) {
+                        refs.push(PathBuf::from(val));
+                    }
+                }
+            }
+            Ok(quick_xml::events::Event::Eof) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    debug!("extract_bitwig_sample_paths: {} refs from {}", refs.len(), project_path.display());
+    Ok(refs)
+}
+
+/// Returns true if `val` looks like a path to an audio file.
+/// Checks for absolute paths, relative paths with audio extensions, or paths
+/// that are clearly file system references (not just IDs or UUIDs).
+fn looks_like_audio_path(val: &str) -> bool {
+    if val.is_empty() || val.len() < 4 {
+        return false;
+    }
+    // Skip UUIDs/IDs (no slashes, no dots, or very short/long)
+    if !val.contains('/') && !val.contains('\\') && !val.contains('.') {
+        return false;
+    }
+    // Must have an audio extension or be an absolute path
+    let lower = val.to_lowercase();
+    lower.ends_with(".wav")
+        || lower.ends_with(".aiff")
+        || lower.ends_with(".aif")
+        || lower.ends_with(".mp3")
+        || lower.ends_with(".flac")
+        || lower.ends_with(".ogg")
+        || lower.ends_with(".m4a")
+        || lower.ends_with(".wma")
+        || (val.starts_with('/') || val.len() > 10 && val.contains(':'))
 }
 
 /// Audit a list of raw sample paths against a project root.

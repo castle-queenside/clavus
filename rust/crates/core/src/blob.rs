@@ -57,7 +57,11 @@ impl BlobStore {
     // ─── Blob I/O ────────────────────────────────────────────────────
 
     /// Store `data` and return its SHA256 hash.
-    /// If the blob already exists, this is a no-op (deduplication).
+    ///
+    /// SAFETY: writes atomically (temp file → rename) to avoid orphan blobs.
+    /// If a crash occurs between blob-write and metadata-write, the orphan blob
+    /// is harmless (metadata-written-first order). This is why `store_sample`
+    /// writes the `.sample` metadata file BEFORE the blob data.
     pub fn put(&self, data: &[u8]) -> String {
         let hash = Self::sha256(data);
         let path = self.blob_path(&hash);
@@ -65,7 +69,7 @@ impl BlobStore {
             if let Some(parent) = path.parent() {
                 let _ = fs::create_dir_all(parent);
             }
-            if let Err(e) = fs::write(&path, data) {
+            if let Err(e) = atomic_write(&path, data) {
                 warn!("put failed: {}", e);
             }
         }
@@ -158,20 +162,35 @@ impl BlobStore {
     // ─── Sample blob + metadata ──────────────────────────────────────
 
     /// Store an audio sample blob with its filename metadata.
+    ///
+    /// Writes metadata BEFORE the blob data to prevent orphan blobs:
+    /// if a crash occurs after metadata-write but before blob-write, the orphan
+    /// metadata file is harmless (BlobStore won't find a blob without metadata).
     pub fn store_sample(
         &self,
         file_path: &Path,
         relative_path: &str,
     ) -> io::Result<(String, String)> {
         let data = fs::read(file_path)?;
-        let hash = self.put(&data);
+        let hash = Self::sha256(&data);
+        let path = self.blob_path(&hash);
+
         let filename = file_path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
 
+        // Write metadata FIRST — prevents orphan blob if crash occurs here
         let meta = format!("{}\n{}", filename, relative_path.replace('\\', "/"));
         fs::write(self.sample_meta_path(&hash), meta)?;
+
+        // Then write blob atomically
+        if !path.exists() {
+            if let Some(parent) = path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            atomic_write(&path, &data)?;
+        }
 
         Ok((hash, filename))
     }
@@ -274,6 +293,17 @@ impl BlobStore {
             .open(&lock_path)
             .ok()
     }
+}
+
+// ─── Atomic write helper ────────────────────────────────────────────────
+
+/// Write `data` to `path` atomically: writes to `path.tmp` first, then renames.
+/// If the process crashes mid-write, the original file is intact.
+fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
+    let tmp = PathBuf::from(path.to_string_lossy().to_string() + ".tmp");
+    fs::write(&tmp, data)?;
+    fs::rename(&tmp, path)?;
+    Ok(())
 }
 
 // Unix flock(2) — called via libc::flock in lock_index()
