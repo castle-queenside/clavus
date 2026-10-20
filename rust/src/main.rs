@@ -94,6 +94,12 @@ enum Commands {
         /// Project path
         project: PathBuf,
     },
+    /// List all Ableton/Bitwig projects found in standard locations
+    Projects {
+        /// Search recursively into subdirectories
+        #[arg(short, long)]
+        recursive: bool,
+    },
 }
 
 // ─── Entry point ─────────────────────────────────────────────────
@@ -124,6 +130,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Collect { project } => cmd_collect(&project, &clavus_root),
         Commands::Push { relay, project } => cmd_push(&relay, &project, &clavus_root),
         Commands::Pull { relay, project } => cmd_pull(&relay, &project, &clavus_root),
+        Commands::Projects { recursive } => cmd_projects(recursive),
     }
 }
 
@@ -742,6 +749,132 @@ fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path) -> anyhow::Result<(
 }
 
 // ─── Helpers ────────────────────────────────────────────────────
+
+/// Standard Ableton project locations to scan.
+fn standard_albeton_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(music) = dirs::audio_dir() {
+        dirs.push(music);
+    }
+    if let Some(home) = dirs::home_dir() {
+        let documents = home.join("Documents");
+        if documents.exists() {
+            dirs.push(documents);
+        }
+    }
+    dirs
+}
+
+fn cmd_projects(recursive: bool) -> anyhow::Result<()> {
+    let dirs = standard_albeton_dirs();
+    if dirs.is_empty() {
+        println!("No standard locations found. Pass --dir explicitly.");
+        return Ok(());
+    }
+
+    let mut projects: Vec<(String, PathBuf)> = Vec::new();
+
+    for base in dirs {
+        find_projects_in(&base, recursive, &mut projects);
+    }
+
+    if projects.is_empty() {
+        println!("No Ableton/Bitwig projects found.");
+        println!("Hint: pass --dir to scan a specific folder, or use clavus tui");
+        return Ok(());
+    }
+
+    println!("Found {} project(s):\n", projects.len());
+    for (name, path) in &projects {
+        let modified = std::fs::metadata(path)
+            .and_then(|m| m.modified())
+            .map(format_modified_time)
+            .unwrap_or_default();
+
+        println!("  {}  {}", name, modified);
+        println!("  {}", path.display());
+        println!();
+    }
+    Ok(())
+}
+
+fn format_modified_time(t: std::time::SystemTime) -> String {
+    let dur = t.duration_since(std::time::UNIX_EPOCH).unwrap();
+    // Simple UTC format: YYYY-MM-DD HH:MM
+    let secs = dur.as_secs();
+    let days = secs / 86400;
+    let rem = secs % 86400;
+    let hours = rem / 3600;
+    let mins = (rem % 3600) / 60;
+    // Use a base date for Unix epoch and add days
+    // 1970-01-01 + days days
+    let year_base = 1970;
+    let mut year = year_base;
+    let mut days_left = days as i64;
+    while days_left > 0 {
+        let days_in_year = if is_leap(year) { 366 } else { 365 };
+        if days_left >= days_in_year {
+            days_left -= days_in_year;
+            year += 1;
+        } else {
+            break;
+        }
+    }
+    let yday = days_left as usize;
+    let month_day = month_and_day(year, yday);
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}",
+        year, month_day.0, month_day.1, hours, mins
+    )
+}
+
+fn is_leap(year: i64) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+}
+
+fn month_and_day(year: i64, yday: usize) -> (u8, u8) {
+    // Days per month (non-leap)
+    let days_in_month: [u16; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let days_in_month = if is_leap(year) {
+        let mut d = days_in_month;
+        d[1] = 29;
+        d
+    } else {
+        days_in_month
+    };
+    let mut remaining = yday as u16;
+    for (i, &dm) in days_in_month.iter().enumerate() {
+        if remaining < dm {
+            return ((i + 1) as u8, (remaining + 1) as u8);
+        }
+        remaining -= dm;
+    }
+    (12, 31)
+}
+
+fn find_projects_in(dir: &Path, recursive: bool, out: &mut Vec<(String, PathBuf)>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if recursive {
+                find_projects_in(&path, recursive, out);
+            }
+            continue;
+        }
+
+        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+        if ext == "als" || ext == "bwproject" {
+            if let Some(name) = path.file_stem().map(|s| s.to_string_lossy().to_string()) {
+                out.push((name, path));
+            }
+        }
+    }
+}
 
 /// Default projects directory: audio dir, or home.
 fn projects_dir() -> PathBuf {
