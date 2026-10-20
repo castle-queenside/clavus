@@ -103,6 +103,10 @@ enum Commands {
         #[arg(short, long)]
         recursive: bool,
     },
+    /// Show project health at a glance: snapshots, samples, cues, relay sync
+    Status {
+        project: PathBuf,
+    },
 }
 
 // ─── Entry point ─────────────────────────────────────────────────
@@ -134,6 +138,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Push { relay, project } => cmd_push(&relay, &project, &clavus_root),
         Commands::Pull { relay, project } => cmd_pull(&relay, &project, &clavus_root),
         Commands::Projects { recursive } => cmd_projects(recursive),
+        Commands::Status { project } => cmd_status(&project, &clavus_root),
     }
 }
 
@@ -782,6 +787,67 @@ fn standard_albeton_dirs() -> Vec<PathBuf> {
         }
     }
     dirs
+}
+
+fn cmd_status(project: &Path, clavus_root: &Path) -> anyhow::Result<()> {
+    use clavus_core::blob::BlobStore;
+    use clavus_core::cue::CueStore;
+    use clavus_core::snapshot::SnapshotStore;
+
+    let name = project
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let project_type = if project.extension().and_then(|s| s.to_str()) == Some("bwproject") {
+        "Bitwig"
+    } else {
+        "Ableton Live"
+    };
+
+    println!("{name}  ({project_type})");
+    println!("{}", "─".repeat(50));
+
+    // ── Sample audit ──────────────────────────────────────────────
+    let report = sample::audit_project(project)?;
+    if report.is_clean() {
+        println!("✓  {} samples present, all inside project folder", report.collected.len());
+    } else {
+        if !report.missing.is_empty() {
+            println!("✗  {} sample(s) missing — run `clavus collect`", report.missing.len());
+        }
+        if !report.outside_project.is_empty() {
+            println!("⚠  {} sample(s) outside project folder", report.outside_project.len());
+        }
+    }
+
+    // ── Snapshots ───────────────────────────────────────────────
+    let store = BlobStore::new(clavus_root.join("blobs"))
+        .map_err(|e| anyhow::anyhow!("BlobStore: {}", e))?;
+    let snap_store = SnapshotStore::new(store, &name);
+
+    let head = snap_store.head();
+    let count = snap_store.chain_length(None);
+    if count == 0 {
+        println!("📷  No snapshots yet — run `clavus snapshot`");
+    } else {
+        let h = head.as_ref().map(|s| s.short_hash(8)).unwrap_or_default();
+        let msg = head.as_ref().map(|s| s.message.as_str()).unwrap_or_default();
+        println!("📷  {count} snapshot(s)  (HEAD: {h} — {msg})");
+    }
+
+    // ── Cues ────────────────────────────────────────────────────
+    let cue_store = CueStore::new(clavus_root, &name)?;
+    let all_cues = cue_store.list(None)?;
+    let pending = all_cues.iter().filter(|c| matches!(c.status, clavus_core::types::CueStatus::Pending)).count();
+    let resolved = all_cues.len() - pending;
+    if all_cues.is_empty() {
+        println!("🎯  No cues");
+    } else {
+        println!("🎯  {total} cue(s)  ({pending} pending, {resolved} resolved)", total = all_cues.len());
+    }
+
+    Ok(())
 }
 
 fn cmd_projects(recursive: bool) -> anyhow::Result<()> {
