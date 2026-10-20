@@ -18,8 +18,9 @@ pub enum SyncMsg {
     Pull { missing: Vec<String> },
     PullResp { snapshots: Vec<Snapshot>, cues: Vec<Cue> },
     Synced,
-    Ping,
-    Pong,
+    /// The relay detected a divergent HEAD for a project.
+    /// Client should pull and resolve.
+    Conflict { project: String, relay_head: String, push_head: String },
     Subscribe { project: String },
     Event { project: String, event: SyncEvent },
 }
@@ -121,11 +122,6 @@ impl SyncClient {
     /// Mark that we've processed a Push (acknowledge sync is complete).
     pub fn synced(&self) -> Result<()> {
         self.send(SyncMsg::Synced)
-    }
-
-    /// Respond to a Ping with a Pong.
-    pub fn pong(&self) -> Result<()> {
-        self.send(SyncMsg::Pong)
     }
 
     /// Receive the next message from the relay.

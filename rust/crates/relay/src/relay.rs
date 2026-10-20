@@ -50,6 +50,9 @@ pub struct RelayState {
     pub snapshots: HashMap<String, Snapshot>,
     /// All cues known to the relay, keyed by project.
     pub cues: HashMap<String, Vec<Cue>>,
+    /// Current HEAD hash per project (derived from project_path filename).
+    /// Used for conflict detection.
+    heads: HashMap<String, String>,
     /// Connected clients (not persisted).
     clients: Vec<Client>,
     /// Directory for persisted state.
@@ -62,14 +65,17 @@ impl RelayState {
         std::fs::create_dir_all(&state_dir).ok();
         let snapshots = Self::load_snaps(&state_dir).unwrap_or_default();
         let cues = Self::load_cues(&state_dir).unwrap_or_default();
+        let heads = Self::load_heads(&state_dir).unwrap_or_default();
         info!(
-            "Relay state loaded: {} snapshots, {} cue lists",
+            "Relay state loaded: {} snapshots, {} cue lists, {} project heads",
             snapshots.len(),
-            cues.len()
+            cues.len(),
+            heads.len()
         );
         Ok(Self {
             snapshots,
             cues,
+            heads,
             clients: Vec::new(),
             state_dir,
         })
@@ -81,6 +87,20 @@ impl RelayState {
 
     fn cues_path(dir: &std::path::Path) -> std::path::PathBuf {
         dir.join("cues.json")
+    }
+
+    fn heads_path(dir: &std::path::Path) -> std::path::PathBuf {
+        dir.join("heads.json")
+    }
+
+    fn load_heads(dir: &std::path::Path) -> std::io::Result<HashMap<String, String>> {
+        let path = Self::heads_path(dir);
+        if !path.exists() {
+            return Ok(HashMap::new());
+        }
+        let data = std::fs::read_to_string(&path)?;
+        serde_json::from_str(&data)
+            .map_err(|e| std::io::Error::other(format!("heads parse: {}", e)))
     }
 
     fn load_snaps(dir: &std::path::Path) -> std::io::Result<HashMap<String, Snapshot>> {
@@ -104,7 +124,7 @@ impl RelayState {
             .map_err(|e| std::io::Error::other(format!("cues parse: {}", e)))
     }
 
-    /// Persist snapshots and cues to disk (atomic: temp file + rename).
+    /// Persist snapshots, cues, and heads to disk (atomic: temp file + rename).
     fn persist(&self) -> std::io::Result<()> {
         Self::atomic_json_write(
             &Self::snaps_path(&self.state_dir),
@@ -113,6 +133,10 @@ impl RelayState {
         Self::atomic_json_write(
             &Self::cues_path(&self.state_dir),
             &self.cues,
+        )?;
+        Self::atomic_json_write(
+            &Self::heads_path(&self.state_dir),
+            &self.heads,
         )?;
         debug!("Relay state persisted");
         Ok(())
@@ -147,11 +171,43 @@ impl RelayState {
             .collect()
     }
 
-    /// Store incoming snapshots and cues. Persists to disk.
-    pub fn store(&mut self, snapshots: Vec<Snapshot>, cues: Vec<Cue>) {
+    /// Store incoming snapshots and cues. Detects divergent HEADs.
+    /// Returns a list of conflicts: (project, relay_head, new_head).
+    pub fn store(&mut self, snapshots: Vec<Snapshot>, cues: Vec<Cue>) -> Vec<(String, String, String)> {
+        let mut conflicts = Vec::new();
+
         for snap in snapshots {
-            self.snapshots.insert(snap.hash.clone(), snap);
+            // Extract fields before moving the snapshot
+            let snap_hash = snap.hash.clone();
+            let snap_parent = snap.parent.clone();
+            let project_name = project_name_from_path(&snap.project_path);
+
+            // Detect HEAD divergence per project
+            if let Some(existing_head) = self.heads.get(&project_name) {
+                let incoming_parent = snap_parent.as_deref();
+                if incoming_parent != Some(existing_head.as_str())
+                    && snap_hash.as_str() != existing_head.as_str()
+                {
+                    // Check if existing_head is an ancestor of incoming snapshot
+                    // (i.e., this is a fast-forward, not a conflict)
+                    if !self.is_ancestor(existing_head, &snap_hash) {
+                        conflicts.push((project_name.clone(), existing_head.clone(), snap_hash.clone()));
+                        debug!(
+                            "Conflict: {} relay_head={} incoming_parent={} hash={}",
+                            project_name, existing_head,
+                            incoming_parent.unwrap_or("(none)"), snap_hash
+                        );
+                    }
+                }
+            }
+
+            // Store the snapshot
+            self.snapshots.insert(snap_hash.clone(), snap);
+
+            // Update HEAD for this project to the latest snapshot
+            self.heads.insert(project_name, snap_hash);
         }
+
         for cue in cues {
             let project = cue.track_name.clone();
             self.cues
@@ -159,10 +215,37 @@ impl RelayState {
                 .or_default()
                 .push(cue);
         }
+
         // Persist after every store to ensure durability
         if let Err(e) = self.persist() {
             warn!("Relay persist failed: {}", e);
         }
+
+        conflicts
+    }
+
+    /// Returns true if `ancestor` is an ancestor of `descendant` in the snapshot chain.
+    fn is_ancestor(&self, ancestor: &str, descendant: &str) -> bool {
+        if ancestor == descendant {
+            return true;
+        }
+        let mut current = descendant.to_string();
+        for _ in 0..100 {
+            let snap = match self.snapshots.get(&current) {
+                Some(s) => s,
+                None => return false,
+            };
+            match &snap.parent {
+                Some(parent) if parent != &current => {
+                    if parent == ancestor {
+                        return true;
+                    }
+                    current = parent.clone();
+                }
+                _ => return false,
+            }
+        }
+        false // chain too deep or loop
     }
 }
 
@@ -209,10 +292,11 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
     let mut client = Client::new(addr, stream);
 
     loop {
-        // Read 4-byte length prefix
+        // Read 4-byte length prefix (refresh timeout before each read)
         let mut len_buf = [0u8; 4];
         {
             let mut s = client.stream.lock().unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(30))).ok();
             s.read_exact(&mut len_buf)?;
         }
         let len = u32::from_be_bytes(len_buf) as usize;
@@ -225,6 +309,7 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
         let mut data = vec![0u8; len];
         {
             let mut s = client.stream.lock().unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(30))).ok();
             s.read_exact(&mut data)?;
         }
 
@@ -267,11 +352,20 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
             }
             SyncMsg::PullResp { snapshots, cues } => {
                 debug!("Client {} pushing {} snapshots, {} cues", addr, snapshots.len(), cues.len());
-                state.lock().unwrap().store(snapshots, cues);
+                let conflicts = state.lock().unwrap().store(snapshots, cues);
+                // Send conflict notifications first (client can handle them before Synced)
+                for (project, relay_head, push_head) in &conflicts {
+                    warn!(
+                        "HEAD divergence on project '{}': relay head {} vs incoming {}",
+                        project, relay_head, push_head
+                    );
+                    let _ = client.send(&SyncMsg::Conflict {
+                        project: project.clone(),
+                        relay_head: relay_head.clone(),
+                        push_head: push_head.clone(),
+                    });
+                }
                 let _ = client.send(&SyncMsg::Synced);
-            }
-            SyncMsg::Ping => {
-                let _ = client.send(&SyncMsg::Pong);
             }
             SyncMsg::Subscribe { project } => {
                 client.subscribed.push(project);
@@ -282,4 +376,13 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
 
     info!("Client disconnected: {}", addr);
     Ok(())
+}
+
+/// Extract a short project name from a full path.
+/// E.g. "/Users/chris/Documents/Ableton/User Library/Project.als" → "Project"
+fn project_name_from_path(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string())
 }
