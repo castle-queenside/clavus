@@ -1,185 +1,152 @@
-# CLAVUS.md — Clavus Project Agent Notes
+# CLAVUS.md — Clavus Rust Rewrite Agent Notes
 
-> For the agent. Read before touching any code. Updated by every session.
+> Read before touching any code. Updated every session.
 
 ## Quick Facts
 
 | | |
 |---|---|
 | **Repo** | `https://github.com/castle-queenside/clavus.git` |
-| **Local** | `~/Projects/clavus/` |
-| **Language** | Python 3.10+ (textual, stdlib urllib, httpx for UDS only) |
-| **Tests** | `python3 -m pytest tests/` — 12 passing, 2 skipped |
-| **Verify** | `bash scripts/verify.sh` — run before every commit |
-| **Type check** | `bash scripts/typecheck.sh` — pyright, slow (~30s) |
-| **Pre-commit** | `pre-commit install` (in repo) — runs verify.sh automatically |
+| **Rust worktree** | `~/Projects/clavus-rust/` |
+| **Python worktree** | `~/Projects/clavus/` (`main` branch) |
+| **PR** | [#13](https://github.com/castle-queenside/clavus/pull/13) — Rust rewrite |
+| **Binary** | `~/Projects/clavus-rust/rust/target/release/clavus` (4.2MB) |
+| **Verify** | `cargo clippy --all -- -D warnings` |
+| **CI** | `.github/workflows/rust-ci.yml` — Rust CI on push to `rust` |
 
 ## Verify Before Every Commit
 
 ```bash
-cd ~/Projects/clavus
-bash scripts/verify.sh          # fast (~3s): syntax + pytest (runs on pre-commit)
-bash scripts/typecheck.sh       # slow (~30s): pyright types (manual)
-```
-
-## Stack Setup (Reference)
-
-```bash
-# Install tools
-pip3 install --user pyright pre-commit
-
-# In this repo
-pre-commit install              # hooks verify.sh to every commit
-bash scripts/verify.sh         # must pass before commit
-
-# Reference: ~/Projects/clavus/ has the canonical setup
+cd ~/Projects/clavus-rust/rust
+cargo clippy --all -- -D warnings
+cargo test --all
 ```
 
 ## Architecture
 
 ```
-clavus/
-├── clavus/
-│   ├── cli/              # CLI split: __init__.py + 21 commands/
-│   ├── cues.py           # Cue model + CueStore
-│   ├── discovery.py      # Tailscale-first peer discovery
-│   ├── helpers.py        # Utilities
-│   ├── http_client.py    # stdlib urllib wrapper (no httpx in hot path)
-│   ├── store.py          # BlobStore, ClavusProject, schema migrations
-│   ├── sync.py           # Push/pull over HTTP
-│   ├── tui.py            # Textual TUI (4300+ lines)
-│   └── watcher.py        # Live reload (kqueue/FSEvents)
-├── tests/                # pytest: 12 passing, 2 skipped
-├── fixtures/             # test_project.als ✓, test_project.bwproject ✗
-├── docs/bitwig-support.md
-└── scripts/
-    ├── verify.sh          # fast pre-commit check
-    ├── typecheck.sh       # pyright type check
-    └── test.sh            # pytest wrapper
+rust/
+├── Cargo.toml              # workspace
+├── crates/
+│   ├── core/               # blob store, snapshot, cues, sample audit
+│   ├── parser-als/         # .als parser (gzip XML → Project)
+│   ├── parser-bw/          # .bwproject parser (zip XML → Project)
+│   ├── relay/              # TCP relay server (accepts clients, broadcasts)
+│   ├── sync/               # SyncClient (TCP framed JSON)
+│   └── tui/                # Ratatui app (screens, theme, key handling)
+└── src/main.rs             # CLI entry point + TUI event loop
 ```
 
-## Type Checking Status
+## Core Types
 
-pyright is set up (run: `bash scripts/typecheck.sh`).
-
-**385 errors** — known type annotation debt, not runtime bugs:
-- ~80% are import resolution errors in `cli/commands/*.py` (the `from clavus.cli import *`
-  pattern is not resolved by pyright's static analysis)
-- ~15% are `str | None` vs `str` parameter type mismatches in `web.py`, `__init__.py`
-- ~5% are missing `Path` imports in CLI commands
-
-**Real bugs found by pyright** (fix soon):
-- `clavus/web.py:686-687` — `str | None` passed where `str` required
-- `clavus/cli/commands/init.py:7` — missing `Optional` import
-- `clavus/cli/commands/init.py:15` — missing `Path` import
-- `clavus/cli/commands/init.py:16,23` — undefined `find_als_file`, `BlobStore`
-
-The verify.sh catches actual bugs (syntax, pytest). pyright is incremental cleanup.
+- `Project` — parsed DAW project: name, bpm, time signature, tracks, markers, sample refs
+- `Snapshot` — content-addressed checkpoint: hash, parent, timestamp, bpm, track_count, sample_hashes, sample_paths
+- `Cue` — timeline comment: position, text, status, track, author, id
+- `SampleRef` — audio sample reference: path, hash, resolved_path, size_bytes, relpath_from_project
 
 ## Key Design Decisions
 
-### HTTP: stdlib + httpx for UDS only
-- All HTTP calls use `clavus/http_client.py` (`http_get`, `http_post`)
-- `httpx` retained ONLY in `discovery.py` for Tailscale Unix Domain Socket:
-  ```python
-  transport = httpx.HTTPTransport(uds=sock)  # No stdlib equivalent
-  ```
+### Content-addressed storage
+- Raw `.als` bytes are the blob. SHA256 = snapshot hash.
+- Duplicate saves detected automatically — same bytes = same hash.
+- `BlobStore` handles raw bytes; `SnapshotStore` handles metadata + refs.
 
-### CSS in Textual f-strings: brace escaping
-In `f"""..."""` CSS blocks:
-- `{{` → `{` (escaped open brace)
-- `}}` → `}` (escaped close brace)
-- `{{{` → `{` (triple = single in CSS `@keyframes from/to` blocks)
-- `}}}` → `}` (triple = single in CSS output)
+### Audio audit before snapshot
+`SampleAuditReport.ensure_clean()` is called before every `SnapshotStore::save()`.
+- Blocks snapshot if any sample is missing from disk.
+- Distinguishes "collected" (inside project) vs "outside_project" vs "missing".
+- This is the core differentiation from generic file backup tools.
 
-**Always run `python3 -c "import ast; ast.parse(open('clavus/tui.py').read())"` after CSS edits.**
+### Sync protocol (TCP framed JSON)
+- 4-byte BE length prefix per message.
+- `SyncClient` connects, sends `Hello`, then receives `Subscribed`.
+- `Pull` / `Push` / `Synced` commands. Background mpsc receiver thread.
+- `SyncState` in TUI holds `cmd_tx` (Sender<SyncCmd>) for background thread.
 
-### Schema Migrations
-- `SCHEMA_VERSION` in `clavus/store.py` — bump and add migration block
-- `_migrate_index()` is one-shot, idempotent, lock-protected
-- Pattern: check `_schema_version`, add missing fields, increment
+### TUI state machine
+`App.screen: Screen` drives rendering. Screens: `ProjectList`, `ProjectDetail`, `CueList`, `CueAdd`, `SnapshotList`, `Sync`.
 
-### Peer Discovery
-- `discover_peers()` tries Tailscale API first, falls back to zeroconf
-- Both sources merged + deduplicated
-- Don't remove zeroconf — still needed for LAN fallback
+Navigation state per screen: `selected_project`, `selected_cue`, `selected_snapshot`.
+
+### Theme (Omarchy-inspired)
+- BG: `#0b0c0d`, PANEL_0: `#0e1012`, PANEL_1: `#121517`
+- LINE: `#23282b`, ACCENT: `#74e08c`, WARM: `#e9b455`
+- Spacing: 4pt grid (`sp1()` = 4, `sp2()` = 8, etc.)
+- Cliamp spectrum: 10-band LED bars, activated when relay connected
+
+## Verify Workflow
+
+```
+cargo clippy --all -- -D warnings   # fast
+cargo test --all                    # fast
+cargo build --release              # only before push
+git add -A && git commit && git push
+```
 
 ## Current Status
 
 ### Working ✅
-- TUI: Tokyo Night palette, sidebar, dashboard, activity feed, vim keys
-- Transitions: fade/slide screen transitions, CSS cue stagger animations
-- Project type: Ableton (🎹) vs Bitwig (🎛), `f` filter key
-- Schema v3 migrations (backward compat)
-- CLI split into `clavus/cli/` package
-- Stdlib HTTP (no httpx in hot path)
-- Tailscale-first peer discovery
-- 12/12 tests passing
+- `.als` parser (gzip XML, quick-xml)
+- Bitwig `.bwproject` parser (zip XML) — **needs fixture to test**
+- Snapshot store (content-addressed blobs + metadata)
+- Audio sample audit (checks refs before snapshot)
+- Cue markers (Pending / Resolved / Skipped)
+- TUI: all screens, keyboard nav, Omarchy theme
+- Cliamp spectrum analyzer (sync screen)
+- Relay sync server + client
+- Clippy clean, CI green
 
 ### Blocked ⛔
-| Item | Blocker | How to Unblock |
-|---|---|---|
-| `git push` | `gh auth` | `gh auth login -h github.com` |
-| Bitwig parser | No fixture | User saves tiny `.bwproject` → `fixtures/test_project.bwproject` |
-| `gh` CLI install | `sudo chown` | `sudo chown -R $(whoami) /opt/homebrew` |
-
-## Commits Ready to Push
-
-```
-dd09fb2  project type diff (Ableton/Bitwig)
-58da5a8  fade/slide transitions, CSS animations
-0b6dea8  sidebar, dashboard, activity feed, vim keys
-8184907  Tokyo Night palette, box-drawing
-37628d2  Tailscale peer discovery + Funnel docs
-abf98d5  cli.py → clavus/cli/ package
-0242612  schema versioning + tests/
-e178383  httpx → stdlib urllib
-ab1a8e1  BlobStore architecture
-```
+| Item | Blocker |
+|------|---------|
+| parser-bw tests | No `.bwproject` fixture — user saves one in Bitwig Studio → `~/Projects/clavus/fixtures/test_project.bwproject` → remove `#[ignore]` |
+| Windows binary | Cross-compile target TBD — need studio machine distro |
 
 ## Pending Work
 
 ### High Priority
-1. **gh auth** → push 9 commits
-2. **Bitwig fixture** → `fixtures/test_project.bwproject` → `parser_bitwig.py`
-3. **Search navigation** (`n`/`N` vim stubs) — implement
-4. **Bitwig snapshot format** — `.als_hash` equivalent for `.bwproject`
+1. **Bitwig fixture** — user action needed
+2. **Windows cross-compile** — configure musl target
+3. **Linux deploy** — binary for studio machine
+4. **PR #13 review** — ready for review
 
 ### Nice to Have
-5. Activity log persistence (survive restarts)
-6. Ghostty terminal + Tailscale Funnel (sudo required)
-7. Obsidian vault layout proposal (needs user confirmation)
+5. HTML timeline visualization (like ableton-cookbook's historian)
+6. Track-level diff (show "Track 'Bass': added Serum" vs raw hash diff)
+7. Sample collection (`cmd_collect` stub: copy missing samples into project folder)
+8. TUI snapshot trigger (press `c` in ProjectDetail → runs audit + save)
 
-## File Conventions
+## Commit Convention
 
-- **`BD` dict** in `tui.py`: box-drawing chars. Keys: `tl/tr/bl/br`, `rtl/rtr/rbl/rbr`, `h/v`, `tee/end/bar/spc`, `ableton/bitwig`
-- **Color palette** (`C` dict): Tokyo Night. Key: `accent=#7aa2f7`, `purple=#bb9af7`, `green=#9ece6a`, `red=#f7768e`
-- **Color constants in markdown**: use `{C['accent']}` / `{C['purple']}` etc.
+```
+feat(scope): description
+fix(scope): description
+refactor(scope): description
+chore(scope): description
+```
+
+Short, imperative, lowercase after colon. One logical change per commit.
 
 ## Agent Session Files
 
 ```
-~/agent-state/clavus-urllib.json      done
-~/agent-state/clavus-arch.json        done
-~/agent-state/clavus-tailscale.json   done
-~/agent-state/clavus-report.md        comprehensive session report
+~/agent-state/clavus-design.json     # design + theme decisions
+~/agent-state/clavus-rust-coord.json  # sprint coordination state
 ```
 
 ## When Starting a New Clavus Session
 
 ```bash
 # 1. Check where we are
-git -C ~/Projects/clavus log --oneline -3
+git -C ~/Projects/clavus-rust log --oneline -3
 
 # 2. Read this file
-cat ~/Projects/clavus/CLAVUS.md
+cat ~/Projects/clavus-rust/CLAVUS.md
 
-# 3. Read the session report
-cat ~/agent-state/clavus-report.md
+# 3. Check blocked items
+# (Bitwig fixture — needs user action)
 
-# 4. Verify everything is clean
-bash ~/Projects/clavus/scripts/verify.sh
-
-# 5. Check blocked items
-# (gh auth, bitwig fixture)
+# 4. Run verify
+cd ~/Projects/clavus-rust/rust
+cargo clippy --all -- -D warnings
 ```

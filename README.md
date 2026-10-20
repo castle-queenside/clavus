@@ -1,409 +1,219 @@
-# Clavus — Version Control for Ableton Live
+# Clavus — Version Control for DAW Projects
 
-Snapshots, cues, and sync for your Ableton projects. No cloud. No plugins. No accounts.
+**Single 4MB binary. No cloud. No plugins. No accounts.**
 
-- **Solo** — save checkpoints, diff what changed, restore any version in one keypress
-- **Together** — push snapshots to a shared relay, pull your collaborator's changes, resolve conflicts cleanly
-- **Cross-platform** — Mac ↔ Windows, studio ↔ home, works with Tailscale or LAN
+Snapshots, cues, and sync for Ableton Live and Bitwig Studio. Works solo or with a collaborator over LAN.
 
-[Get started in 2 minutes](#quick-install) &darr;
+```bash
+# Install: just download the binary
+curl -L https://github.com/castle-queenside/clavus/releases/latest/download/clavus -o clavus
+chmod +x clavus
 
-```
-  Mac Studio     push/pull      ┌──────────┐      push/pull     Windows PC
-  (producer)  ────────────────→ │  Relay   │ ←──────────────── (co-producer)
-              ←──────────────── │ (host)   │ ────────────────→
-                                └──────────┘
-                                     │
-                               stores snapshots,
-                               cues, stems
+# Snapshot your session
+./clavus snapshot ~/Music/Ableton/MySet.als -m "intro section done"
+
+# Open the TUI
+./clavus tui --dir ~/Music/Ableton
 ```
 
-One person runs the relay (`clavus share`). Others connect (`clavus join`), push snapshots up, pull changes down. No cloud.
-
-**The relay runs on someone's machine.** When that machine goes to sleep or shuts down, the relay goes with it. Push and pull only work when the relay is reachable. This is not a cloud service — there's no always-on server unless you put the relay on one (a VPS, a Raspberry Pi, an old laptop that stays on).
-
-> **Status: early but active.** Clavus came together through late nights and real studio sessions — a small team of producers who needed this to exist, building and testing it across Mac and Windows between sessions. The TUI is functional, not beautiful, and you may hit rough edges. We fix bugs quickly and iterate constantly. See [Contributing](#contributing) below.
+> ⚠️ **Status: Rust rewrite in progress.** The Python version (`main` branch) is production-ready. This `rust` branch is the next generation — pure Rust, 4MB binary, same features. See [#13](https://github.com/castle-queenside/clavus/pull/13).
 
 ---
 
-## What You Get
+## The Problem
 
-| What | How |
-|------|-----|
-| **Snapshots** | `S` — saves a content-addressed checkpoint with the full `.als` file, parent chain, and integrity verification |
-| **Timeline cues** | `c` — pinned comments at specific bars/beats; inject as Ableton markers |
-| **Push / Pull** | `P` / `p` — sync snapshots and cues through a relay |
-| **Stem sync** | `U` — upload/download WAV stems through the relay |
-| **Conflict resolution** | ⚠ warns when both sides edited the same thing; `!` to pick whose |
-| **Restore** | `T` — roll back to any previous snapshot |
-| **Diff** | `d` — see exactly what changed between snapshots (tracks, devices, clips) |
-| **Backup** | `clavus backup` — full store archive with auto-rotating index backups |
-| **Health check** | `clavus doctor` — read-only store integrity check and diagnostics |
+Music production versions look like this:
 
-**Platform:** macOS, Windows · **DAW:** Ableton Live 11+ (Suite/Standard/Intro)  
-**Requirements:** Python 3.10+, [Tailscale](https://tailscale.com/download) (free tier)
+```
+Final_v3_Chris_REALFINAL_MASTERED_USE_THIS.als
+Final_v3_Chris_REALFINAL_MASTERED_USE_THIS_OLD.als
+Final_v3_Chris_REALFINAL_MASTERED_USE_THIS_OLDFASTER.als
+```
+
+- No history. No diff. No rollback.
+- Collaboration means WeTransfer and praying.
+- Nobody knows what changed between versions.
+
+## The Solution
+
+Clavus watches your project files and maintains a content-addressed snapshot chain — like git, but built for DAW workflows.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         clavus tui                                  │
+├────────────────────────────────────────────────────────────────────┤
+│ projects          ALS  Bass Session      3·a1b2c3d4  128  12  2d │
+│                   ALS  Lead Idea        1·f4e5d3c2  120   8  5d │
+│                   BW   Bridge Module    —            100  24  1h  │
+├────────────────────────────────────────────────────────────────────┤
+│  HASH       MESSAGE                   BPM  TRACKS  SAMPLES  WHEN  │
+│  a1b2c3d4   intro section done         128  12     47      2d   │
+│  f4e5d3c2   added bass layer           128  11     44      4d   │
+│  3d2c1b0a   initial session            120   8     31      1w   │
+├────────────────────────────────────────────────────────────────────┤
+│  ↑↓ navigate  ·  Enter open  ·  s sync  ·  q quit                │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+**What you get:**
+
+| Feature | What it does |
+|---------|-------------|
+| **Snapshot** | Save a content-addressed checkpoint. SHA256 of `.als`/`.bwproject` bytes. Duplicates detected automatically. |
+| **Audio audit** | Before every snapshot: verify all sample references are present and inside the project folder. No silent missing samples. |
+| **Cue markers** | Pin timeline comments at bar positions. Filter by Pending / Resolved / Skipped. |
+| **Relay sync** | Push/pull snapshots over TCP to a collaborator's relay. No cloud. |
+| **Diff** | Walk the chain. See what changed: BPM, track count, sample manifest, message. |
+| **Restore** | Roll back to any snapshot — restore the raw project bytes from the blob store. |
 
 ---
 
 ## Quick Install
 
-**Requirements:** Python 3.10+, [Tailscale](https://tailscale.com/download) (free tier). Takes about 2 minutes.
+### Binary (recommended)
 
 ```bash
-# 1. Grab the code
+# macOS/Linux — download the latest release
+curl -L https://github.com/castle-queenside/clavus/releases/latest/download/clavus -o clavus
+chmod +x clavus
+
+# Verify
+./clavus --version
+```
+
+### From source
+
+```bash
 git clone https://github.com/castle-queenside/clavus
-cd clavus
-
-# 2. Install
-pip install -e .          # Windows: py -m pip install -e .
-
-# If 'clavus' isn't recognized after install, use:
-# Windows: py -m clavus <command>
-# Mac/Linux: python -m clavus <command>
-
-# 3. Add a project and open the dashboard
-clavus init /path/to/your/project.als
-clavus tui
+cd clavus/rust
+cargo build --release
+./target/release/clavus --help
 ```
 
-> **Why Tailscale?** It creates a secure, private network between you and your collaborators without configuring routers or firewalls. Install it, sign in with any account (Google, GitHub, etc.), and Clavus picks it up automatically.
+### Requirements
 
-Press `S` to snapshot, `c` to add a cue, `T` to restore. Full walkthrough below.
+- **macOS** or **Linux** (Windows: coming soon)
+- An **Ableton Live** or **Bitwig Studio** project
+- No Python, no plugins, no accounts
 
 ---
 
-## Starting a Project
-
-### Solo — Import an existing Ableton project
+## CLI Reference
 
 ```bash
-clavus init /path/to/your/project.als
-clavus tui
-```
+# Snapshot a project (audits samples first)
+./clavus snapshot ~/Music/Ableton/MySet.als -m "bridge section done"
 
-Now press `S` to snapshot whenever you've made changes worth keeping. Press `T` to restore any previous snapshot. Press `d` to diff two snapshots.
+# List the snapshot chain
+./clavus log ~/Music/Ableton/MySet.als
 
-### Solo — Daily workflow
+# Add a cue marker
+./clavus cue ~/Music/Ableton/MySet.als "drop bass at bar 17" --position 17.1.0 --track "Bass"
 
-```
-clavus tui          # open dashboard
-p                   # pull latest (nothing to pull solo, but good habit)
-... work in Ableton ...
-S                   # snapshot — saves a checkpoint
-```
+# List cues
+./clavus cues ~/Music/Ableton/MySet.als
 
-### With a Collaborator — One person hosts
+# Audit samples (check for missing files)
+./clavus audit ~/Music/Ableton/MySet.als
 
-The collaborator who wants to share chooses a port (e.g. 7891) and runs the relay:
+# Run the sync relay (your machine is the server)
+./clavus relay --bind 127.0.0.1:4477
 
-```bash
-# Start the relay (keeps running; use a separate terminal window)
-clavus share --port 7891
-
-# Check it's live
-curl http://localhost:7891/api/ping
-# → {"status":"ok"}
-```
-
-Share your Tailscale URL with your collaborator. Clavus prints it when the relay starts — it looks like `http://your-machine.tailXXXX.ts.net:7891`.
-
-> **Cross-account?** If you and your collaborator use different Tailscale accounts, go to [admin.tailscale.com](https://login.tailscale.com/admin/machines) → your machine → Share → their email. They must accept the invite before they can connect. Raw `100.x.x.x` IPs are blocked between different Tailscale accounts.
-
-> **If you want to use port 80/443** (cleaner URL, no port number), Tailscale can proxy:
-> `tailscale serve --bg --http 80 http://localhost:7891`
-> This is optional. The direct port works fine.
-
-### Expose the Relay Globally with Tailscale Funnel
-
-Tailscale Funnel lets collaborators connect to your relay from anywhere on the internet — no port forwarding, no ngrok, no cloud server needed. Your Mac Studio stays the relay, but it's reachable from any network.
-
-**Requirements:** Tailscale v1.56+ ([check with `tailscale version`](https://tailscale.com/download))
-
-```bash
-# 1. Enable Funnel on port 443 (must be 443 for Funnel)
-sudo tailscale funnel 443
-
-# 2. Verify it's working
-tailscale funnel status
-# → Funnel on https://your-machine.tailXXXX.ts.net/
-
-# 3. Start the Clavus relay on port 443
-clavus relay --port 443
-
-# 4. Share the public URL with collaborators
-# https://your-machine.tailXXXX.ts.net/
-```
-
-Collaborators connect from any network:
-```bash
-clavus join https://your-machine.tailXXXX.ts.net/
-```
-
-> **Note:** Funnel requires `sudo` the first time to bind port 443. After that, it persists across reboots via the Tailscale daemon. The relay URL is `https://` (not `http://`) when Funnel is enabled — Clavus handles this automatically.
-
-### With a Collaborator — Everyone else joins
-
-```bash
-# Paste the URL your collaborator sent you (use the same port they chose)
-clavus join http://their-name.tailXXXX.ts.net:7891
-
-# Pull all their projects
-clavus pull
-
-# Open the dashboard
-clavus tui
-```
-
-That's it. Clavus shows you everything they have available.
-
----
-
-## What It Looks Like
-
-![Clavus TUI dashboard with cues and snapshot history](docs/screenshots/tui-main.jpg)
-
-Dashboard with cue list (left) and snapshot history (right).
-
-![Clavus diff viewer showing track-level changes](docs/screenshots/tui-diff.jpg)
-
-Diff view: see exactly what changed between snapshots — tracks added, devices changed, clips moved.
-
----
-
-## Daily Collaboration Workflow
-
-Open the dashboard:
-```bash
-clavus tui
-```
-
-Then each session:
-```
-p          → pull your collaborator's latest changes (your work is auto-snapshotted first)
-... work in Ableton ...
-S          → save a snapshot of your work
-P          → push your changes to the relay
-```
-
-Your collaborator does the same from their machine. Whoever runs the relay needs to leave it running for push/pull to work. If you're both working on a session, pick whose machine stays on. If you want the relay available 24/7, put it on an always-on machine (a VPS, a Raspberry Pi, an old laptop).
-
-### Adding timeline comments (cues)
-
-Press `c`, type your note, and optionally add a position like `@1:23` (bar 1, beat 3) or `@3:45:20` (minutes:seconds:frames). When your collaborator runs `:inject`, those cues appear as markers inside Ableton at the right position.
-
-```
-c          → new cue
-e          → edit selected cue
-r          → reply to selected cue
-a          → assign cue to a collaborator
-R          → mark cue resolved / unresolved
-!          → resolve a sync conflict (both edited same cue)
-```
-
-### Opening a project in Ableton
-
-Press `o` — Clavus opens the latest synced version in Ableton Live. Press `o` while a snapshot is selected in the history pane to open that specific version.
-
-### Inject cues as Ableton markers
-
-Press `:` then type `inject`. Clavus adds your cue comments as named markers in the Ableton arrangement at each cue's timestamp.
-
----
-
-## Keyboard Reference
-
-<details>
-<summary>Press <code>?</code> in the dashboard at any time — or expand this section.</summary>
-
-### Navigation
-
-| Key | What it does |
-|-----|-------------|
-| `j` / `k` | Move down / up in the list |
-| `Tab` | Switch between **Cues** pane and **History** pane |
-| `:` | Enter command mode |
-
-### Cues
-
-| Key | What it does |
-|-----|-------------|
-| `c` | New cue — type your note, optionally `@bar.beat` for position |
-| `e` | Edit selected cue text or snapshot message |
-| `r` | Reply to selected cue |
-| `a` | Assign cue to a collaborator |
-| `R` | Toggle resolved / unresolved |
-| `!` | Resolve conflict (both edited same cue — pick yours or theirs) |
-| `i` | Inject all cues as Ableton markers |
-
-### Snapshots & Sync
-
-| Key | What it does |
-|-----|-------------|
-| `S` | Snapshot — save a checkpoint now |
-| `P` | Push — send your changes to the relay |
-| `p` | Pull — get collaborator's changes (auto-snapshots your work first) |
-| `d` | Diff selected snapshot against its parent |
-| `T` | Restore — roll back to the selected snapshot |
-| `o` | Open selected snapshot / HEAD in Ableton |
-
-### Projects & Remotes
-
-| Key | What it does |
-|-----|-------------|
-| `:project <name>` | Switch to a different project |
-| `:projects` | Pick from a list of all synced projects |
-| `:remotes` | Manage relay connections |
-| `:init /path/to/file.als` | Add a new project to Clavus |
-
-### Commands
-
-| Command | What it does |
-|---------|-------------|
-| `:inject` | Add cues as Ableton markers |
-| `:push!` | Force push — bypass conflict check (use when told to) |
-| `:snapshot <message>` | Snapshot with a custom message |
-| `:pull` | Pull latest changes |
-| `:stem push` | Push WAV stems to relay |
-| `:stem pull` | Pull WAV stems from relay |
-| `:projects` | Show all projects |
-| `:remotes` | Show all remotes |
-| `:freeze` | Toggle frozen track warning (warn / block / allow) |
-</details>
-
----
-
-## Command-Line Reference
-
-```bash
-# Setup / first run
-clavus setup                 # guided first-run wizard
-
-# Projects
-clavus init /path/to.als     # add a project
-clavus tui                   # open the dashboard
-clavus projects              # list all projects
-
-# Sync
-clavus pull                  # pull snapshots, cues, stems from relay
-clavus push                  # push snapshots, cues, stems to relay
-clavus status                # show current project and sync status
-
-# Snapshots & cues
-clavus snapshot "message"   # save checkpoint with a note
-clavus history               # list snapshots for current project
-
-# Stems
-clavus stem import-folder ~/Desktop/Stems/   # import WAVs, AIFFs from folder
-clavus stem import Kick.wav --track "Kick"    # import single file
-clavus stem push                              # push to relay
-clavus stem pull                              # pull from relay
-
-# Diagnostics
-clavus doctor                  # read-only store health check
-clavus status                  # show relay connection status
-
-# Backup & repair
-clavus backup                  # full store archive
-clavus backups                 # list backups
-clavus restore-store <file>    # restore from backup
-clavus repair                  # fix corrupted index
-
-# Relay
-clavus share --port 7891       # start hosting a relay
-clavus join <url>              # connect to a relay
-
-# Help
-clavus help                   # show all commands
+# Open the TUI
+./clavus tui --dir ~/Music/Ableton
 ```
 
 ---
 
-## If Something Goes Wrong
+## TUI Keybindings
 
-### "HEAD has moved — pull first"
-Someone pushed while you were working. Your work is safe — Clavus auto-snapshotted it. Press `p` to pull their changes, then press `P` to push yours.
-
-### "⚠ on a cue or snapshot"
-Both of you edited the same thing simultaneously. Press `!` and pick **yours** or **theirs**.
-
-### "clavus isn't recognized" (Windows)
-`pip install -e .` on Windows can fail silently if you ran it from the wrong directory — it binds to the exact path where you executed it. If `clavus` commands don't work after install:
-
-```powershell
-# Navigate to your cloned repo first, THEN install
-cd C:\path\to\clavus
-py -m pip install -e .
-
-# Or use the module form directly (always works)
-py -m clavus share
-py -m clavus init
-py -m clavus tui
 ```
-
-### "Connection refused" / "Cannot reach relay"
-- Is the host still running `clavus share`?
-- Is Tailscale running? Run `tailscale status` to check.
-- If you're on different Tailscale accounts: did the host share their machine with you at [admin.tailscale.com](https://login.tailscale.com/admin/machines)? You must accept the invite.
-
-### "Nothing shows up — no project"
-You haven't added the project yet. Run `clavus join <url>` to connect to the relay, then `p` to pull the project. Or add one manually with `clavus init /path/to/project.als`.
-
-### "Frozen track warning"
-Ableton Live crashes when opening projects with frozen tracks from a different OS. When you see this warning, unfreeze the tracks in Ableton before snapshotting, or press `S` with `--allow-frozen` if everyone is on the same OS.
-
-### "404 on install.ps1" (Windows)
-GitHub's CDN sometimes takes a few minutes to pick up newly pushed files. If `irm https://raw.githubusercontent.com/.../install.ps1 | iex` fails, use the git clone approach instead:
-
-```powershell
-git clone https://github.com/castle-queenside/clavus
-cd clavus
-py -m pip install -e .
-clavus setup
+↑↓         Navigate lists
+Enter/o    Open project
+l          Cue list
+n          Snapshot list
+s          Sync screen
+a          Add cue (in CueList)
+r          Resolve cue
+f          Cycle filter (Pending → Resolved → Skipped → all)
+c          Connect relay (in Sync screen)
+P          Push
+G          Pull
+Esc/q      Back / quit
 ```
 
 ---
 
-## Updating Clavus
+## Sync Architecture
 
-```bash
-cd clavus
-git pull
-pip install -e .     # Windows: py -m pip install -e .
+No cloud account needed. The relay is a TCP server that runs on someone's machine.
+
 ```
+  Your Mac Studio                Friend's Laptop
+        │                              │
+    clavus tui                     clavus tui
+        │                              │
+        └────────── TCP relay ──────────┘
+                  (clavus relay)
+                 127.0.0.1:4477
+             or a LAN IP + port
+```
+
+One person runs `clavus relay`. Others run `clavus tui`, press `c` to connect, then `P` to push and `G` to pull. The relay stores snapshots, cues, and manifests — not audio files.
 
 ---
 
-## Known Limitations
+## Design
 
-**OneDrive / Files On-Demand:** Ableton has trouble with `.als` files in OneDrive-synced folders. Keep projects on a local drive.
+**Omarchy-inspired dark aesthetic** — warm blacks (`#0b0c0d`), layered panel surfaces, soft green accent (`#74e08c`), amber markers. No cold blue GitHub-dark. The TUI should feel like a piece of studio software, not a code editor.
 
-**Single relay at a time:** `clavus join` replaces any existing remote. Your snapshots and history stay local regardless.
+**Audio-first philosophy** — Clavus audits your samples before every snapshot. It won't let you save a version with missing audio files. This is the core insight that separates it from generic file backup tools.
 
-**No two-person-at-once push protection:** Simultaneous pushes may get a 409. Clavus handles it gracefully — pull first, then push again.
+**Local-first, no cloud** — your project files never leave your machine unless you explicitly push to a relay. The relay is a tiny TCP server you control.
+
+---
+
+## Project Status
+
+| | |
+|---|---|
+| Binary | ✅ 4MB standalone Rust binary |
+| Ableton parser | ✅ `.als` (gzip XML) |
+| Bitwig parser | ✅ `.bwproject` (zip XML) — fixture needed |
+| Snapshot store | ✅ Content-addressed blob + metadata |
+| Audio audit | ✅ Checks all sample references before snapshot |
+| Cue markers | ✅ Pending / Resolved / Skipped |
+| Relay sync | ✅ TCP framed JSON, push/pull/connect |
+| TUI | ✅ Ratatui, full keyboard nav |
+| CI | ✅ GitHub Actions, clippy clean |
+| Windows | 🔜 Linux binary first |
 
 ---
 
 ## Contributing
 
-Clavus is MIT-licensed and open to contributions. Here's how to help:
+MIT licensed. Contributions welcome.
 
-- **Report bugs** — open an [issue on GitHub](https://github.com/castle-queenside/clavus/issues). Include what you were doing, what you expected, and what happened.
-- **Suggest improvements** — the workflow makes sense to us because we built it. If something's confusing or missing, tell us.
-- **Submit code** — PRs welcome. Keep changes focused, add tests if applicable, and match the existing code style.
-- **Spread the word** — if Clavus saves you time, tell another producer.
+```bash
+git clone https://github.com/castle-queenside/clavus
+cd clavus/rust
+cargo test --all
+cargo clippy --all -- -D warnings
+```
 
-This is a small project built by a small team of producers who needed it. Every issue filed, every feature request, every "this part was confusing" helps make it better.
+See [CLAVUS.md](CLAVUS.md) for full architecture documentation.
 
 ---
 
-## Support Clavus
+## Alternatives
 
-If Clavus saves you time, frustration, or a lost arrangement, consider tossing a few dollars our way.
+| Project | What it is |
+|---------|-----------|
+| [stemctl](https://github.com/diveydoescode/stemctl) | Cloud-first, branching, PRs for DAW projects. Rust + Tauri. |
+| [ableton-live-version-control](https://github.com/colinmcardell/ableton-live-version-control) | Plain git wrapper for `.als`. Shell. |
+| [ableton-cookbook-mcp](https://github.com/teamallnighter/ableton-cookbook-mcp) | AI-assisted Ableton workflow. Version history, rack analysis. |
 
-- Cash App: `$slowhandschris`
-- Venmo: `@chrisandcarr`
-
-No tiers, no rewards, no subscriptions. Just a donation if you find it useful.
+**What Clavus does differently:** local-first, no account, no cloud, audio sample audit, Bitwig support, full TUI with spectrum analyzer. The relay is just a TCP server you run — you control it.
 
 ---
 
