@@ -148,10 +148,7 @@ fn flate2_decode(data: &[u8]) -> std::io::Result<Vec<u8>> {
 
 /// Run a full sample audit on a project file.
 /// Returns a report with collected, missing, and outside-project samples.
-pub fn audit_project(
-    project_path: &Path,
-    _parser_project: &crate::types::Project,
-) -> Result<SampleAuditReport, ClavusError> {
+pub fn audit_project(project_path: &Path) -> Result<SampleAuditReport, ClavusError> {
     let project_root = project_path
         .parent()
         .ok_or_else(|| ClavusError::ParseError("no parent directory for project".into()))?;
@@ -419,6 +416,9 @@ pub fn collect_samples(
                     failed.push((ref_.path.clone(), e.to_string()));
                 }
             }
+        } else {
+            // Missing: file doesn't exist on disk, can't copy
+            failed.push((ref_.path.clone(), "file not found on disk".to_string()));
         }
     }
 

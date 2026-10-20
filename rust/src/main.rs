@@ -335,7 +335,7 @@ fn cmd_snapshot(project: &Path, message: &Option<String>) -> anyhow::Result<()> 
         clavus_parser_als::AlsParser::new(project)?.project
     };
 
-    let report = sample::audit_project(project, &parser)?;
+    let report = sample::audit_project(project)?;
     report.ensure_clean()
         .map_err(|e| anyhow::anyhow!("Audio audit failed: {}", e))?;
 
@@ -478,13 +478,7 @@ fn cmd_relay(bind: &str, state_dir: Option<PathBuf>) -> anyhow::Result<()> {
 }
 
 fn cmd_audit(project: &Path, strict: bool) -> anyhow::Result<()> {
-    let parser = if project.extension().and_then(|s| s.to_str()) == Some("bwproject") {
-        clavus_parser_bw::BitwigParser::new(project)?.project
-    } else {
-        clavus_parser_als::AlsParser::new(project)?.project
-    };
-
-    let report = sample::audit_project(project, &parser)?;
+    let report = sample::audit_project(project)?;
 
     if report.is_clean() {
         println!("✓ {} samples present", report.collected.len());
@@ -509,13 +503,7 @@ fn cmd_audit(project: &Path, strict: bool) -> anyhow::Result<()> {
 }
 
 fn cmd_collect(project: &Path, _clavus_root: &Path) -> anyhow::Result<()> {
-    let parser = if project.extension().and_then(|s| s.to_str()) == Some("bwproject") {
-        clavus_parser_bw::BitwigParser::new(project)?.project
-    } else {
-        clavus_parser_als::AlsParser::new(project)?.project
-    };
-
-    let report = sample::audit_project(project, &parser)?;
+    let report = sample::audit_project(project)?;
 
     if report.is_clean() {
         println!("✓ {} samples already present, all inside project folder", report.collected.len());

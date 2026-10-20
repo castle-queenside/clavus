@@ -7,14 +7,10 @@ description = "Clavus relay server"
 [dependencies]
 clavus-core = { path = "../core" }
 clavus-sync = { path = "../sync" }
-axum = "0.7"
-tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tower = "0.4"
-tower-http = { version = "0.5", features = ["cors", "trace"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "1"
-anyhow = "1"
-futures-util = "0.3"
+
+[dev-dependencies]
+tempfile = "3"
