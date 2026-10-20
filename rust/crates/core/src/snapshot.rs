@@ -214,4 +214,38 @@ impl SnapshotStore {
         info!("Saved snapshot {}: {}", snapshot.short_hash(8), snapshot.message);
         Ok(())
     }
+
+    /// Restore a snapshot's raw project bytes back to its original path.
+    ///
+    /// # Arguments
+    /// * `hash` — full or short snapshot hash
+    /// * `target` — destination path (defaults to snapshot's `project_path` if `None`)
+    pub fn restore(&self, hash: &str, target: Option<&Path>) -> Result<Snapshot, ClavusError> {
+        let snap = self.load(hash).ok_or_else(|| {
+            ClavusError::SnapshotNotFound(hash.to_string())
+        })?;
+
+        let blob = self.store.get(&snap.hash).ok_or_else(|| {
+            ClavusError::BlobNotFound(snap.hash.clone())
+        })?;
+
+        let dest = target.unwrap_or_else(|| Path::new(&snap.project_path));
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| ClavusError::ParseError(format!("create parent dirs for {}: {}", dest.display(), e)))?;
+        }
+
+        // atomic write: temp file → rename
+        let tmp = dest.with_extension("tmp");
+        std::fs::write(&tmp, &blob)
+            .map_err(|e| ClavusError::ParseError(format!("write {}: {}", tmp.display(), e)))?;
+        std::fs::rename(&tmp, dest)
+            .map_err(|e| ClavusError::ParseError(format!("rename {}: {}", dest.display(), e)))?;
+
+        // Update HEAD to the restored snapshot
+        self.set_head(&snap.hash, "restore")?;
+
+        info!("Restored {} from snapshot {} to {}", self.project_name, snap.short_hash(8), dest.display());
+        Ok(snap)
+    }
 }

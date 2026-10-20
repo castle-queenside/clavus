@@ -107,6 +107,13 @@ enum Commands {
     Status {
         project: PathBuf,
     },
+    /// Restore a project to a previous snapshot
+    Restore {
+        project: PathBuf,
+        /// Snapshot hash (or part of one — will be matched against local snapshots)
+        #[arg(default_value = "HEAD")]
+        hash: String,
+    },
 }
 
 // ─── Entry point ─────────────────────────────────────────────────
@@ -139,6 +146,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Pull { relay, project } => cmd_pull(&relay, &project, &clavus_root),
         Commands::Projects { recursive } => cmd_projects(recursive),
         Commands::Status { project } => cmd_status(&project, &clavus_root),
+        Commands::Restore { project, hash } => cmd_restore(&project, &hash, &clavus_root),
     }
 }
 
@@ -787,6 +795,47 @@ fn standard_albeton_dirs() -> Vec<PathBuf> {
         }
     }
     dirs
+}
+
+fn cmd_restore(project: &Path, hash_arg: &str, clavus_root: &Path) -> anyhow::Result<()> {
+    use clavus_core::blob::BlobStore;
+    use clavus_core::snapshot::SnapshotStore;
+
+    let name = project
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let store = BlobStore::new(clavus_root.join("blobs"))
+        .map_err(|e| anyhow::anyhow!("BlobStore: {}", e))?;
+    let snap_store = SnapshotStore::new(store, &name);
+
+    // Find the snapshot: HEAD keyword, or prefix match
+    let target_hash = if hash_arg == "HEAD" {
+        snap_store.head()
+            .map(|h| h.hash)
+            .ok_or_else(|| anyhow::anyhow!("No snapshots found for '{}'", name))?
+    } else {
+        // Walk chain looking for a hash that starts with hash_arg
+        snap_store.walk_chain(None)
+            .into_iter()
+            .find(|s| s.hash.starts_with(hash_arg))
+            .map(|s| s.hash)
+            .ok_or_else(|| anyhow::anyhow!(
+                "No snapshot found matching '{}'. Run `clavus log {:?}` to see snapshot hashes.",
+                hash_arg, project
+            ))?
+    };
+
+    println!("Restoring {} to snapshot {}...", name, &target_hash[..8]);
+
+    let restored = snap_store.restore(&target_hash, Some(project))?;
+
+    println!("✓ Restored to: {}", &restored.hash[..8]);
+    println!("  {}", restored.message);
+    println!("  Restart Ableton/Bitwig to load the restored file.");
+
+    Ok(())
 }
 
 fn cmd_status(project: &Path, clavus_root: &Path) -> anyhow::Result<()> {
