@@ -141,6 +141,10 @@ impl BlobStore {
     /// Write snapshot metadata atomically (rename over .tmp).
     pub fn write_meta(&self, snapshot: &Snapshot) -> io::Result<()> {
         let path = self.meta_path(&snapshot.hash);
+        // Create prefix directory if it doesn't exist (e.g. objects/ab/)
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
         let tmp = PathBuf::from(path.to_string_lossy().to_string() + ".tmp");
         let json = serde_json::to_string_pretty(snapshot)?;
         fs::write(&tmp, json)?;
@@ -181,8 +185,12 @@ impl BlobStore {
             .unwrap_or_default();
 
         // Write metadata FIRST — prevents orphan blob if crash occurs here
+        let meta_path = self.sample_meta_path(&hash);
+        if let Some(parent) = meta_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
         let meta = format!("{}\n{}", filename, relative_path.replace('\\', "/"));
-        fs::write(self.sample_meta_path(&hash), meta)?;
+        fs::write(&meta_path, meta)?;
 
         // Then write blob atomically
         if !path.exists() {
