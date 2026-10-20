@@ -229,11 +229,12 @@ fn render_cue_list(frame: &mut Frame, app: &mut App) {
         return;
     }
 
-    // Filter indicator
+    // Filter indicator — small strip at top of body, not full body
+    let filter_area = Rect::new(body.x, body.y, body.width, 1);
     if let Some(f) = &filter {
         let line = Paragraph::new(vec![Line::raw(format!("  filtered: {:?}", f))])
             .style(Style::new().fg(MUTED).bg(PANEL_0));
-        frame.render_widget(line, body);
+        frame.render_widget(line, filter_area);
     }
 
     let cue_rows: Vec<ListItem<'_>> = filtered.iter().map(|c| {
@@ -258,7 +259,12 @@ fn render_cue_list(frame: &mut Frame, app: &mut App) {
             .border_style(Style::new().fg(LINE)))
         .style(S_BG);
 
-    frame.render_widget(list, body);
+    let list_area = if filter.is_some() {
+        Rect::new(body.x, body.y + 1, body.width, body.height.saturating_sub(1))
+    } else {
+        body
+    };
+    frame.render_widget(list, list_area);
 }
 
 // ─── Cue Add ─────────────────────────────────────────────────────────
@@ -608,9 +614,9 @@ impl App {
         match self.screen {
             Screen::ProjectList  => "↑↓ select  ·  Enter open  ·  s sync  ·  q quit",
             Screen::ProjectDetail=> "c snap  ·  l cues  ·  n snapshots  ·  s sync  ·  Esc back",
-            Screen::CueList      => "a add  ·  r resolve  ·  s skip  ·  f filter  ·  Esc back",
+            Screen::CueList      => "↑↓ navigate  ·  a add  ·  r resolve  ·  f filter  ·  Esc back",
             Screen::CueAdd       => "Enter save  ·  Esc cancel",
-            Screen::SnapshotList => "Esc back",
+            Screen::SnapshotList => "↑↓ navigate  ·  Esc back",
             Screen::Sync         => "P push  ·  G pull  ·  Esc back",
         }.to_string()
     }
@@ -619,9 +625,9 @@ impl App {
         match self.screen {
             Screen::ProjectList  => "↑↓ navigate  ·  Enter  open  ·  q quit",
             Screen::ProjectDetail=> "c snapshot  ·  l cues  ·  Esc",
-            Screen::CueList      => "a add  ·  Esc",
+            Screen::CueList      => "↑↓ navigate  ·  a add  ·  Esc",
             Screen::CueAdd       => "Enter save  ·  Esc cancel",
-            Screen::SnapshotList => "Esc back",
+            Screen::SnapshotList => "↑↓ navigate  ·  Esc",
             Screen::Sync         => "P push  ·  G pull  ·  Esc",
         }.to_string()
     }

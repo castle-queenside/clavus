@@ -202,6 +202,22 @@ fn handle_key(key: &crossterm::event::KeyEvent, app: &mut App) -> bool {
         }
 
         // ── Cue List ───────────────────────────────
+        (KeyCode::Down, _) if app.screen == Screen::CueList => {
+            if let Some(i) = app.selected_cue {
+                if i + 1 < app.cues.len() {
+                    app.selected_cue = Some(i + 1);
+                }
+            } else if !app.cues.is_empty() {
+                app.selected_cue = Some(0);
+            }
+        }
+        (KeyCode::Up, _) if app.screen == Screen::CueList => {
+            if let Some(i) = app.selected_cue {
+                if i > 0 {
+                    app.selected_cue = Some(i - 1);
+                }
+            }
+        }
         (KeyCode::Char('a'), KeyModifiers::NONE) if app.screen == Screen::CueList => {
             app.screen = Screen::CueAdd;
         }
@@ -273,6 +289,24 @@ fn handle_key(key: &crossterm::event::KeyEvent, app: &mut App) -> bool {
                 app.set_info("pull sent".into());
             } else {
                 app.set_info("press c to connect first".into());
+            }
+        }
+
+        // ── Snapshot List ────────────────────────
+        (KeyCode::Down, _) if app.screen == Screen::SnapshotList => {
+            if let Some(i) = app.selected_snapshot {
+                if i + 1 < app.snapshots.len() {
+                    app.selected_snapshot = Some(i + 1);
+                }
+            } else if !app.snapshots.is_empty() {
+                app.selected_snapshot = Some(0);
+            }
+        }
+        (KeyCode::Up, _) if app.screen == Screen::SnapshotList => {
+            if let Some(i) = app.selected_snapshot {
+                if i > 0 {
+                    app.selected_snapshot = Some(i - 1);
+                }
             }
         }
 

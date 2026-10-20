@@ -34,8 +34,10 @@ pub struct App {
     pub project_detail: Option<Project>,
     /// Cues for the selected project.
     pub cues: Vec<Cue>,
+    pub selected_cue: Option<usize>,
     /// Snapshots for the selected project.
     pub snapshots: Vec<Snapshot>,
+    pub selected_snapshot: Option<usize>,
     /// Cue filter.
     pub cue_filter: Option<CueStatus>,
     /// Current screen.
@@ -110,7 +112,9 @@ impl App {
             selected_project: None,
             project_detail: None,
             cues: vec![],
+            selected_cue: None,
             snapshots: vec![],
+            selected_snapshot: None,
             cue_filter: None,
             screen: Screen::ProjectList,
             sync_state: SyncState::default(),
@@ -218,6 +222,7 @@ impl App {
         let store = clavus_core::CueStore::new(&self.clavus_root, &entry.name)
             .map_err(|e| format!("CueStore: {}", e))?;
 
+        self.selected_cue = None;
         let filter = self.cue_filter.as_ref().map(|s| s.as_str());
         self.cues = store
             .list(filter)
@@ -242,6 +247,7 @@ impl App {
         } else {
             self.snapshots = vec![];
         }
+        self.selected_snapshot = None;
         Ok(())
     }
 
