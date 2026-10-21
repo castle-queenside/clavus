@@ -10,18 +10,18 @@
 | Parser ALS | `crates/parser-als/tests/als_parser.rs` | 48 | 🟢 |
 | Parser Bitwig | `crates/parser-bw/tests/bw_parser.rs` | 21 | 🟢 |
 | Sample audit + collect | `crates/core/tests/collect_tests.rs` | 19 | 🟢 |
-| BlobStore / snapshot core | `crates/core/tests/core_tests.rs` | 27 | 🟢 |
-| Cue store | `crates/core/tests/cue_tests.rs` | 20 | 🟢 |
+| BlobStore / snapshot core | `crates/core/tests/core_tests.rs` | 35 | 🟢 |
+| Cue store | `crates/core/tests/cue_tests.rs` | 26 | 🟢 |
 | Property-based (core) | `crates/core/tests/property_tests.rs` | 11 | 🟢 |
 | Relay sync | `crates/relay/tests/relay_tests.rs` | 10 | 🟢 |
 | Relay (real server) | `crates/relay/tests/real_relay.rs` | 9 | 🟢 |
 | Sync client (protocol) | `crates/sync/tests/sync_client.rs` | 6 | 🟢 |
 | Sync client (hostile server) | `crates/sync/tests/hostile_server.rs` | 15 | 🟢 |
 | TUI | `crates/tui/tests/tui_tests.rs` | 39 | 🟢 |
-| CLI commands | `crates/cli/tests/cli_tests.rs` | 36 | 🟢 |
+| CLI commands | `crates/cli/tests/cli_tests.rs` | 39 | 🟢 |
 | Core unit tests | `crates/core/src/**` | 5 | 🟢 |
 
-**266 tests passing, 0 failed, 0 ignored.**
+**283 tests passing, 0 failed, 0 ignored.**
 
 Legend: 🟢 good  🟡 partial  🟠 manual only  🔴 missing
 
@@ -143,6 +143,10 @@ real ones. Each now has a regression test:
 | `collect` exited 0 after failing | A sample missing from disk was reported but the command still succeeded | `collect` now exits non-zero and explains what to do |
 | `snapshot` claimed a new snapshot for unchanged content | The user's message was silently dropped but "✓ snapshot" was printed | The unchanged case is detected and reported honestly |
 | `audit` printed "1 samples" | Grammar | Count-aware pluralisation |
+| **Path traversal via a cue id** | A remote peer could write JSON anywhere on disk by sending a cue with an id like `../../pwned` | `CueStore::validate_cue_id()` rejects ids that are not plain alphanumeric |
+| **Path traversal via a snapshot hash** | A remote peer could write outside the blob store, and a one-character hash panicked the client | `BlobStore::is_valid_hash()` requires plain lowercase hex |
+| **Path traversal via a ref name** | A snapshot's `parent` is used as a ref name, so a crafted parent could read outside the refs directory | `BlobStore::is_valid_ref_name()` rejects separators and `..` |
+| The relay served malformed snapshots | The relay stored any hash it was given | The relay rejects snapshots with an invalid hash or parent |
 
 ---
 

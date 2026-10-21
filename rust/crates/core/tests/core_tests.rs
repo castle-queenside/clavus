@@ -217,12 +217,13 @@ fn test_refs_lifecycle() {
 fn test_meta_write_load() {
     let tmp = TempDir::new().unwrap();
     let store = BlobStore::new(tmp.path().to_path_buf()).unwrap();
-    let snap = make_snap("meta_test", None);
+    let hash = "a".repeat(64);
+    let snap = make_snap(&hash, None);
     store.write_meta(&snap).unwrap();
-    let loaded = store.load_meta("meta_test");
+    let loaded = store.load_meta(&hash);
     assert!(loaded.is_some());
     let loaded = loaded.unwrap();
-    assert_eq!(loaded.hash, "meta_test");
+    assert_eq!(loaded.hash, hash);
     // tmp stays alive here
 }
 
@@ -324,7 +325,7 @@ fn test_snapshot_store_save_raw_and_has() {
     let (store, _tmp) = temp_store();
     let snap_store = SnapshotStore::new(store, "test");
 
-    let snap = clavus_core::types::Snapshot {
+    let mut snap = clavus_core::types::Snapshot {
         hash: "abc123def456".to_string(),
         parent: None,
         timestamp: 1700000000.0,
@@ -338,10 +339,116 @@ fn test_snapshot_store_save_raw_and_has() {
         project_path: "/tmp/test.als".to_string(),
     };
 
-    assert!(!snap_store.has("abc123def456"));
+    let hash = "b".repeat(64);
+    snap.hash = hash.clone();
+    assert!(!snap_store.has(&hash));
     snap_store.save_raw(snap).unwrap();
-    assert!(snap_store.has("abc123def456"));
+    assert!(snap_store.has(&hash));
 
     // save_raw does not update HEAD
     assert!(snap_store.head().is_none());
+}
+
+// ─── Hash and ref name safety ─────────────────────────────────────────────
+//
+// Hashes and ref names arrive from remote peers over the sync protocol and
+// are used to build file paths. A crafted value must never be able to
+// escape the store, and a short value must never panic.
+
+#[test]
+fn test_valid_hashes_are_accepted() {
+    assert!(BlobStore::is_valid_hash(&"a".repeat(64)));
+    assert!(BlobStore::is_valid_hash(&"0".repeat(64)));
+    assert!(BlobStore::is_valid_hash("ab"));
+    assert!(BlobStore::is_valid_hash("0123456789abcdef"));
+}
+
+#[test]
+fn test_invalid_hashes_are_rejected() {
+    for bad in [
+        "",
+        "a",
+        "../../etc/passwd",
+        "..",
+        "ABCDEF0123456789",           // uppercase
+        "0123456789abcdefg",          // 'g' is not hex
+        "0123456789abcdef.meta",      // a suffix
+        "0123456789abcdef ../../x",   // embedded path
+        "0123456789abcdef/../x",
+        "0123456789abcdef\\x",
+    ] {
+        assert!(
+            !BlobStore::is_valid_hash(bad),
+            "hash {:?} should be rejected",
+            bad
+        );
+    }
+}
+
+#[test]
+fn test_a_too_long_hash_is_rejected() {
+    assert!(!BlobStore::is_valid_hash(&"a".repeat(65)));
+}
+
+#[test]
+fn test_meta_path_rejects_a_traversing_hash() {
+    let tmp = TempDir::new().unwrap();
+    let store = BlobStore::new(tmp.path().to_path_buf()).unwrap();
+    assert!(store.meta_path("../../escaped").is_none());
+    assert!(store.sample_meta_path("../../escaped").is_none());
+    assert!(store.meta_path("ab").is_none(), "a prefix is not a full hash");
+}
+
+#[test]
+fn test_write_meta_rejects_a_traversing_hash() {
+    let tmp = TempDir::new().unwrap();
+    let store = BlobStore::new(tmp.path().to_path_buf()).unwrap();
+    let mut snap = make_snap(&"a".repeat(64), None);
+    snap.hash = "../../escaped".to_string();
+    let err = store
+        .write_meta(&snap)
+        .expect_err("a traversing hash must be rejected");
+    assert!(err.to_string().contains("invalid blob hash"), "{}", err);
+    assert!(
+        !tmp.path().join("escaped.meta").exists(),
+        "nothing may be written outside the store"
+    );
+}
+
+#[test]
+fn test_read_ref_rejects_a_traversing_name() {
+    let tmp = TempDir::new().unwrap();
+    let store = BlobStore::new(tmp.path().to_path_buf()).unwrap();
+    // A file that a traversal would reach.
+    let victim = tmp.path().join("victim");
+    std::fs::write(&victim, b"secret").unwrap();
+
+    assert_eq!(store.read_ref("../victim"), None);
+    assert_eq!(store.read_ref("a/b"), None);
+    assert_eq!(store.read_ref(".."), None);
+    assert!(store.update_ref("../victim", "abc").is_err());
+    assert!(store.delete_ref("../victim").is_err());
+    assert!(victim.exists(), "the file outside the refs dir must survive");
+}
+
+#[test]
+fn test_ordinary_refs_still_work() {
+    let tmp = TempDir::new().unwrap();
+    let store = BlobStore::new(tmp.path().to_path_buf()).unwrap();
+    store.update_ref("HEAD", "abc123").unwrap();
+    assert_eq!(store.read_ref("HEAD"), Some("abc123".to_string()));
+    store.delete_ref("HEAD").unwrap();
+    assert_eq!(store.read_ref("HEAD"), None);
+}
+
+#[test]
+fn test_a_short_hash_does_not_panic() {
+    let tmp = TempDir::new().unwrap();
+    let store = BlobStore::new(tmp.path().to_path_buf()).unwrap();
+    // A one-character hash used to panic while slicing the prefix.
+    assert!(!store.has("a"));
+    assert!(store.get("a").is_none());
+    assert!(store.load_meta("a").is_none());
+    assert!(store.sample_filename("a").is_none());
+    assert!(store.sample_relpath("a").is_none());
 }

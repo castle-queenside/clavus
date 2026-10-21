@@ -633,3 +633,159 @@ fn the_binary_prints_help() {
     assert!(text.contains("snapshot"), "help should list commands: {}", text);
     assert!(text.contains("restore"), "help should list commands: {}", text);
 }
+
+// ─── hostile relay ─────────────────────────────────────────────────────────
+
+/// A snapshot with a hash that is not a SHA-256 hex digest.
+fn hostile_snapshot(hash: &str) -> clavus_core::types::Snapshot {
+    clavus_core::types::Snapshot {
+        hash: hash.to_string(),
+        parent: None,
+        timestamp: 1.0,
+        message: "from a hostile relay".to_string(),
+        track_count: 0,
+        bpm: 120.0,
+        tags: vec![],
+        notes: String::new(),
+        sample_hashes: vec![],
+        sample_paths: std::collections::HashMap::new(),
+        project_path: "/tmp/evil.als".to_string(),
+    }
+}
+
+/// Serve one client, sending it a `Push` with the given snapshot.
+fn hostile_relay(snapshot: clavus_core::types::Snapshot) -> String {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().unwrap().to_string();
+    thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            // Read the client's Hello frame (4-byte length + payload).
+            let mut len_buf = [0u8; 4];
+            if stream.read_exact(&mut len_buf).is_ok() {
+                let len = u32::from_be_bytes(len_buf) as usize;
+                let mut body = vec![0u8; len];
+                let _ = stream.read_exact(&mut body);
+            }
+            // Reply with a Push carrying the hostile snapshot.
+            let msg = clavus_sync::SyncMsg::Push {
+                snapshots: vec![snapshot],
+                cues: vec![],
+            };
+            let json = serde_json::to_vec(&msg).unwrap();
+            let _ = stream.write_all(&(json.len() as u32).to_be_bytes());
+            let _ = stream.write_all(&json);
+            let _ = stream.flush();
+            thread::sleep(std::time::Duration::from_millis(300));
+        }
+    });
+    addr
+}
+
+#[test]
+fn pull_from_a_hostile_relay_cannot_escape_the_store() {
+    let ws = Workspace::new();
+    let als = ws.write_als(&als_xml(&[]));
+    let addr = hostile_relay(hostile_snapshot("../../../../escaped"));
+
+    let (out, result) = run(|o, e| cmd_pull(&addr, &als, &ws.root, o, e));
+    // The pull must fail cleanly — not panic, not write outside the store.
+    assert!(result.is_err(), "a crafted hash must be rejected: {}", out.all());
+
+    // Nothing may have been written outside the data root.
+    let escaped = ws.root.parent().unwrap().join("escaped.json");
+    assert!(
+        !escaped.exists(),
+        "the relay must not be able to write outside the store"
+    );
+    // And nothing may have been written outside the blob store either.
+    let objects = ws.root.join("blobs").join("objects");
+    if let Ok(entries) = std::fs::read_dir(&objects) {
+        for entry in entries.flatten() {
+            assert!(
+                !entry.file_name().to_string_lossy().contains(".."),
+                "no traversal in the object store"
+            );
+        }
+    }
+}
+
+#[test]
+fn pull_from_a_hostile_relay_with_a_tiny_hash_does_not_panic() {
+    let ws = Workspace::new();
+    let als = ws.write_als(&als_xml(&[]));
+    // A one-character hash used to panic while slicing the 8-character
+    // prefix for display.
+    let addr = hostile_relay(hostile_snapshot("a"));
+
+    let (out, result) = run(|o, e| cmd_pull(&addr, &als, &ws.root, o, e));
+    assert!(
+        result.is_err(),
+        "a malformed hash must be rejected: {}",
+        out.all()
+    );
+}
+
+#[test]
+fn pull_from_a_hostile_relay_with_a_traversing_cue_id_cannot_escape() {
+    let ws = Workspace::new();
+    let als = ws.write_als(&als_xml(&[]));
+    let evil_cue = clavus_core::types::Cue {
+        id: "../../escaped".to_string(),
+        position: "1.1.1".into(),
+        text: "evil".into(),
+        author: "attacker".into(),
+        timestamp: 1.0,
+        status: clavus_core::types::CueStatus::Pending,
+        snapshot_hash: String::new(),
+        track_name: String::new(),
+        assignee: String::new(),
+        in_progress: false,
+        replies: vec![],
+    };
+    let addr = hostile_relay_with_cues(vec![evil_cue]);
+
+    let (out, result) = run(|o, e| cmd_pull(&addr, &als, &ws.root, o, e));
+    // The pull may succeed (a valid snapshot plus one bad cue) or fail, but
+    // it must never write outside the cue directory.
+    let _ = result;
+    let escaped = ws.root.parent().unwrap().join("escaped.json");
+    assert!(
+        !escaped.exists(),
+        "a cue id must not be able to escape the cue directory: {}",
+        out.all()
+    );
+}
+
+/// Serve one client, sending it a `Push` carrying the given cues.
+fn hostile_relay_with_cues(cues: Vec<clavus_core::types::Cue>) -> String {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().unwrap().to_string();
+    thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut len_buf = [0u8; 4];
+            if stream.read_exact(&mut len_buf).is_ok() {
+                let len = u32::from_be_bytes(len_buf) as usize;
+                let mut body = vec![0u8; len];
+                let _ = stream.read_exact(&mut body);
+            }
+            let msg = clavus_sync::SyncMsg::Push {
+                snapshots: vec![],
+                cues,
+            };
+            let json = serde_json::to_vec(&msg).unwrap();
+            let _ = stream.write_all(&(json.len() as u32).to_be_bytes());
+            let _ = stream.write_all(&json);
+            let _ = stream.flush();
+            thread::sleep(std::time::Duration::from_millis(300));
+        }
+    });
+    addr
+}

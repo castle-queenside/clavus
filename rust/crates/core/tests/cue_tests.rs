@@ -304,3 +304,97 @@ fn corrupted_cue_file_does_not_panic() {
         assert!(cues.is_empty(), "corrupt cue should not be returned");
     }
 }
+
+// ─── Cue id safety ────────────────────────────────────────────────────────
+
+/// A cue id becomes a file name, so it must never be able to escape the
+/// project's cue directory. Cues arrive from remote peers, so this is a
+/// security boundary, not just tidiness.
+fn remote_cue_with_id(id: &str) -> clavus_core::types::Cue {
+    use clavus_core::types::{Cue, CueStatus};
+    Cue {
+        id: id.to_string(),
+        position: "1.1.1".into(),
+        text: "from a peer".into(),
+        author: "attacker".into(),
+        timestamp: 1.0,
+        status: CueStatus::Pending,
+        snapshot_hash: String::new(),
+        track_name: String::new(),
+        assignee: String::new(),
+        in_progress: false,
+        replies: vec![],
+    }
+}
+
+#[test]
+fn import_rejects_a_cue_id_that_would_escape_the_cue_directory() {
+    let dir = TempDir::new().unwrap();
+    let s = store(&dir, "demo");
+
+    let result = s.import(remote_cue_with_id("../../escaped"));
+    assert!(
+        result.is_err(),
+        "a traversing cue id must be rejected, got {:?}",
+        result
+    );
+    assert!(
+        !dir.path().join("escaped.json").exists(),
+        "nothing may be written outside the cue directory"
+    );
+}
+
+#[test]
+fn import_rejects_an_empty_cue_id() {
+    let dir = TempDir::new().unwrap();
+    let s = store(&dir, "demo");
+    assert!(s.import(remote_cue_with_id("")).is_err());
+}
+
+#[test]
+fn import_rejects_a_cue_id_with_a_path_separator() {
+    let dir = TempDir::new().unwrap();
+    let s = store(&dir, "demo");
+    for id in ["a/b", "a\\b", "..", ".", "a/../../b"] {
+        assert!(
+            s.import(remote_cue_with_id(id)).is_err(),
+            "cue id {:?} must be rejected",
+            id
+        );
+    }
+}
+
+#[test]
+fn load_rejects_a_traversing_cue_id() {
+    let dir = TempDir::new().unwrap();
+    let s = store(&dir, "demo");
+    assert!(s.load("../../secret").is_err());
+}
+
+#[test]
+fn delete_refuses_to_delete_a_file_outside_the_cue_directory() {
+    let dir = TempDir::new().unwrap();
+    let s = store(&dir, "demo");
+
+    let victim = dir.path().join("victim.json");
+    std::fs::write(&victim, b"important").unwrap();
+
+    assert!(
+        !s.delete("../victim"),
+        "delete must refuse a traversing id"
+    );
+    assert!(
+        victim.exists(),
+        "the file outside the cue directory must survive"
+    );
+}
+
+#[test]
+fn a_normal_cue_id_still_works() {
+    let dir = TempDir::new().unwrap();
+    let s = store(&dir, "demo");
+    let cue = remote_cue_with_id("abc123def456");
+    let outcome = s.import(cue.clone()).expect("a sane id should import");
+    assert_eq!(outcome, ImportOutcome::Imported);
+    assert!(s.load(&cue.id).unwrap().is_some());
+}

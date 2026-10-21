@@ -348,6 +348,7 @@ dependencies = [
  "clavus-tui",
  "dirs",
  "flate2",
+ "serde_json",
  "tempfile",
  "tracing",
 ]

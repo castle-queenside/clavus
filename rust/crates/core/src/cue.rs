@@ -48,6 +48,33 @@ impl CueStore {
         self.cues_dir.join(format!("{}.json", id))
     }
 
+    /// Validate a cue identifier.
+    ///
+    /// A cue id becomes a file name, so it must not be able to escape the
+    /// project's cue directory. Cues arrive from remote peers over the
+    /// sync protocol, so a hostile peer must not be able to read or write
+    /// arbitrary files by sending a crafted id.
+    fn validate_cue_id(id: &str) -> Result<(), ClavusError> {
+        if id.is_empty() {
+            return Err(ClavusError::ParseError("cue id must not be empty".into()));
+        }
+        if id.len() > 128 {
+            return Err(ClavusError::ParseError(
+                "cue id is too long (max 128 characters)".into(),
+            ));
+        }
+        if !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(ClavusError::ParseError(format!(
+                "cue id may only contain letters, digits, '-' and '_': {:?}",
+                id
+            )));
+        }
+        Ok(())
+    }
+
     // ─── CRUD ──────────────────────────────────────────────────────
 
     /// Add a new cue.
@@ -163,6 +190,10 @@ impl CueStore {
 
     /// Delete a cue.
     pub fn delete(&self, cue_id: &str) -> bool {
+        // An id that could escape the cue directory is never a cue.
+        if Self::validate_cue_id(cue_id).is_err() {
+            return false;
+        }
         let path = self.cue_path(cue_id);
         if path.exists() {
             return fs::remove_file(path).is_ok();
@@ -183,6 +214,7 @@ impl CueStore {
 
     /// Save a cue atomically.
     fn save(&self, cue: &Cue) -> Result<(), ClavusError> {
+        Self::validate_cue_id(&cue.id)?;
         let path = self.cue_path(&cue.id);
         let tmp = PathBuf::from(path.to_string_lossy().to_string() + ".tmp");
         let json = serde_json::to_string_pretty(cue)
@@ -196,6 +228,7 @@ impl CueStore {
 
     /// Load a cue by ID.
     pub fn load(&self, cue_id: &str) -> Result<Option<Cue>, ClavusError> {
+        Self::validate_cue_id(cue_id)?;
         // Try exact path
         let path = self.cue_path(cue_id);
         if path.exists() {
@@ -270,6 +303,8 @@ impl CueStore {
 
     /// Import a cue from a remote sync.
     pub fn import(&self, remote_cue: Cue) -> Result<ImportOutcome, ClavusError> {
+        // The cue comes from a remote peer — never trust its id.
+        Self::validate_cue_id(&remote_cue.id)?;
         if let Some(local) = self.load(&remote_cue.id)? {
             let key = |c: &Cue| {
                 format!("{}|{}|{}|{}", c.text, c.status.as_str(), c.position, c.assignee)

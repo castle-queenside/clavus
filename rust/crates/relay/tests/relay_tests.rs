@@ -212,14 +212,16 @@ fn test_relaystate_new_loads_persisted_state() {
 
     // Create relay state, store a snapshot
     let mut state = RelayState::new(tmp.path().to_path_buf()).unwrap();
-    let snap = make_snap("persisted_hash", None);
+    // Snapshot hashes are SHA-256 hex digests; the relay rejects anything else.
+    let hash = "a".repeat(64);
+    let snap = make_snap(&hash, None);
     state.store(vec![snap], vec![]);
     drop(state);
 
     // New state should load from disk
     let state2 = RelayState::new(tmp.path().to_path_buf()).unwrap();
     assert!(
-        state2.snapshots.contains_key("persisted_hash"),
+        state2.snapshots.contains_key(&hash),
         "state should load previously stored snapshot from disk"
     );
 }
@@ -230,18 +232,19 @@ fn test_relaystate_chain_storage() {
     let mut state = RelayState::new(tmp.path().to_path_buf()).unwrap();
 
     // Build chain: a → b → c
+    let (a, b, c) = ("a".repeat(64), "b".repeat(64), "c".repeat(64));
     let conflicts = state.store(
         vec![
-            make_snap("a", None),
-            make_snap("b", Some("a")),
-            make_snap("c", Some("b")),
+            make_snap(&a, None),
+            make_snap(&b, Some(&a)),
+            make_snap(&c, Some(&b)),
         ],
         vec![],
     );
     assert!(conflicts.is_empty());
-    assert!(state.snapshots.contains_key("a"));
-    assert!(state.snapshots.contains_key("b"));
-    assert!(state.snapshots.contains_key("c"));
+    assert!(state.snapshots.contains_key(&a));
+    assert!(state.snapshots.contains_key(&b));
+    assert!(state.snapshots.contains_key(&c));
 }
 
 #[test]

@@ -30,7 +30,43 @@ pub struct BlobStore {
     index_path: PathBuf,
 }
 
+/// Build the error returned when a hash cannot be used as a file name.
+fn invalid_hash(hash: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("invalid blob hash: {:?}", hash),
+    )
+}
+
 impl BlobStore {
+    // ─── Identifier validation ──────────────────────────────────────
+
+    /// Check that `hash` is a plain lowercase hex blob hash or hash prefix.
+    ///
+    /// Hashes arrive from remote peers over the sync protocol and are used
+    /// to build file paths, so a crafted hash must not be able to escape
+    /// the object store.
+    pub fn is_valid_hash(hash: &str) -> bool {
+        (2..=64).contains(&hash.len())
+            && hash
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    }
+
+    /// Check that `name` is usable as a reference file name.
+    ///
+    /// Ref names become file names under the refs directory. A snapshot's
+    /// parent is used as a ref name, and that comes from a remote peer, so
+    /// it must not be able to escape the refs directory.
+    pub fn is_valid_ref_name(name: &str) -> bool {
+        !name.is_empty()
+            && name.len() <= 128
+            && !name.contains('/')
+            && !name.contains('\\')
+            && !name.contains("..")
+            && name != "."
+    }
+
     // ─── Initialization ──────────────────────────────────────────────
 
     /// Open or create a Clavus store at `root` (default: `~/.clavus`).
@@ -64,7 +100,9 @@ impl BlobStore {
     /// writes the `.sample` metadata file BEFORE the blob data.
     pub fn put(&self, data: &[u8]) -> String {
         let hash = Self::sha256(data);
-        let path = self.blob_path(&hash);
+        let Some(path) = self.blob_path(&hash) else {
+            return hash;
+        };
         if !path.exists() {
             if let Some(parent) = path.parent() {
                 let _ = fs::create_dir_all(parent);
@@ -94,8 +132,11 @@ impl BlobStore {
 
     // ─── Path helpers ────────────────────────────────────────────────
 
-    fn blob_path(&self, hash: &str) -> PathBuf {
-        self.objects_dir.join(&hash[..2]).join(hash)
+    fn blob_path(&self, hash: &str) -> Option<PathBuf> {
+        if hash.len() != 64 || !Self::is_valid_hash(hash) {
+            return None;
+        }
+        Some(self.objects_dir.join(&hash[..2]).join(hash))
     }
 
     /// List the hashes of every stored snapshot metadata file.
@@ -125,26 +166,31 @@ impl BlobStore {
     }
 
     /// Path to the metadata file for a snapshot.
-    pub fn meta_path(&self, hash: &str) -> PathBuf {
-        self.objects_dir.join(&hash[..2]).join(format!("{}.meta", hash))
+    pub fn meta_path(&self, hash: &str) -> Option<PathBuf> {
+        if hash.len() != 64 || !Self::is_valid_hash(hash) {
+            return None;
+        }
+        Some(self.objects_dir.join(&hash[..2]).join(format!("{}.meta", hash)))
     }
 
     /// Path to the sample metadata file.
-    pub fn sample_meta_path(&self, hash: &str) -> PathBuf {
-        self.objects_dir.join(&hash[..2]).join(format!("{}.sample", hash))
+    pub fn sample_meta_path(&self, hash: &str) -> Option<PathBuf> {
+        if hash.len() != 64 || !Self::is_valid_hash(hash) {
+            return None;
+        }
+        Some(self.objects_dir.join(&hash[..2]).join(format!("{}.sample", hash)))
     }
 
     /// Resolve a short (8–63 char) hash to the full 64-char path.
     /// Returns `None` if no matching blob exists.
     fn resolve_path(&self, hash: &str) -> Option<PathBuf> {
-        if hash.len() == 64 && !hash.contains('.') {
-            let p = self.blob_path(hash);
-            return Some(p);
-        }
-
-        if hash.len() < 2 {
+        if !Self::is_valid_hash(hash) {
             return None;
         }
+        if hash.len() == 64 {
+            return self.blob_path(hash);
+        }
+
         let prefix_dir = self.objects_dir.join(&hash[..2]);
         if !prefix_dir.is_dir() {
             return None;
@@ -166,7 +212,9 @@ impl BlobStore {
 
     /// Write snapshot metadata atomically (rename over .tmp).
     pub fn write_meta(&self, snapshot: &Snapshot) -> io::Result<()> {
-        let path = self.meta_path(&snapshot.hash);
+        let path = self
+            .meta_path(&snapshot.hash)
+            .ok_or_else(|| invalid_hash(&snapshot.hash))?;
         // Create prefix directory if it doesn't exist (e.g. objects/ab/)
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -181,7 +229,7 @@ impl BlobStore {
 
     /// Load snapshot metadata. Returns `None` if not found or corrupt.
     pub fn load_meta(&self, hash: &str) -> Option<Snapshot> {
-        let path = self.meta_path(hash);
+        let path = self.meta_path(hash)?;
         if !path.exists() {
             return None;
         }
@@ -203,7 +251,9 @@ impl BlobStore {
     ) -> io::Result<(String, String)> {
         let data = fs::read(file_path)?;
         let hash = Self::sha256(&data);
-        let path = self.blob_path(&hash);
+        let path = self
+            .blob_path(&hash)
+            .ok_or_else(|| invalid_hash(&hash))?;
 
         let filename = file_path
             .file_name()
@@ -211,7 +261,9 @@ impl BlobStore {
             .unwrap_or_default();
 
         // Write metadata FIRST — prevents orphan blob if crash occurs here
-        let meta_path = self.sample_meta_path(&hash);
+        let meta_path = self
+            .sample_meta_path(&hash)
+            .ok_or_else(|| invalid_hash(&hash))?;
         if let Some(parent) = meta_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -231,13 +283,13 @@ impl BlobStore {
 
     /// Get the original filename for a stored sample.
     pub fn sample_filename(&self, hash: &str) -> Option<String> {
-        let meta = fs::read_to_string(self.sample_meta_path(hash)).ok()?;
+        let meta = fs::read_to_string(self.sample_meta_path(hash)?).ok()?;
         meta.lines().next().map(|s| s.to_string())
     }
 
     /// Get the relative path for a stored sample.
     pub fn sample_relpath(&self, hash: &str) -> Option<String> {
-        let meta = fs::read_to_string(self.sample_meta_path(hash)).ok()?;
+        let meta = fs::read_to_string(self.sample_meta_path(hash)?).ok()?;
         let mut lines = meta.lines();
         lines.next(); // skip filename
         lines.next().map(|s| s.replace('\\', "/"))
@@ -247,6 +299,12 @@ impl BlobStore {
 
     /// Write a named reference.
     pub fn update_ref(&self, name: &str, hash: &str) -> io::Result<()> {
+        if !Self::is_valid_ref_name(name) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid ref name: {:?}", name),
+            ));
+        }
         let path = self.refs_dir.join(name);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -258,12 +316,21 @@ impl BlobStore {
 
     /// Read a named reference.
     pub fn read_ref(&self, name: &str) -> Option<String> {
+        if !Self::is_valid_ref_name(name) {
+            return None;
+        }
         let path = self.refs_dir.join(name);
         fs::read_to_string(&path).ok().map(|s| s.trim().to_string())
     }
 
     /// Delete a named reference.
     pub fn delete_ref(&self, name: &str) -> io::Result<()> {
+        if !Self::is_valid_ref_name(name) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid ref name: {:?}", name),
+            ));
+        }
         let path = self.refs_dir.join(name);
         if path.exists() {
             fs::remove_file(path)?;
