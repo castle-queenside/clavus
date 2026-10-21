@@ -4,7 +4,6 @@ use clavus_core::types::{Marker, Project, ProjectType, Track};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::fs;
-use std::io::Read;
 use std::path::Path;
 use tracing::debug;
 
@@ -24,7 +23,8 @@ impl AlsParser {
         let raw_bytes = fs::read(path)
             .map_err(|e| clavus_core::ClavusError::ParseError(format!("read {}: {}", path.display(), e)))?;
 
-        let xml_bytes = flate2_decode(&raw_bytes)
+        let xml_bytes = clavus_core::sample::decompress_als_bytes(&raw_bytes)
+            .map(|(bytes, _gzipped)| bytes)
             .map_err(|e| clavus_core::ClavusError::ParseError(format!("gzip: {}", e)))?;
 
         let mut parser = Self {
@@ -75,13 +75,19 @@ impl AlsParser {
         let mut in_tempo = false;
         let mut in_tempo_envelope = false;
         let mut tempo_events: Vec<(f64, f64)> = Vec::new();
+        // Track whether we saw a real Ableton root, and capture XML errors
+        // instead of silently swallowing them.
+        let mut saw_root = false;
+        let mut xml_error: Option<String> = None;
 
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(e)) => {
                     let tag = tag_name(&e);
                     match tag.as_str() {
+                        "Ableton" => saw_root = true,
                         "LiveSet" => {
+                            saw_root = true;
                             in_liveset = true;
                             if let Some(v) = attr_val(&e, "MajorVersion") {
                                 if self.project.ableton_version.is_none() {
@@ -203,9 +209,28 @@ impl AlsParser {
                     }
                 }
                 Ok(Event::Eof) => break,
+                Err(e) => {
+                    xml_error = Some(e.to_string());
+                    break;
+                }
                 _ => {}
             }
             buf.clear();
+        }
+
+        if let Some(err) = xml_error {
+            return Err(clavus_core::ClavusError::ParseError(format!(
+                "malformed XML in {}: {}",
+                self.path.display(),
+                err
+            )));
+        }
+
+        if !saw_root {
+            return Err(clavus_core::ClavusError::ParseError(format!(
+                "not an Ableton Live project: no <Ableton> or <LiveSet> element in {}",
+                self.path.display()
+            )));
         }
 
         self.project.track_count = self.project.tracks.len();
@@ -838,15 +863,6 @@ impl AlsParser {
         }
         None
     }
-}
-
-/// Decompress gzip.
-fn flate2_decode(data: &[u8]) -> std::io::Result<Vec<u8>> {
-    use flate2::read::GzDecoder;
-    let mut decoder = GzDecoder::new(data);
-    let mut out = Vec::new();
-    decoder.read_to_end(&mut out)?;
-    Ok(out)
 }
 
 // ─── Helper functions ────────────────────────────────────────────────

@@ -5,7 +5,7 @@
 
 use clavus_core::{audit_project, collect_samples};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -344,4 +344,121 @@ fn test_audit_relative_path_still_detects_outside_samples() {
 
     assert_eq!(report.outside_project.len(), 1, "genuine outside sample not detected");
     assert_eq!(report.collected.len(), 0);
+}
+
+// ─── Relative path handling ──────────────────────────────────────────────
+//
+// Regression: `Path::parent()` returns an *empty* path for a bare filename,
+// and `strip_prefix("")` matches every path. That made every out-of-project
+// sample look like it was inside the project, so `clavus collect` silently
+// did nothing when invoked with a relative filename.
+
+#[test]
+fn test_audit_with_bare_filename_path() {
+    let _guard = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let tmp = TempDir::new().unwrap();
+    let project_dir = tmp.path().join("proj");
+    let outside_dir = tmp.path().join("outside");
+    fs::create_dir_all(&project_dir).unwrap();
+    fs::create_dir_all(&outside_dir).unwrap();
+
+    let als_path = project_dir.join("Rel.als");
+    let outside_sample = outside_dir.join("kick.wav");
+    make_als(
+        &als_path,
+        &als_xml(&[(outside_sample.to_str().unwrap(), "kick.wav")]),
+    );
+    make_sample(&outside_sample, b"FAKE_AUDIO");
+
+    // Audit using a bare filename: `Path::parent()` is empty here.
+    let prev_cwd = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&project_dir).unwrap();
+    let report = audit_project(Path::new("Rel.als"));
+    std::env::set_current_dir(prev_cwd).unwrap();
+
+    let report = report.unwrap();
+    assert_eq!(
+        report.outside_project.len(),
+        1,
+        "sample outside the project must be reported as outside, not collected"
+    );
+    assert_eq!(report.collected.len(), 0);
+    assert_eq!(report.missing.len(), 0);
+}
+
+#[test]
+fn test_collect_with_bare_filename_path() {
+    let _guard = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let tmp = TempDir::new().unwrap();
+    let project_dir = tmp.path().join("proj");
+    let outside_dir = tmp.path().join("outside");
+    fs::create_dir_all(&project_dir).unwrap();
+    fs::create_dir_all(&outside_dir).unwrap();
+
+    let als_path = project_dir.join("Rel2.als");
+    let outside_sample = outside_dir.join("kick.wav");
+    make_als(
+        &als_path,
+        &als_xml(&[(outside_sample.to_str().unwrap(), "kick.wav")]),
+    );
+    make_sample(&outside_sample, b"FAKE_AUDIO");
+
+    let prev_cwd = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&project_dir).unwrap();
+    let result = collect_samples(
+        Path::new("Rel2.als"),
+        &audit_project(Path::new("Rel2.als")).unwrap(),
+    );
+    std::env::set_current_dir(prev_cwd).unwrap();
+
+    let result = result.unwrap();
+    assert_eq!(
+        result.copied.len(),
+        1,
+        "collect must copy the sample even when the project path is relative"
+    );
+    assert!(project_dir.join("Samples").join("kick.wav").exists());
+}
+
+#[test]
+fn test_audit_deduplicates_repeated_references() {
+    let tmp = TempDir::new().unwrap();
+    let project_dir = tmp.path().to_path_buf();
+
+    // The same sample referenced by three clips.
+    let als_path = project_dir.join("Dup.als");
+    make_als(
+        &als_path,
+        &als_xml(&[
+            ("Samples/kick.wav", "kick.wav"),
+            ("Samples/kick.wav", "kick.wav"),
+            ("Samples/kick.wav", "kick.wav"),
+        ]),
+    );
+    make_sample(&project_dir.join("Samples").join("kick.wav"), b"FAKE_AUDIO");
+
+    let report = audit_project(&als_path).unwrap();
+    assert_eq!(
+        report.collected.len(),
+        1,
+        "one file referenced three times is one sample"
+    );
+}
+
+#[test]
+fn test_audit_deduplicates_missing_references() {
+    let tmp = TempDir::new().unwrap();
+    let project_dir = tmp.path().to_path_buf();
+
+    let als_path = project_dir.join("Dup2.als");
+    make_als(
+        &als_path,
+        &als_xml(&[
+            ("Samples/gone.wav", "gone.wav"),
+            ("Samples/gone.wav", "gone.wav"),
+        ]),
+    );
+
+    let report = audit_project(&als_path).unwrap();
+    assert_eq!(report.missing.len(), 1, "missing file counted once");
 }

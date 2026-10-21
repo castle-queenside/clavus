@@ -75,7 +75,7 @@ fn start_relay(state_dir: &TempDir) -> (thread::JoinHandle<()>, u16) {
 
 // Minimal inline relay client handler (mirrors the real relay logic for tests)
 fn handle_client(
-    addr: std::net::SocketAddr,
+    _addr: std::net::SocketAddr,
     mut stream: std::net::TcpStream,
     state: &Arc<Mutex<RelayState>>,
 ) -> std::io::Result<()> {
@@ -145,17 +145,6 @@ fn send_msg(stream: &mut std::net::TcpStream, msg: &SyncMsg) -> std::io::Result<
     stream.flush()
 }
 
-fn recv_msg(stream: &mut std::net::TcpStream) -> Option<SyncMsg> {
-    let mut len_buf = [0u8; 4];
-    stream.read_exact(&mut len_buf).ok()?;
-    let len = u32::from_be_bytes(len_buf) as usize;
-    if len > 10 * 1024 * 1024 {
-        return None;
-    }
-    let mut data = vec![0u8; len];
-    stream.read_exact(&mut data).ok()?;
-    serde_json::from_slice(&data).ok()
-}
 
 // ─── Tests ──────────────────────────────────────────────────────────────
 

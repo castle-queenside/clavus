@@ -178,6 +178,20 @@ def make_real_live_als(tracks=3, markers=None, bpm=128, filename="real_live_proj
         # Name comes AFTER DeviceChain/Mixer in real Live output.
         ET.SubElement(track, "Name").set("Value", name)
 
+        # Audio tracks carry audio clips with <SampleRef> paths.
+        if kind == "audio":
+            clips = ET.SubElement(track, "Clips")
+            for clip_name, sample_path in (
+                ("Vocal Take 1", "/Users/music/Library/Samples/vocal.wav"),
+                ("Vocal Take 2", "/Users/music/Library/Samples/vocal.wav"),
+                # A deliberately missing file, to exercise the missing-sample path.
+                ("Missing Take", "/Users/music/Library/Samples/gone.wav"),
+            ):
+                clip = ET.SubElement(clips, "AudioClip")
+                ref = ET.SubElement(clip, "SampleRef")
+                ET.SubElement(ref, "Path").set("Value", sample_path)
+                ET.SubElement(clip, "Name").set("Value", clip_name)
+
     # --- Return tracks: <ReturnTracks> > <ReturnTrack> ---
     returns_el = ET.SubElement(root, "ReturnTracks")
     for rname in ("A Reverb", "A Delay"):

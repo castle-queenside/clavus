@@ -4,7 +4,6 @@ use clavus_core::blob::BlobStore;
 use clavus_core::snapshot::SnapshotStore;
 use clavus_core::types::{Cue, CueStatus, Project, Snapshot};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self, Sender};
 use std::thread;
 
@@ -80,11 +79,14 @@ pub enum SyncCmd {
 
 #[derive(Debug, Default)]
 pub struct SyncState {
+    /// True only once the background thread confirms a live connection.
     pub connected: bool,
     pub relay_addr: Option<String>,
     pub last_sync: Option<String>,
     /// Sender to the background sync thread. None when disconnected.
     pub(crate) cmd_tx: Option<Sender<SyncCmd>>,
+    /// Status messages from the background sync thread.
+    pub(crate) result_rx: Option<mpsc::Receiver<String>>,
 }
 
 impl SyncState {
@@ -94,7 +96,6 @@ impl SyncState {
     }
 
     /// Send a command to the sync thread. Returns true if sent.
-    #[allow(dead_code)]
     pub fn send_cmd(&self, cmd: SyncCmd) -> bool {
         self.cmd_tx.as_ref().map(|tx| tx.send(cmd).is_ok()).unwrap_or(false)
     }
@@ -255,7 +256,7 @@ impl App {
     pub fn sync_connect(&mut self, addr: &str) {
         use clavus_sync::SyncClient;
 
-        // Disconnect existing first
+        // Disconnect existing first.
         if let Some(tx) = self.sync_state.cmd_tx.take() {
             let _ = tx.send(SyncCmd::Disconnect);
         }
@@ -264,16 +265,14 @@ impl App {
 
         let (cmd_tx, cmd_rx) = mpsc::channel::<SyncCmd>();
         let addr_owned = addr.to_string();
-        let connected = Arc::new(Mutex::new(false));
-        let connected_clone = Arc::clone(&connected);
 
-        // Result channel for connection feedback
+        // Result channel: the background thread reports connection outcomes
+        // here so the UI can show failures instead of assuming success.
         let (result_tx, result_rx) = mpsc::channel::<String>();
-        let result_rx = Some(result_rx);
 
-        // Spawn the background sync thread
+        // Spawn the background sync thread.
         thread::spawn(move || {
-            // Use Option to allow re-binding client on reconnect
+            // Use Option to allow re-binding client on reconnect.
             let mut client: Option<SyncClient> = match SyncClient::connect(&addr_owned) {
                 Ok(c) => Some(c),
                 Err(e) => {
@@ -289,7 +288,6 @@ impl App {
                 }
             }
 
-            *connected_clone.lock().unwrap() = true;
             let _ = result_tx.send(format!("connected to {}", addr_owned));
 
             while let Ok(cmd) = cmd_rx.recv() {
@@ -298,7 +296,7 @@ impl App {
                         if let Some(c) = client.take() {
                             c.close();
                         }
-                        *connected_clone.lock().unwrap() = false;
+                        let _ = result_tx.send("disconnected".to_string());
                         break;
                     }
                     SyncCmd::Push => {
@@ -311,20 +309,17 @@ impl App {
                         let _ = result_tx.send("pulled".to_string());
                     }
                     SyncCmd::Connect(new_addr) => {
-                        // Close old connection
+                        // Close the old connection, then reconnect.
                         if let Some(c) = client.take() {
                             c.close();
                         }
-                        // Reconnect
                         client = match SyncClient::connect(&new_addr) {
                             Ok(c) => {
                                 let _ = c.hello("clavus-tui", vec![]);
-                                *connected_clone.lock().unwrap() = true;
                                 let _ = result_tx.send(format!("connected to {}", new_addr));
                                 Some(c)
                             }
                             Err(e) => {
-                                *connected_clone.lock().unwrap() = false;
                                 let _ = result_tx.send(format!("connect failed: {}", e));
                                 None
                             }
@@ -334,18 +329,44 @@ impl App {
             }
         });
 
-        // Store the command sender and optimistic connected state
+        // Store the command sender. The `connected` flag stays false until the
+        // background thread confirms the connection.
         self.sync_state.cmd_tx = Some(cmd_tx);
+        self.sync_state.result_rx = Some(result_rx);
         self.sync_state.relay_addr = Some(addr.to_string());
-        self.sync_state.connected = true;
+        self.set_info(format!("connecting to {}...", addr));
+    }
 
-        // Poll the result receiver briefly to update status
-        // (connection result will overwrite the optimistic state)
-        if let Some(rx) = result_rx {
-            // Non-blocking check — just store that we're waiting
-            self.set_info(format!("connecting to {}...", addr));
-            // The actual result will be shown when the user next interacts
-            drop(rx); // ignore result channel for now — the connected flag tells us the state
+    /// Drain status messages from the background sync thread and update the
+    /// UI state accordingly. Safe to call frequently.
+    pub fn poll_sync(&mut self) {
+        let messages: Vec<String> = match self.sync_state.result_rx.as_ref() {
+            Some(rx) => {
+                let mut out = Vec::new();
+                while let Ok(msg) = rx.try_recv() {
+                    out.push(msg);
+                }
+                out
+            }
+            None => return,
+        };
+
+        for msg in messages {
+            if let Some(addr) = msg.strip_prefix("connected to ") {
+                self.sync_state.connected = true;
+                self.set_info(format!("connected to {}", addr));
+            } else if let Some(err) = msg.strip_prefix("connect failed: ") {
+                self.sync_state.connected = false;
+                self.set_error(format!("connect failed: {}", err));
+            } else if let Some(err) = msg.strip_prefix("hello failed: ") {
+                self.sync_state.connected = false;
+                self.set_error(format!("hello failed: {}", err));
+            } else if msg == "disconnected" {
+                self.sync_state.connected = false;
+                self.set_info("disconnected".into());
+            } else {
+                self.set_info(msg);
+            }
         }
     }
 

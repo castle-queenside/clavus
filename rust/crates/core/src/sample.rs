@@ -138,6 +138,23 @@ pub fn extract_als_sample_paths_from_xml(xml: &str) -> Vec<PathBuf> {
 
 // ─── Audit ───────────────────────────────────────────────────────────────────
 
+/// Decompress an `.als` file's bytes.
+///
+/// Live 9 and newer write gzip-compressed XML. Live 8 (and files that have
+/// been through a hand-editing or recovery tool) can be plain XML, so fall
+/// back to using the bytes as-is when the gzip magic number is absent.
+///
+/// Returns the decompressed bytes and whether the source was gzip-compressed.
+pub fn decompress_als_bytes(raw: &[u8]) -> std::io::Result<(Vec<u8>, bool)> {
+    const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
+    if raw.len() >= 2 && raw[0] == GZIP_MAGIC[0] && raw[1] == GZIP_MAGIC[1] {
+        Ok((flate2_decode(raw)?, true))
+    } else {
+        // Not gzip — treat as plain XML.
+        Ok((raw.to_vec(), false))
+    }
+}
+
 fn flate2_decode(data: &[u8]) -> std::io::Result<Vec<u8>> {
     use flate2::read::GzDecoder;
     let mut decoder = GzDecoder::new(data);
@@ -149,8 +166,7 @@ fn flate2_decode(data: &[u8]) -> std::io::Result<Vec<u8>> {
 /// Run a full sample audit on a project file.
 /// Returns a report with collected, missing, and outside-project samples.
 pub fn audit_project(project_path: &Path) -> Result<SampleAuditReport, ClavusError> {
-    let project_root = project_path
-        .parent()
+    let project_root = project_root_of(project_path)
         .ok_or_else(|| ClavusError::ParseError("no parent directory for project".into()))?;
 
     let ext = project_path
@@ -164,7 +180,7 @@ pub fn audit_project(project_path: &Path) -> Result<SampleAuditReport, ClavusErr
         // Ableton .als: gzip-compressed XML
         let raw = fs::read(project_path)
             .map_err(|e| ClavusError::ParseError(format!("read {}: {}", project_path.display(), e)))?;
-        let xml_bytes = flate2_decode(&raw)
+        let (xml_bytes, _gzipped) = decompress_als_bytes(&raw)
             .map_err(|e| ClavusError::ParseError(format!("gzip: {}", e)))?;
         let xml = String::from_utf8(xml_bytes)
             .map_err(ClavusError::from)?;
@@ -259,6 +275,19 @@ fn looks_like_audio_path(val: &str) -> bool {
         || (val.starts_with('/') || val.len() > 10 && val.contains(':'))
 }
 
+/// The directory that contains a project file.
+///
+/// `Path::parent()` returns an *empty* path for a bare filename like
+/// `demo.als`, and `strip_prefix("")` matches every path — which would make
+/// every sample look like it lives inside the project. Use `.` instead, so
+/// the root resolves to the current directory.
+pub fn project_root_of(project_path: &Path) -> Option<&Path> {
+    match project_path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => Some(p),
+        _ => Some(Path::new(".")),
+    }
+}
+
 /// Audit a list of raw sample paths against a project root.
 ///
 /// Returns a [`SampleAuditReport`] with three categories:
@@ -273,12 +302,36 @@ fn audit_sample_refs(
     let mut missing = Vec::new();
     let mut outside_project = Vec::new();
 
+    // De-duplicate references: a sample used by six clips is one file, and
+    // reporting it six times hides the real problem behind noise.
+    let mut unique_paths: Vec<PathBuf> = Vec::with_capacity(paths.len());
+    let mut seen_paths: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    for p in paths {
+        if seen_paths.insert(p.clone()) {
+            unique_paths.push(p.clone());
+        }
+    }
+    let paths = unique_paths.as_slice();
+
     // Canonicalize the project root so the inside/outside comparison works
     // regardless of whether the caller passed a relative project path.
     // Without this, `clavus audit ./myproj.als` would flag every sample as
     // "outside project" because the root is relative but resolved sample
     // paths are absolute.
-    let abs_root = fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
+    let abs_root = fs::canonicalize(project_root)
+        .or_else(|_| {
+            // A relative root like "." needs a base to resolve against.
+            if project_root.as_os_str().is_empty() {
+                std::env::current_dir()
+            } else {
+                Err(std::io::Error::other("no such directory"))
+            }
+        })
+        .unwrap_or_else(|_| project_root.to_path_buf());
+
+    // An empty root would make `strip_prefix` match every path, so refuse to
+    // treat anything as "inside the project" in that case.
+    let root_is_usable = !abs_root.as_os_str().is_empty();
 
     for path in paths {
         let filename = path
@@ -318,6 +371,9 @@ fn audit_sample_refs(
             fs::canonicalize(&p).unwrap_or(p)
         });
         let relpath = resolved_path.as_ref().and_then(|p| {
+            if !root_is_usable {
+                return None;
+            }
             p.strip_prefix(&abs_root)
                 .ok()
                 .map(|s| s.to_string_lossy().replace('\\', "/"))
@@ -396,8 +452,7 @@ pub fn collect_samples(
     project_path: &Path,
     report: &SampleAuditReport,
 ) -> Result<CollectReport, ClavusError> {
-    let project_root = project_path
-        .parent()
+    let project_root = project_root_of(project_path)
         .ok_or_else(|| ClavusError::ParseError("no parent directory".into()))?;
 
     let samples_dir = project_root.join("Samples");
@@ -469,7 +524,7 @@ fn rewrite_project_sample_paths(
     let raw = fs::read(project_path)
         .map_err(|e| ClavusError::ParseError(format!("read {}: {}", project_path.display(), e)))?;
 
-    let xml_bytes = flate2_decode(&raw)
+    let (xml_bytes, was_gzipped) = decompress_als_bytes(&raw)
         .map_err(|e| ClavusError::ParseError(format!("gzip decode {}: {}", project_path.display(), e)))?;
 
     let xml = String::from_utf8(xml_bytes)
@@ -502,23 +557,30 @@ fn rewrite_project_sample_paths(
 
     info!("Rewrote {} sample paths in {}", rewrite_count, project_path.display());
 
-    // Recompress and write atomically
+    // Recompress and write atomically.
+    // Preserve the original container format: a plain-XML .als stays plain
+    // XML, a gzipped one is re-gzipped.
     let xml_out = new_xml.into_bytes();
-    let mut compressed = Vec::new();
-    {
-        use flate2::write::GzEncoder;
-        use flate2::Compression;
-        let mut encoder = GzEncoder::new(&mut compressed, Compression::default());
-        use std::io::Write;
-        encoder.write_all(&xml_out)
-            .map_err(|e| ClavusError::ParseError(format!("gzip write: {}", e)))?;
-        encoder.finish()
-            .map_err(|e| ClavusError::ParseError(format!("gzip finish: {}", e)))?;
-    }
+    let payload = if was_gzipped {
+        let mut compressed = Vec::new();
+        {
+            use flate2::write::GzEncoder;
+            use flate2::Compression;
+            let mut encoder = GzEncoder::new(&mut compressed, Compression::default());
+            use std::io::Write;
+            encoder.write_all(&xml_out)
+                .map_err(|e| ClavusError::ParseError(format!("gzip write: {}", e)))?;
+            encoder.finish()
+                .map_err(|e| ClavusError::ParseError(format!("gzip finish: {}", e)))?;
+        }
+        compressed
+    } else {
+        xml_out
+    };
 
     // Atomic write: temp file → rename
     let tmp_path = project_path.with_extension("als.tmp");
-    fs::write(&tmp_path, &compressed)
+    fs::write(&tmp_path, &payload)
         .map_err(|e| ClavusError::ParseError(format!("write temp {}: {}", tmp_path.display(), e)))?;
     std::fs::rename(&tmp_path, project_path)
         .map_err(|e| ClavusError::ParseError(format!("rename {} → {}: {}", tmp_path.display(), project_path.display(), e)))?;

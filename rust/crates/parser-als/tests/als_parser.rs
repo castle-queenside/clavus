@@ -35,8 +35,7 @@ fn test_parse_track_names() {
 
 #[test]
 fn test_sample_ref_extraction() {
-    let refs = extract_sample_refs(&fixture_path()).expect("extract should succeed");
-    assert!(refs.len() >= 0);
+    let _refs = extract_sample_refs(&fixture_path()).expect("extract should succeed");
 }
 
 #[test]
@@ -105,7 +104,6 @@ fn test_fuzz_only_whitespace() {
 
 #[test]
 fn test_fuzz_random_binary() {
-    use std::io::Write;
     let xml = "<?xml version=\"1.0\"?><LiveSet></LiveSet>";
     let compressed = gzip_encode(xml.as_bytes());
     // Flip random bits
@@ -522,4 +520,159 @@ fn test_send_name_does_not_overwrite_track_name() {
 </LiveSet>"#;
     let p = parse_project(xml);
     assert_eq!(p.tracks[0].name, "Lead", "send name leaked into track name");
+}
+
+// ─── Container format and error handling ────────────────────────────────────
+
+#[test]
+fn test_plain_xml_als_is_parsed() {
+    // Live 8 and hand-edited files are plain XML, not gzip.
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Ableton><LiveSet>
+  <Tracks>
+    <Track Type="Audio" Index="0"><Name Value="Plain"/></Track>
+  </Tracks>
+</LiveSet></Ableton>"#;
+    let tmp = std::env::temp_dir().join(format!("clavus_plain_{}.als", uuid_simple()));
+    std::fs::write(&tmp, xml.as_bytes()).expect("write temp als");
+    let parser = AlsParser::new(&tmp);
+    let _ = std::fs::remove_file(&tmp);
+
+    let parser = parser.expect("plain XML .als should parse");
+    assert_eq!(parser.project.tracks.len(), 1);
+    assert_eq!(parser.project.tracks[0].name, "Plain");
+}
+
+#[test]
+fn test_gzip_and_plain_xml_agree() {
+    let xml = r#"<?xml version="1.0"?><LiveSet>
+  <Tracks>
+    <Track Type="Audio"><Name Value="Kick"/></Track>
+    <Track Type="Midi"><Name Value="Bass"/></Track>
+  </Tracks>
+</LiveSet>"#;
+    let gz_tmp = std::env::temp_dir().join(format!("clavus_gz_{}.als", uuid_simple()));
+    let pl_tmp = std::env::temp_dir().join(format!("clavus_pl_{}.als", uuid_simple()));
+    std::fs::write(&gz_tmp, gzip_encode(xml.as_bytes())).unwrap();
+    std::fs::write(&pl_tmp, xml.as_bytes()).unwrap();
+
+    let gz = AlsParser::new(&gz_tmp).expect("gzip should parse");
+    let pl = AlsParser::new(&pl_tmp).expect("plain should parse");
+    let _ = std::fs::remove_file(&gz_tmp);
+    let _ = std::fs::remove_file(&pl_tmp);
+
+    assert_eq!(gz.project.tracks.len(), pl.project.tracks.len());
+    for (a, b) in gz.project.tracks.iter().zip(pl.project.tracks.iter()) {
+        assert_eq!(a.name, b.name);
+        assert_eq!(a.track_type, b.track_type);
+    }
+}
+
+#[test]
+fn test_non_ableton_xml_returns_error() {
+    // A well-formed XML file that is not an Ableton project.
+    let xml = r#"<?xml version="1.0"?><Recipe><Notes>hello</Notes></Recipe>"#;
+    let tmp = std::env::temp_dir().join(format!("clavus_notabl_{}.als", uuid_simple()));
+    std::fs::write(&tmp, xml.as_bytes()).unwrap();
+    let result = AlsParser::new(&tmp);
+    let _ = std::fs::remove_file(&tmp);
+
+    let err = result.expect_err("non-Ableton XML should be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Ableton") || msg.contains("LiveSet"),
+        "error should explain the problem, got: {}",
+        msg
+    );
+}
+
+#[test]
+fn test_malformed_xml_returns_error() {
+    // Root element is present but the document is not well-formed.
+    let xml = r#"<?xml version="1.0"?><Ableton><LiveSet><Tracks></LiveSet></Ableton>"#;
+    let tmp = std::env::temp_dir().join(format!("clavus_bad_{}.als", uuid_simple()));
+    std::fs::write(&tmp, xml.as_bytes()).unwrap();
+    let result = AlsParser::new(&tmp);
+    let _ = std::fs::remove_file(&tmp);
+
+    let err = result.expect_err("malformed XML should be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("malformed") || msg.contains("XML"),
+        "error should mention malformed XML, got: {}",
+        msg
+    );
+}
+
+#[test]
+fn test_empty_file_returns_error() {
+    let tmp = std::env::temp_dir().join(format!("clavus_empty_{}.als", uuid_simple()));
+    std::fs::write(&tmp, b"").unwrap();
+    let result = AlsParser::new(&tmp);
+    let _ = std::fs::remove_file(&tmp);
+    assert!(result.is_err(), "empty file should be rejected");
+}
+
+#[test]
+fn test_binary_garbage_returns_error() {
+    let tmp = std::env::temp_dir().join(format!("clavus_bin_{}.als", uuid_simple()));
+    std::fs::write(&tmp, vec![0x00u8, 0xFF, 0xFE, 0x42, 0x00, 0x7F, 0x80]).unwrap();
+    let result = AlsParser::new(&tmp);
+    let _ = std::fs::remove_file(&tmp);
+    assert!(result.is_err(), "binary garbage should be rejected");
+}
+
+#[test]
+fn test_truncated_gzip_returns_error() {
+    let xml = r#"<?xml version="1.0"?><Ableton><LiveSet/></Ableton>"#;
+    let mut compressed = gzip_encode(xml.as_bytes());
+    compressed.truncate(compressed.len() / 2);
+    let tmp = std::env::temp_dir().join(format!("clavus_trunc_{}.als", uuid_simple()));
+    std::fs::write(&tmp, &compressed).unwrap();
+    let result = AlsParser::new(&tmp);
+    let _ = std::fs::remove_file(&tmp);
+    assert!(result.is_err(), "truncated gzip should be rejected");
+}
+
+#[test]
+fn test_nonexistent_file_returns_error() {
+    let result = AlsParser::new(Path::new("/nonexistent/path.als"));
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_device_display_name_is_used() {
+    // Devices carry their user-assigned name in a nested <Name> element.
+    let xml = r#"<?xml version="1.0"?><LiveSet>
+  <Tracks>
+    <Track Type="Audio">
+      <Name Value="Drums"/>
+      <DeviceChain>
+        <Devices>
+          <Compressor><Name Value="Glue Compressor"/></Compressor>
+          <Reverb><Name Value="Hall Reverb"/></Reverb>
+        </Devices>
+      </DeviceChain>
+    </Track>
+  </Tracks>
+</LiveSet>"#;
+    let p = parse_project(xml);
+    let names: Vec<&str> = p.tracks[0].devices.iter().map(|d| d.name.as_str()).collect();
+    assert_eq!(names, vec!["Glue Compressor", "Hall Reverb"]);
+}
+
+#[test]
+fn test_device_without_name_falls_back_to_tag() {
+    let xml = r#"<?xml version="1.0"?><LiveSet>
+  <Tracks>
+    <Track Type="Audio">
+      <DeviceChain>
+        <Devices><Compressor/></Devices>
+      </DeviceChain>
+    </Track>
+  </Tracks>
+</LiveSet>"#;
+    let p = parse_project(xml);
+    assert_eq!(p.tracks[0].devices.len(), 1);
+    assert_eq!(p.tracks[0].devices[0].name, "Compressor");
 }

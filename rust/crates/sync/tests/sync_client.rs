@@ -1,6 +1,6 @@
 //! Tests for clavus-sync SyncClient.
 
-use clavus_sync::{SyncClient, SyncMsg};
+use clavus_sync::SyncMsg;
 
 #[test]
 fn test_conflict_msg_deserializes() {
