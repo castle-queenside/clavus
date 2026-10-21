@@ -506,3 +506,83 @@ fn real_relay_does_not_offer_one_projects_snapshots_to_another() {
     beta.close();
     alpha2.close();
 }
+
+// ─── Chaos: a hostile client must not take the relay down ─────────────────
+
+#[test]
+fn the_relay_survives_a_client_that_sends_garbage() {
+    // A client that sends junk must not stop the relay from serving
+    // anybody else.
+    let tmp = TempDir::new().unwrap();
+    let addr = start_real_relay(&tmp);
+
+    // Three kinds of abuse: an enormous length prefix, invalid JSON, and
+    // a length prefix that is not followed by a body.
+    for abuse in 0..3 {
+        let mut sock = std::net::TcpStream::connect(&addr).expect("connect");
+        match abuse {
+            0 => {
+                // Claims a huge payload.
+                let _ = sock.write_all(&u32::MAX.to_be_bytes());
+            }
+            1 => {
+                // Sends a valid frame with invalid JSON.
+                let payload = b"{{{not json";
+                let _ = sock.write_all(&(payload.len() as u32).to_be_bytes());
+                let _ = sock.write_all(payload);
+            }
+            _ => {
+                // Claims a body and then hangs up.
+                let _ = sock.write_all(&64u32.to_be_bytes());
+            }
+        }
+        drop(sock);
+    }
+
+    // The relay is still alive and serving.
+    let client = SyncClient::connect(&addr).expect("connect");
+    client.hello("test", vec![]).expect("hello");
+    let _ = client.recv_timeout(Duration::from_secs(3));
+    client
+        .push(vec![make_snap(&"a".repeat(64), None)], vec![])
+        .expect("push");
+    let _ = client.recv_timeout(Duration::from_secs(3));
+
+    let client2 = SyncClient::connect(&addr).expect("connect");
+    client2.hello("test", vec![]).expect("hello");
+    match client2.recv_timeout(Duration::from_secs(3)) {
+        Some(SyncMsg::Push { snapshots, .. }) => {
+            assert_eq!(snapshots.len(), 1, "the relay should still serve");
+        }
+        other => panic!("unexpected: {:?}", other),
+    }
+    client.close();
+    client2.close();
+}
+
+#[test]
+fn the_relay_ignores_a_snapshot_with_a_short_hash() {
+    // A hash is a SHA-256 digest. A shorter one could be stored on the
+    // relay but could never be filed by a client, so it is refused.
+    let tmp = TempDir::new().unwrap();
+    let mut state = RelayState::new(tmp.path().to_path_buf()).unwrap();
+    state.store(vec![make_snap("abc", None)], vec![]);
+    assert!(
+        state.snapshots.is_empty(),
+        "a short hash must not be stored: {:?}",
+        state.snapshots.keys().collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn the_relay_ignores_a_cue_with_a_bad_id() {
+    let tmp = TempDir::new().unwrap();
+    let mut state = RelayState::new(tmp.path().to_path_buf()).unwrap();
+    state.store(
+        vec![],
+        vec![make_cue_for("../../escaped", "test"), make_cue_for("good", "test")],
+    );
+    let cues = state.cues.get("test").cloned().unwrap_or_default();
+    assert_eq!(cues.len(), 1, "only the well-formed cue is kept: {:?}", cues);
+    assert_eq!(cues[0].id, "good");
+}

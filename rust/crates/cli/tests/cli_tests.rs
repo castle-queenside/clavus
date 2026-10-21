@@ -1109,3 +1109,137 @@ fn collect_extracts_an_archived_sample() {
             .unwrap();
     assert!(xml.contains(r#"File="Samples/kick.wav""#), "{}", xml);
 }
+
+// ─── Chaos: corrupt input must never panic ─────────────────────────────────
+//
+// Every command is pointed at files that are not what they claim to be.
+// A command may fail — that is fine — but it must not panic, and it must
+// not leave the data directory in a broken state.
+
+/// A tiny deterministic PRNG, so a failure is reproducible.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        // xorshift64*
+        let mut x = self.0;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.0 = x;
+        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    fn byte(&mut self) -> u8 {
+        (self.next() & 0xff) as u8
+    }
+
+    fn bytes(&mut self, n: usize) -> Vec<u8> {
+        (0..n).map(|_| self.byte()).collect()
+    }
+}
+
+/// Run every read-only command against `path` and require that none of
+/// them panics.
+fn chaos_run(path: &Path, root: &Path) {
+    // These may fail; they must not panic.
+    let _ = run(|o, e| cmd_audit(path, false, o, e));
+    let _ = run(|o, e| cmd_audit(path, true, o, e));
+    let _ = run(|o, e| cmd_collect(path, root, o, e));
+    let _ = run(|o, e| cmd_log(path, root, o, e));
+    let _ = run(|o, e| cmd_status(path, root, o, e));
+    let _ = run(|o, e| cmd_cues(path, None, root, o, e));
+    let _ = run(|o, e| cmd_cue(path, "a note", "1.1.1", None, root, o, e));
+    let _ = run(|o, e| cmd_snapshot(path, &None, false, root, o, e));
+    let _ = run(|o, e| cmd_restore(path, "HEAD", root, o, e));
+}
+
+#[test]
+fn random_bytes_as_an_als_never_panic() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().join(".clavus");
+    let path = tmp.path().join("Chaos.als");
+
+    let mut rng = Rng(0x1234_5678_9abc_def0);
+    for round in 0..24 {
+        let len = (rng.next() % 512) as usize;
+        fs::write(&path, rng.bytes(len)).unwrap();
+        chaos_run(&path, &root);
+        let _ = round;
+    }
+}
+
+#[test]
+fn random_bytes_as_a_bwproject_never_panic() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().join(".clavus");
+    let path = tmp.path().join("Chaos.bwproject");
+
+    let mut rng = Rng(0x0fed_cba9_8765_4321);
+    for _ in 0..24 {
+        let len = (rng.next() % 512) as usize;
+        fs::write(&path, rng.bytes(len)).unwrap();
+        chaos_run(&path, &root);
+    }
+}
+
+#[test]
+fn a_truncated_real_project_never_panics() {
+    // Take a real project and cut it at every length, so the parser sees
+    // every possible partial file.
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().join(".clavus");
+    let path = tmp.path().join("Cut.als");
+
+    let full = gzip_als("marker");
+    for cut in 0..full.len() {
+        fs::write(&path, &full[..cut]).unwrap();
+        chaos_run(&path, &root);
+    }
+}
+
+#[test]
+fn a_truncated_bwproject_never_panics() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().join(".clavus");
+    let path = tmp.path().join("Cut.bwproject");
+
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let opts = zip::write::SimpleFileOptions::default();
+    w.start_file("project.xml", opts).unwrap();
+    std::io::Write::write_all(
+        &mut w,
+        b"<?xml version=\"1.0\"?><Project><Tracks><Track Type=\"Audio\"><Name Value=\"A\"/></Track></Tracks></Project>",
+    )
+    .unwrap();
+    w.start_file("samples/kick.wav", opts).unwrap();
+    std::io::Write::write_all(&mut w, b"RIFF----WAVEfake").unwrap();
+    let cursor = w.finish().unwrap();
+    let full = cursor.into_inner();
+
+    for cut in 0..full.len() {
+        fs::write(&path, &full[..cut]).unwrap();
+        chaos_run(&path, &root);
+    }
+}
+
+#[test]
+fn a_project_with_hostile_names_never_panics() {
+    // Names that are awkward on disk: spaces, unicode, quotes, very long.
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().join(".clavus");
+    let names = [
+        "with space.als",
+        "with'quote.als",
+        "with\"double.als",
+        "ünïcödé.als",
+        "with\nnewline.als",
+        &"x".repeat(200),
+    ];
+
+    for name in names {
+        let path = tmp.path().join(name);
+        fs::write(&path, gzip_als("marker")).unwrap();
+        chaos_run(&path, &root);
+    }
+}

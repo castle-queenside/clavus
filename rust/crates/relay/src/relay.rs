@@ -200,12 +200,19 @@ impl RelayState {
             // A snapshot hash becomes a file name on every client that
             // pulls it, so a malformed one is rejected here rather than
             // being served to the network.
-            if !clavus_core::blob::BlobStore::is_valid_hash(&snap.hash) {
+            // A hash is a SHA-256 digest, so it is exactly 64 characters.
+            // A shorter one could be stored here but could never be filed
+            // by a client, so it is refused at the door.
+            if snap.hash.len() != 64
+                || !clavus_core::blob::BlobStore::is_valid_hash(&snap.hash)
+            {
                 warn!("Rejected snapshot with invalid hash: {:?}", snap.hash);
                 continue;
             }
             if let Some(parent) = snap.parent.as_deref() {
-                if !clavus_core::blob::BlobStore::is_valid_hash(parent) {
+                if parent.len() != 64
+                    || !clavus_core::blob::BlobStore::is_valid_hash(parent)
+                {
                     warn!("Rejected snapshot with invalid parent: {:?}", parent);
                     continue;
                 }
