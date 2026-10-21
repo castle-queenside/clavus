@@ -21,7 +21,7 @@
 | CLI commands | `crates/cli/tests/cli_tests.rs` | 45 | 🟢 |
 | Core unit tests | `crates/core/src/**` | 5 | 🟢 |
 
-**328 tests passing, 0 failed, 0 ignored.**
+**331 tests passing, 0 failed, 0 ignored.**
 
 Legend: 🟢 good  🟡 partial  🟠 manual only  🔴 missing
 
@@ -158,6 +158,7 @@ real ones. Each now has a regression test:
 | A hostile relay could store a malformed snapshot | The client delivered whatever the server sent, unchecked | The client drops snapshots with a bad hash or parent and cues with a bad id |
 | A pre-epoch file timestamp crashed `projects` | `duration_since(UNIX_EPOCH).unwrap()` panicked on a file older than 1970 | The timestamp falls back to `????-??-?? ??:??` |
 | The TUI synced under a fixed name | The TUI always said "clavus-tui" in its Hello, so the relay filed every project under one name and served the wrong history | The TUI sends the selected project's name, and tells the relay when the selection changes |
+| One project could be restored over another | A snapshot lookup fell back to "every snapshot we know about", and the blob store is shared — so `restore Beta.als <alpha-hash>` wrote Alpha's contents into Beta.als | A lookup only considers snapshots whose file name says they belong to that project |
 | The relay stored hashes no client could file | The relay accepted a hash of any length, but a client can only file a 64-character digest | The relay refuses a hash or parent that is not exactly 64 hex characters |
 | A Bitwig archive's samples looked missing | A `.bwproject` exported from Bitwig keeps a copy of every sample, but `project.xml` still points at the original machine's absolute paths — so the samples looked lost | The audit sees what the archive holds and reports those samples as present; `collect` extracts them and rewrites the reference inside the archive |
 

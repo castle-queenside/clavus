@@ -1243,3 +1243,41 @@ fn a_project_with_hostile_names_never_panics() {
         chaos_run(&path, &root);
     }
 }
+
+#[test]
+fn a_snapshot_of_one_project_cannot_be_restored_over_another() {
+    // The blob store is shared, so a lookup that ignored the project
+    // would find another project's snapshot and overwrite this project's
+    // file with it.
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().join(".clavus");
+    let alpha = tmp.path().join("Alpha.als");
+    let beta = tmp.path().join("Beta.als");
+    fs::write(&alpha, gzip_als("alpha")).unwrap();
+    fs::write(&beta, gzip_als("beta")).unwrap();
+
+    run(|o, e| cmd_snapshot(&alpha, &None, false, &root, o, e));
+
+    // The alpha snapshot's hash.
+    let (out, _) = run(|o, e| cmd_log(&alpha, &root, o, e));
+    let hash = out
+        .all()
+        .split_whitespace()
+        .find(|w| w.len() == 8 && w.chars().all(|c| c.is_ascii_hexdigit()))
+        .expect("the log should show a short hash")
+        .to_string();
+
+    let beta_before = fs::read(&beta).unwrap();
+
+    let (_, result) = run(|o, e| cmd_restore(&beta, &hash, &root, o, e));
+    assert!(
+        result.is_err(),
+        "another project's snapshot must not be restorable: {}",
+        out.all()
+    );
+    assert_eq!(
+        fs::read(&beta).unwrap(),
+        beta_before,
+        "the file must not have been touched"
+    );
+}

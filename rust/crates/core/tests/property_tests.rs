@@ -21,7 +21,9 @@ struct Scratch {
 impl Scratch {
     fn new(content: &[u8]) -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let project = dir.path().join("project.als");
+        // The file name and the store's project name must agree: a
+        // snapshot belongs to the project its file name says it does.
+        let project = dir.path().join("proj.als");
         std::fs::write(&project, content).unwrap();
         Self { dir, project }
     }

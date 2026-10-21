@@ -267,7 +267,15 @@ impl SnapshotStore {
         if prefix.is_empty() {
             return Err(ClavusError::SnapshotNotFound(hash_or_prefix.to_string()));
         }
-        if self.has(prefix) {
+        // An exact match, but only for a snapshot of this project. The
+        // blob store is shared, so a bare hash would otherwise find
+        // another project's snapshot and restore it over this one.
+        if self
+            .store
+            .load_meta(prefix)
+            .map(|s| Self::belongs_to(&s, &self.project_name))
+            .unwrap_or(false)
+        {
             return Ok(prefix.to_string());
         }
 
@@ -280,12 +288,22 @@ impl SnapshotStore {
             return Ok(s.hash);
         }
 
-        // Fall back to every snapshot we know about.
+        // Fall back to the other snapshots of *this* project.
+        //
+        // The blob store is shared, so every project's snapshots are in
+        // the same place. Falling back to all of them would let one
+        // project's snapshot be restored over another project's file.
         let mut matches = self
             .store
             .list_meta_hashes()
             .into_iter()
-            .filter(|h| h.starts_with(prefix));
+            .filter(|h| h.starts_with(prefix))
+            .filter(|h| {
+                self.store
+                    .load_meta(h)
+                    .map(|s| Self::belongs_to(&s, &self.project_name))
+                    .unwrap_or(false)
+            });
         let first = match matches.next() {
             Some(h) => h,
             None => return Err(ClavusError::SnapshotNotFound(hash_or_prefix.to_string())),

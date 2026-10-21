@@ -2,7 +2,7 @@
 
 use clavus_core::{
     types::{Marker, Project, ProjectType, SampleAuditReport, SampleRef, Snapshot},
-    BlobStore, SnapshotStore,
+    BlobStore, ClavusError, SnapshotStore,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -463,7 +463,9 @@ fn test_restore_refuses_a_non_project_destination_from_a_remote_snapshot() {
     // to it must not be able to write project bytes anywhere on disk.
     let tmp = TempDir::new().unwrap();
     let store = BlobStore::new(tmp.path().join("blobs")).unwrap();
-    let snap_store = SnapshotStore::new(store.clone(), "demo");
+    // The store's project matches the snapshot's file name, so the
+    // snapshot is found and the destination rule is what refuses it.
+    let snap_store = SnapshotStore::new(store.clone(), "definitely-not-a-project");
 
     let bytes = b"<LiveSet/>".to_vec();
     let hash = store.put(&bytes);
@@ -489,7 +491,7 @@ fn test_restore_refuses_a_non_project_destination_from_a_remote_snapshot() {
 fn test_restore_to_an_explicit_target_still_works() {
     let tmp = TempDir::new().unwrap();
     let store = BlobStore::new(tmp.path().join("blobs")).unwrap();
-    let snap_store = SnapshotStore::new(store.clone(), "demo");
+    let snap_store = SnapshotStore::new(store.clone(), "whatever");
 
     let bytes = b"<LiveSet/>".to_vec();
     let hash = store.put(&bytes);
@@ -607,4 +609,56 @@ fn test_the_legacy_shared_head_is_only_used_by_its_own_project() {
         beta.head().is_none(),
         "beta must not inherit alpha's chain"
     );
+}
+
+// ─── Cross-project restore ──────────────────────────────────────────────────
+//
+// The blob store is shared by every project, so a lookup that falls back
+// to "every snapshot we know about" would find another project's
+// snapshot — and restoring it would overwrite this project's file with
+// another project's contents.
+
+#[test]
+fn a_snapshot_of_another_project_cannot_be_resolved() {
+    let tmp = TempDir::new().unwrap();
+    let store = BlobStore::new(tmp.path().join("blobs")).unwrap();
+    let alpha = SnapshotStore::new(store.clone(), "Alpha");
+    let beta = SnapshotStore::new(store.clone(), "Beta");
+
+    let a = tmp.path().join("Alpha.als");
+    std::fs::write(&a, b"<LiveSet id='alpha'/>").unwrap();
+    let snap = alpha.save(&a, "alpha work", None, 1, 120.0, vec![], Default::default()).unwrap();
+
+    // Alpha can find its own snapshot.
+    assert_eq!(
+        alpha.resolve(&snap.hash).expect("alpha should resolve its own"),
+        snap.hash
+    );
+
+    // Beta cannot — that is another project's file, and restoring it
+    // would overwrite Beta.als with Alpha's contents.
+    let err = beta.resolve(&snap.hash).expect_err("beta must not resolve alpha's snapshot");
+    assert!(
+        matches!(err, ClavusError::SnapshotNotFound(_)),
+        "unexpected error: {:?}",
+        err
+    );
+}
+
+#[test]
+fn a_prefix_of_another_project_cannot_be_resolved() {
+    let tmp = TempDir::new().unwrap();
+    let store = BlobStore::new(tmp.path().join("blobs")).unwrap();
+    let alpha = SnapshotStore::new(store.clone(), "Alpha");
+    let beta = SnapshotStore::new(store.clone(), "Beta");
+
+    let a = tmp.path().join("Alpha.als");
+    std::fs::write(&a, b"<LiveSet id='alpha'/>").unwrap();
+    let snap = alpha.save(&a, "alpha work", None, 1, 120.0, vec![], Default::default()).unwrap();
+
+    // Even a short prefix must not reach across.
+    let prefix = &snap.hash[..8];
+    assert!(beta.resolve(prefix).is_err());
+    // But it still works for the project that owns it.
+    assert_eq!(alpha.resolve(prefix).expect("alpha resolves its own"), snap.hash);
 }
