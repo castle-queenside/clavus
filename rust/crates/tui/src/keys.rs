@@ -124,16 +124,24 @@ pub fn handle_key(key: &KeyEvent, app: &mut App) -> bool {
         }
         (KeyCode::Char('P'), KeyModifiers::NONE) if app.screen == Screen::Sync => {
             if app.sync_state.is_connected() {
-                app.sync_state.send_cmd(SyncCmd::Push);
-                app.set_info("push sent".into());
+                // Push the selected project's local snapshot chain.
+                let snapshots = app.selected_snapshots();
+                let n = snapshots.len();
+                if snapshots.is_empty() {
+                    app.set_info("no local snapshots to push".into());
+                } else {
+                    app.sync_state.send_cmd(SyncCmd::Push(snapshots));
+                    app.set_info(format!("pushing {} snapshot(s)...", n));
+                }
             } else {
                 app.set_info("press c to connect first".into());
             }
         }
         (KeyCode::Char('G'), KeyModifiers::NONE) if app.screen == Screen::Sync => {
             if app.sync_state.is_connected() {
-                app.sync_state.send_cmd(SyncCmd::Pull);
-                app.set_info("pull sent".into());
+                let heads = app.known_heads();
+                app.sync_state.send_cmd(SyncCmd::Pull(heads));
+                app.set_info("pulling...".into());
             } else {
                 app.set_info("press c to connect first".into());
             }

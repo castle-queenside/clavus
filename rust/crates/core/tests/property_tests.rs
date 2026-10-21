@@ -320,7 +320,16 @@ proptest! {
             refs.push(outside.join(format!("missing-{}.wav", n)).to_string_lossy().to_string());
         }
 
-        let report = clavus_core::audit_project(&project.join("empty.als")).ok();
+        // The audit de-duplicates references, and the generated names can
+        // repeat, so compare against the distinct set.
+        let mut distinct: Vec<&String> = Vec::new();
+        for r in &refs {
+            if !distinct.iter().any(|d| *d == r) {
+                distinct.push(r);
+            }
+        }
+        let unique_refs = distinct.len();
+
 
         // Audit a project file that references these paths.
         let als = project.join("p.als");
@@ -343,7 +352,7 @@ proptest! {
 
         // Every reference is accounted for exactly once.
         let total = report.collected.len() + report.outside_project.len() + report.missing.len();
-        prop_assert_eq!(total, refs.len());
+        prop_assert_eq!(total, unique_refs);
 
         // The three categories are disjoint.
         let collected: HashSet<&str> = report.collected.iter().map(|s| s.path.to_str().unwrap()).collect();

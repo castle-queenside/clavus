@@ -528,7 +528,8 @@ fn cmd_push(relay: &str, project: &Path, clavus_root: &Path) -> anyhow::Result<(
     }).collect();
 
     println!("Pushing {} snapshot(s)...", push_snaps.len());
-    client.pull_resp(push_snaps, vec![])
+    client
+        .push(push_snaps, vec![])
         .map_err(|e| anyhow::anyhow!("Push: {}", e))?;
 
     // Wait for Synced or Conflict

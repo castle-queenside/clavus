@@ -252,7 +252,20 @@ impl RelayState {
 /// Run the relay server.
 pub fn run(bind_addr: &str, state_dir: std::path::PathBuf) -> std::io::Result<()> {
     let listener = TcpListener::bind(bind_addr)?;
-    info!("Relay listening on {}", bind_addr);
+    run_with_listener(listener, state_dir)
+}
+
+/// Run the relay server on an already-bound listener.
+///
+/// Tests use this to discover the bound port when binding to port 0.
+pub fn run_with_listener(
+    listener: TcpListener,
+    state_dir: std::path::PathBuf,
+) -> std::io::Result<()> {
+    info!(
+        "Relay listening on {}",
+        listener.local_addr().map(|a| a.to_string()).unwrap_or_default()
+    );
 
     let state = Arc::new(Mutex::new(match RelayState::new(state_dir) {
         Ok(s) => s,
@@ -349,6 +362,23 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
                     (snapshots, cues)
                 };
                 let _ = client.send(&SyncMsg::PullResp { snapshots, cues });
+            }
+            SyncMsg::Push { snapshots, cues } => {
+                debug!("Client {} pushing {} snapshots, {} cues", addr, snapshots.len(), cues.len());
+                let conflicts = state.lock().unwrap().store(snapshots, cues);
+                // Send conflict notifications first (client can handle them before Synced)
+                for (project, relay_head, push_head) in &conflicts {
+                    warn!(
+                        "HEAD divergence on project '{}': relay head {} vs incoming {}",
+                        project, relay_head, push_head
+                    );
+                    let _ = client.send(&SyncMsg::Conflict {
+                        project: project.clone(),
+                        relay_head: relay_head.clone(),
+                        push_head: push_head.clone(),
+                    });
+                }
+                let _ = client.send(&SyncMsg::Synced);
             }
             SyncMsg::PullResp { snapshots, cues } => {
                 debug!("Client {} pushing {} snapshots, {} cues", addr, snapshots.len(), cues.len());

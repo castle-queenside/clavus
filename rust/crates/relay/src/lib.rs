@@ -4,4 +4,4 @@
 
 pub mod relay;
 
-pub use relay::{run, RelayState};
+pub use relay::{run, run_with_listener, RelayState};

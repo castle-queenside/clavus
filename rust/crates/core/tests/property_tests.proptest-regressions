@@ -6,3 +6,4 @@
 # everyone who runs the test benefits from these saved cases.
 cc d8db7120431761f05788c463e2dafb8922084127918258fba02cccb22763ad21 # shrinks to content = [0]
 cc e87b6641607233a230c434073b69ae9c0ea114ea4507edaf092840ef47a097a5 # shrinks to contents = [[0], [0]]
+cc e27ab1e305123321089c1434c9f95abbe20a1bd96795cc26c32b2313645edfa3 # shrinks to inside_names = [], outside_names = [], missing_names = ["c", "c"]

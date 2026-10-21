@@ -114,6 +114,14 @@ impl SyncClient {
         self.send(SyncMsg::Pull { missing })
     }
 
+    /// Push snapshots and cues to the relay.
+    ///
+    /// The relay replies with `Synced`, or with `Conflict` messages when it
+    /// detects a divergent HEAD for one of the projects involved.
+    pub fn push(&self, snapshots: Vec<Snapshot>, cues: Vec<Cue>) -> Result<()> {
+        self.send(SyncMsg::Push { snapshots, cues })
+    }
+
     /// Respond to a Pull with the requested objects.
     pub fn pull_resp(&self, snapshots: Vec<Snapshot>, cues: Vec<Cue>) -> Result<()> {
         self.send(SyncMsg::PullResp { snapshots, cues })

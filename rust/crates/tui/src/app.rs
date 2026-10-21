@@ -73,8 +73,10 @@ pub struct ProjectEntry {
 pub enum SyncCmd {
     Connect(String),  // relay address
     Disconnect,
-    Push,
-    Pull,
+    /// Push the given local snapshots to the relay.
+    Push(Vec<clavus_core::types::Snapshot>),
+    /// Pull snapshots the relay has that we don't, given our known heads.
+    Pull(Vec<String>),
 }
 
 #[derive(Debug, Default)]
@@ -252,6 +254,47 @@ impl App {
         Ok(())
     }
 
+    /// The local snapshot chain for the selected project, ready to push.
+    pub fn selected_snapshots(&self) -> Vec<clavus_core::types::Snapshot> {
+        use clavus_core::blob::BlobStore;
+        use clavus_core::snapshot::SnapshotStore;
+
+        let entry = match self.selected_entry() {
+            Some(e) => e,
+            None => return vec![],
+        };
+        let store = match BlobStore::new(self.clavus_root.join("blobs")) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+        let snap_store = SnapshotStore::new(store, &entry.name);
+        match snap_store.head() {
+            Some(head) => snap_store.walk_chain(Some(&head.hash)),
+            None => vec![],
+        }
+    }
+
+    /// The snapshot heads we already have, used to ask the relay only for
+    /// what we are missing.
+    pub fn known_heads(&self) -> Vec<String> {
+        use clavus_core::blob::BlobStore;
+        use clavus_core::snapshot::SnapshotStore;
+
+        let entry = match self.selected_entry() {
+            Some(e) => e,
+            None => return vec![],
+        };
+        let store = match BlobStore::new(self.clavus_root.join("blobs")) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+        let snap_store = SnapshotStore::new(store, &entry.name);
+        snap_store
+            .head()
+            .map(|h| vec![h.hash])
+            .unwrap_or_default()
+    }
+
     /// Connect to a relay server, spawning a background sync thread.
     pub fn sync_connect(&mut self, addr: &str) {
         use clavus_sync::SyncClient;
@@ -299,14 +342,59 @@ impl App {
                         let _ = result_tx.send("disconnected".to_string());
                         break;
                     }
-                    SyncCmd::Push => {
+                    SyncCmd::Push(snapshots) => {
                         if let Some(ref c) = client {
-                            let _ = c.synced();
-                            let _ = result_tx.send("pushed".to_string());
+                            let count = snapshots.len();
+                            match c.push(snapshots, vec![]) {
+                                Ok(()) => {
+                                    // Wait for the relay's acknowledgement.
+                                    match c.recv_timeout(std::time::Duration::from_secs(10)) {
+                                        Some(clavus_sync::client::SyncMsg::Synced) => {
+                                            let _ = result_tx.send(format!("pushed {} snapshot(s)", count));
+                                        }
+                                        Some(clavus_sync::client::SyncMsg::Conflict { project, .. }) => {
+                                            let _ = result_tx.send(format!("conflict on '{}' — pull first", project));
+                                        }
+                                        Some(_) => {
+                                            let _ = result_tx.send(format!("pushed {} snapshot(s)", count));
+                                        }
+                                        None => {
+                                            let _ = result_tx.send("push timed out".to_string());
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = result_tx.send(format!("push failed: {}", e));
+                                }
+                            }
+                        } else {
+                            let _ = result_tx.send("not connected".to_string());
                         }
                     }
-                    SyncCmd::Pull => {
-                        let _ = result_tx.send("pulled".to_string());
+                    SyncCmd::Pull(known_heads) => {
+                        if let Some(ref c) = client {
+                            // The relay replies to Hello with a Push of
+                            // everything we are missing.
+                            if let Err(e) = c.hello("clavus-tui", known_heads) {
+                                let _ = result_tx.send(format!("pull failed: {}", e));
+                                continue;
+                            }
+                            match c.recv_timeout(std::time::Duration::from_secs(10)) {
+                                Some(clavus_sync::client::SyncMsg::Push { snapshots, cues }) => {
+                                    let n = snapshots.len();
+                                    let m = cues.len();
+                                    let _ = result_tx.send(format!("pulled {} snapshot(s), {} cue(s)", n, m));
+                                }
+                                Some(_) => {
+                                    let _ = result_tx.send("pulled (nothing new)".to_string());
+                                }
+                                None => {
+                                    let _ = result_tx.send("pull timed out".to_string());
+                                }
+                            }
+                        } else {
+                            let _ = result_tx.send("not connected".to_string());
+                        }
                     }
                     SyncCmd::Connect(new_addr) => {
                         // Close the old connection, then reconnect.
