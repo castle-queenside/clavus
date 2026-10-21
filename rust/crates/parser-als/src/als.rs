@@ -63,6 +63,18 @@ impl AlsParser {
         reader.trim_text(true);
         let mut buf = Vec::new();
         let mut in_liveset = false;
+        // Real Ableton Live wraps regular tracks in <Tracks> and return tracks
+        // in <ReturnTracks>. Track which container we're inside so a bare
+        // <Track> element is only counted as a real track inside <Tracks>.
+        let mut in_tracks = false;
+        let mut in_return_tracks = false;
+        // Tempo can live in three places depending on Live version:
+        //   <Tempo Value="128.0"/>
+        //   <Tempo><Value Value="128.0"/></Tempo>
+        //   MasterTrack > DeviceChain > TempoEnvelope > Events > AudioPoint
+        let mut in_tempo = false;
+        let mut in_tempo_envelope = false;
+        let mut tempo_events: Vec<(f64, f64)> = Vec::new();
 
         loop {
             match reader.read_event_into(&mut buf) {
@@ -77,6 +89,15 @@ impl AlsParser {
                                 }
                             }
                         }
+                        "Tracks" => in_tracks = true,
+                        "ReturnTracks" => in_return_tracks = true,
+                        // Real Live format: <Track> inside <Tracks>
+                        "Track" if in_liveset && in_tracks && !in_return_tracks => {
+                            if let Ok(track) = Self::parse_track(&mut reader, &tag, &mut buf) {
+                                self.project.tracks.push(track);
+                            }
+                        }
+                        // Legacy/synthetic format: <AudioTrack>/<MidiTrack>/<GroupTrack>
                         "AudioTrack" | "MidiTrack" | "GroupTrack" | "ReturnTrack" => {
                             if in_liveset {
                                 if let Ok(track) = Self::parse_track(&mut reader, &tag, &mut buf) {
@@ -89,15 +110,39 @@ impl AlsParser {
                             }
                         }
                         "MasterTrack" => {
-                            if let Some(track) = Self::parse_master_track(&mut reader, &mut buf) {
+                            if let Some(track) = Self::parse_master_track(&mut reader, &mut buf, &mut tempo_events) {
                                 self.project.master_track = Some(track);
                             }
                         }
                         "Tempo" => {
+                            in_tempo = true;
                             if let Some(bpm) = attr_val(&e, "Value")
                                 .and_then(|v| v.parse::<f64>().ok())
                             {
                                 self.project.bpm = bpm;
+                            }
+                        }
+                        "TempoEnvelope" => {
+                            in_tempo_envelope = true;
+                        }
+                        // Real Live stores arrangement markers as
+                        // <CuePoint><Time Value="4.1.1"/><Name Value="Intro"/></CuePoint>
+                        // (older versions used <Locator> with the same shape).
+                        "CuePoint" | "Locator" => {
+                            if let Some(marker) = Self::parse_marker_point(&mut reader, &mut buf) {
+                                self.project.markers.push(marker);
+                            }
+                        }
+                        "AudioPoint" if in_tempo_envelope => {
+                            // Canonical Live location:
+                            // <AudioPoint Time="0" Value="128.0" .../>
+                            if let Some(bpm) = attr_val(&e, "Value")
+                                .and_then(|v| v.parse::<f64>().ok())
+                            {
+                                let time = attr_val(&e, "Time")
+                                    .and_then(|t| t.parse::<f64>().ok())
+                                    .unwrap_or(0.0);
+                                tempo_events.push((time, bpm));
                             }
                         }
                         _ => {}
@@ -106,6 +151,19 @@ impl AlsParser {
                 Ok(Event::Empty(e)) => {
                     let tag = tag_name(&e);
                     match tag.as_str() {
+                        // <Tempo><Value Value="128.0"/></Tempo>
+                        "Value" if in_tempo => {
+                            if let Some(bpm) = attr_val(&e, "Value")
+                                .and_then(|v| v.parse::<f64>().ok())
+                            {
+                                self.project.bpm = bpm;
+                            }
+                        }
+                        "Track" if in_liveset && in_tracks && !in_return_tracks => {
+                            if let Ok(track) = Self::parse_track(&mut reader, &tag, &mut buf) {
+                                self.project.tracks.push(track);
+                            }
+                        }
                         "AudioTrack" | "MidiTrack" | "GroupTrack" | "ReturnTrack" => {
                             if in_liveset {
                                 if let Ok(track) = Self::parse_track(&mut reader, &tag, &mut buf) {
@@ -135,8 +193,13 @@ impl AlsParser {
                     }
                 }
                 Ok(Event::End(e)) => {
-                    if bytes_end_name(&e) == "LiveSet" {
-                        in_liveset = false;
+                    match bytes_end_name(&e).as_ref() {
+                        "LiveSet" => in_liveset = false,
+                        "Tracks" => in_tracks = false,
+                        "ReturnTracks" => in_return_tracks = false,
+                        "Tempo" => in_tempo = false,
+                        "TempoEnvelope" => in_tempo_envelope = false,
+                        _ => {}
                     }
                 }
                 Ok(Event::Eof) => break,
@@ -146,6 +209,20 @@ impl AlsParser {
         }
 
         self.project.track_count = self.project.tracks.len();
+
+        // Deduplicate markers: some projects carry the same arrangement
+        // markers in both <CuePoints> and <Locators>.
+        let mut seen = std::collections::HashSet::new();
+        self.project
+            .markers
+            .retain(|m| seen.insert((m.time.clone(), m.name.clone())));
+
+        // TempoEnvelope events are authoritative when present: the project
+        // BPM is the value of the first tempo event.
+        if !tempo_events.is_empty() {
+            tempo_events.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            self.project.bpm = tempo_events[0].1;
+        }
         debug!(
             "Parsed {} tracks, {} returns, {} markers",
             self.project.tracks.len(),
@@ -161,6 +238,9 @@ impl AlsParser {
             "MidiTrack" => "MIDI",
             "GroupTrack" => "Group",
             "ReturnTrack" => "Return",
+            // Real Live: type is inferred from the DeviceChain child
+            // (<MidiEffectChain> vs <AudioEffectChain>); default to audio.
+            "Track" => "Audio",
             _ => "Unknown",
         };
 
@@ -177,9 +257,15 @@ impl AlsParser {
             clips: vec![],
         };
 
+        // Nesting depth, so a nested element with the same name (real Live
+        // writes <Mixer><Track>...</Track></Mixer> inside every track) doesn't
+        // end the track parse early.
+        let mut depth: usize = 0;
+
         loop {
             match reader.read_event_into(buf) {
                 Ok(Event::Start(e)) => {
+                    depth += 1;
                     let etag = tag_name(&e);
                     match etag.as_str() {
                         "Name" => {
@@ -188,6 +274,8 @@ impl AlsParser {
                                     track.name = v;
                                 }
                             }
+                            skip_to_end(reader, buf, &etag);
+                            depth = depth.saturating_sub(1);
                         }
                         "EffectiveName" => {
                             if let Some(v) = attr_val(&e, "Value") {
@@ -195,27 +283,41 @@ impl AlsParser {
                                     track.name = v;
                                 }
                             }
+                            skip_to_end(reader, buf, &etag);
+                            depth = depth.saturating_sub(1);
                         }
                         "DeviceChain" => {
-                            track.devices = Self::parse_device_chain(reader, buf);
+                            let (devices, chain_kind, _tempo) = Self::parse_device_chain(reader, buf);
+                            depth = depth.saturating_sub(1); // sub-parser consumed </DeviceChain>
+                            track.devices = devices;
+                            // Real Live writes a bare <Track>; the chain kind
+                            // tells us whether it's MIDI or audio.
+                            if tag == "Track" {
+                                if let Some(kind) = chain_kind {
+                                    track.track_type = kind;
+                                }
+                            }
                         }
                         "Mute" => {
                             if attr_val(&e, "Value") == Some("true".to_string()) {
                                 track.is_muted = true;
                             }
                             skip_to_end(reader, buf, &etag);
+                            depth = depth.saturating_sub(1);
                         }
                         "Solo" => {
                             if attr_val(&e, "Value") == Some("true".to_string()) {
                                 track.is_solo = true;
                             }
                             skip_to_end(reader, buf, &etag);
+                            depth = depth.saturating_sub(1);
                         }
                         "IsFrozen" => {
                             if attr_val(&e, "Value") == Some("true".to_string()) {
                                 track.is_frozen = true;
                             }
                             skip_to_end(reader, buf, &etag);
+                            depth = depth.saturating_sub(1);
                         }
                         "Color" => {
                             if let Some(v) = attr_val(&e, "Value") {
@@ -228,6 +330,14 @@ impl AlsParser {
                             if let Some(clip) = Self::parse_clip(reader, &etag, buf) {
                                 track.clips.push(clip);
                             }
+                            depth = depth.saturating_sub(1);
+                        }
+                        "SendChannels" => {
+                            let sends = Self::parse_send_channels(reader, buf);
+                            depth = depth.saturating_sub(1); // sub-parser consumed </SendChannels>
+                            if !sends.is_empty() {
+                                track.sends = sends;
+                            }
                         }
                         _ => {}
                     }
@@ -235,6 +345,24 @@ impl AlsParser {
                 Ok(Event::Empty(e)) => {
                     let etag = tag_name(&e);
                     match etag.as_str() {
+                        // Real Live writes <Name Value="Kick"/> self-closing,
+                        // so the name arrives as an Empty event, not a Start.
+                        "Name" => {
+                            if let Some(v) = attr_val(&e, "Value") {
+                                // First name wins: the track's own <Name> comes
+                                // before any nested send/device names.
+                                if !v.is_empty() && track.name == "Unnamed" {
+                                    track.name = v;
+                                }
+                            }
+                        }
+                        "EffectiveName" => {
+                            if let Some(v) = attr_val(&e, "Value") {
+                                if !v.is_empty() && track.name == "Unnamed" {
+                                    track.name = v;
+                                }
+                            }
+                        }
                         "Mute" => {
                             if attr_val(&e, "Value") == Some("true".to_string()) {
                                 track.is_muted = true;
@@ -266,10 +394,13 @@ impl AlsParser {
                     }
                 }
                 Ok(Event::End(e)) => {
-                    if bytes_end_name(&e) == tag {
+                    // Only the matching close tag at depth 0 ends this track.
+                    if depth == 0 && bytes_end_name(&e) == tag {
                         break;
                     }
+                    depth = depth.saturating_sub(1);
                 }
+
                 Ok(Event::Eof) => break,
                 _ => {}
             }
@@ -279,7 +410,11 @@ impl AlsParser {
         Ok(track)
     }
 
-    fn parse_master_track(reader: &mut Reader<&[u8]>, buf: &mut Vec<u8>) -> Option<Track> {
+    fn parse_master_track(
+        reader: &mut Reader<&[u8]>,
+        buf: &mut Vec<u8>,
+        tempo_events: &mut Vec<(f64, f64)>,
+    ) -> Option<Track> {
         let mut track = Track {
             name: "Master".to_string(),
             track_type: "Master".to_string(),
@@ -291,7 +426,9 @@ impl AlsParser {
                 Ok(Event::Start(e)) => {
                     let etag = tag_name(&e);
                     if etag == "DeviceChain" {
-                        track.devices = Self::parse_device_chain(reader, buf);
+                        let (devices, _, tempo) = Self::parse_device_chain(reader, buf);
+                        tempo_events.extend(tempo);
+                        track.devices = devices;
                     }
                 }
                 Ok(Event::End(e)) => {
@@ -307,7 +444,20 @@ impl AlsParser {
         Some(track)
     }
 
-    fn parse_device_chain(reader: &mut Reader<&[u8]>, buf: &mut Vec<u8>) -> Vec<clavus_core::types::Device> {
+    /// Parse a `<DeviceChain>` subtree.
+    ///
+    /// Returns the device list plus the chain kind, if determinable.
+    /// Real Ableton Live writes either `<MidiEffectChain>` or `<AudioEffectChain>`
+    /// as the first child of `<DeviceChain>`; that element is what tells us
+    /// whether a `<Track>` is a MIDI or an audio track.
+    fn parse_device_chain(
+        reader: &mut Reader<&[u8]>,
+        buf: &mut Vec<u8>,
+    ) -> (
+        Vec<clavus_core::types::Device>,
+        Option<String>,
+        Vec<(f64, f64)>,
+    ) {
         // Blocklist: structural/sequencer elements whose Start tags must skip
         // their entire nested subtree so children aren't treated as devices.
         let skip_blocklist = ["AudioTrack", "MidiTrack", "GroupTrack", "ReturnTrack",
@@ -317,13 +467,31 @@ impl AlsParser {
             "Mute", "Solo", "IsFrozen", "Freeze", "FreezeState",
             "Value", "PresenterState", "LockedDevices", "Locators", "Locator",
             "DrumChain", "InstrumentRef", "Sender", "Receiver", "Annotation",
-            "Name"];
+            "Name", "TempoEnvelope"];
 
         let mut devices = Vec::new();
+        let mut chain_kind: Option<String> = None;
+        let mut tempo_events: Vec<(f64, f64)> = Vec::new();
         loop {
             match reader.read_event_into(buf) {
                 Ok(Event::Start(e)) => {
                     let etag = tag_name(&e);
+                    // Extract the attributes up front so the borrow of `buf`
+                    // ends before any sub-parser is invoked.
+                    let e_name = attr_val(&e, "Value").unwrap_or_else(|| etag.clone());
+                    let e_type = etag.clone();
+                    if etag == "MidiEffectChain" {
+                        chain_kind = Some("MIDI".to_string());
+                    } else if etag == "AudioEffectChain" {
+                        chain_kind = Some("Audio".to_string());
+                    } else if etag == "TempoEnvelope" {
+                        // The master track's tempo envelope lives inside the
+                        // device chain: <TempoEnvelope><Events><AudioPoint .../>
+                        let mut env = Self::parse_tempo_envelope(reader, buf);
+                        tempo_events.append(&mut env);
+                        buf.clear();
+                        continue;
+                    }
                     if skip_blocklist.contains(&etag.as_str()) {
                         // Structural element: skip all nested content
                         skip_to_end(reader, buf, &etag);
@@ -331,9 +499,7 @@ impl AlsParser {
                         // Device: add it, let nested content be processed by outer loop
                         // so intermediate tags (e.g. <Name> inside <Compressor>) are
                         // handled correctly without being treated as top-level devices.
-                        let name = attr_val(&e, "Value").unwrap_or_else(|| etag.clone());
-                        let device_type = etag.clone();
-                        devices.push(clavus_core::types::Device { name, device_type });
+                        devices.push(clavus_core::types::Device { name: e_name, device_type: e_type });
                         // DO NOT skip nested content — let outer loop handle child elements
                     }
                 }
@@ -355,8 +521,240 @@ impl AlsParser {
             }
             buf.clear();
         }
-        // Filter out <Devices> container (it's not a real device)
-        devices.into_iter().filter(|d| d.device_type != "Devices").collect()
+        // Filter out container elements (not real devices)
+        let devices: Vec<_> = devices
+            .into_iter()
+            .filter(|d| {
+                d.device_type != "Devices"
+                    && d.device_type != "MidiEffectChain"
+                    && d.device_type != "AudioEffectChain"
+                    && d.device_type != "MidiEffect"
+                    && d.device_type != "AudioEffect"
+            })
+            .collect();
+        (devices, chain_kind, tempo_events)
+    }
+
+    /// Parse a `<TempoEnvelope>` subtree, collecting `(time, bpm)` points.
+    ///
+    /// Real Live writes:
+    /// ```xml
+    /// <TempoEnvelope>
+    ///   <Events>
+    ///     <AudioPoint Time="0.0" Value="128.0"/>
+    ///   </Events>
+    /// </TempoEnvelope>
+    /// ```
+    fn parse_tempo_envelope(
+        reader: &mut Reader<&[u8]>,
+        buf: &mut Vec<u8>,
+    ) -> Vec<(f64, f64)> {
+        let mut events = Vec::new();
+        loop {
+            match reader.read_event_into(buf) {
+                Ok(Event::Start(e)) => {
+                    let etag = tag_name(&e);
+                    if etag == "Events" {
+                        // Don't skip: the <AudioPoint> children live inside.
+                    } else if etag == "AudioPoint" || etag == "MidiPoint" {
+                        if let Some(bpm) =
+                            attr_val(&e, "Value").and_then(|v| v.parse::<f64>().ok())
+                        {
+                            let time = attr_val(&e, "Time")
+                                .and_then(|t| t.parse::<f64>().ok())
+                                .unwrap_or(0.0);
+                            events.push((time, bpm));
+                        }
+                        skip_to_end(reader, buf, &etag);
+                    } else {
+                        skip_to_end(reader, buf, &etag);
+                    }
+                }
+                Ok(Event::Empty(e)) => {
+                    let etag = tag_name(&e);
+                    if etag == "AudioPoint" || etag == "MidiPoint" {
+                        if let Some(bpm) =
+                            attr_val(&e, "Value").and_then(|v| v.parse::<f64>().ok())
+                        {
+                            let time = attr_val(&e, "Time")
+                                .and_then(|t| t.parse::<f64>().ok())
+                                .unwrap_or(0.0);
+                            events.push((time, bpm));
+                        }
+                    }
+                }
+                Ok(Event::End(e)) => {
+                    if bytes_end_name(&e) == "TempoEnvelope" {
+                        break;
+                    }
+                }
+                Ok(Event::Eof) => break,
+                _ => {}
+            }
+            buf.clear();
+        }
+        events
+    }
+
+    /// Parse a `<SendChannels>` subtree, collecting each send's name.
+    ///
+    /// Real Live writes:
+    /// ```xml
+    /// <SendChannels>
+    ///   <SendChannel><Name Value="Reverb"/>...</SendChannel>
+    ///   <SendChannel><Name Value="Delay"/>...</SendChannel>
+    /// </SendChannels>
+    /// ```
+    ///
+    /// The whole subtree is consumed so nested `<Name>` elements can't leak
+    /// into the track's own name.
+    fn parse_send_channels(
+        reader: &mut Reader<&[u8]>,
+        buf: &mut Vec<u8>,
+    ) -> std::collections::HashMap<String, f64> {
+        let mut sends = std::collections::HashMap::new();
+        let mut pending_name: Option<String> = None;
+        let mut pending_level: Option<f64> = None;
+
+        loop {
+            match reader.read_event_into(buf) {
+                Ok(Event::Start(e)) => {
+                    let etag = tag_name(&e);
+                    if etag == "SendChannel" {
+                        pending_name = None;
+                        pending_level = None;
+                    } else if etag == "Name" {
+                        if let Some(v) = attr_val(&e, "Value") {
+                            pending_name = Some(v);
+                        }
+                        skip_to_end(reader, buf, &etag);
+                    } else if etag == "Volume" {
+                        // <Volume><Value Value="0.5"/></Volume>
+                        if let Some(v) = Self::read_first_value(reader, buf) {
+                            pending_level = Some(v);
+                        }
+                    } else {
+                        skip_to_end(reader, buf, &etag);
+                    }
+                }
+                Ok(Event::Empty(e)) => {
+                    let etag = tag_name(&e);
+                    if etag == "Name" {
+                        if let Some(v) = attr_val(&e, "Value") {
+                            pending_name = Some(v);
+                        }
+                    } else if etag == "Value" {
+                        // <Value Value="0.5"/>
+                        if let Some(v) = attr_val(&e, "Value").and_then(|s| s.parse::<f64>().ok()) {
+                            pending_level = Some(v);
+                        }
+                    }
+                }
+                Ok(Event::End(e)) => {
+                    let ename = bytes_end_name(&e);
+                    if ename == "SendChannel" {
+                        if let Some(name) = pending_name.take() {
+                            sends.insert(name, pending_level.take().unwrap_or(0.0));
+                        }
+                    } else if ename == "SendChannels" {
+                        break;
+                    }
+                }
+                Ok(Event::Eof) => break,
+                _ => {}
+            }
+            buf.clear();
+        }
+
+        sends
+    }
+
+    /// Read the first `<Value Value="..."/>` found inside the current element.
+    fn read_first_value(reader: &mut Reader<&[u8]>, buf: &mut Vec<u8>) -> Option<f64> {
+        let mut result = None;
+        loop {
+            match reader.read_event_into(buf) {
+                Ok(Event::Empty(e)) => {
+                    if tag_name(&e) == "Value" {
+                        result = attr_val(&e, "Value").and_then(|s| s.parse::<f64>().ok());
+                    }
+                }
+                Ok(Event::End(_)) => break,
+                Ok(Event::Eof) => break,
+                _ => {}
+            }
+            buf.clear();
+        }
+        result
+    }
+
+    /// Parse a marker container element (`<CuePoint>` / `<Locator>`) and its
+    /// `<Time>` / `<Name>` children.
+    ///
+    /// Real Ableton Live writes:
+    /// ```xml
+    /// <CuePoint>
+    ///   <Time Value="4.1.1"/>
+    ///   <Name Value="Intro"/>
+    /// </CuePoint>
+    /// ```
+    fn parse_marker_point(
+        reader: &mut Reader<&[u8]>,
+        buf: &mut Vec<u8>,
+    ) -> Option<clavus_core::types::Marker> {
+        let mut time = String::new();
+        let mut name = String::new();
+
+        loop {
+            match reader.read_event_into(buf) {
+                Ok(Event::Start(e)) => {
+                    let etag = tag_name(&e);
+                    match etag.as_str() {
+                        "Time" => {
+                            if let Some(v) = attr_val(&e, "Value") {
+                                time = v;
+                            }
+                            skip_to_end(reader, buf, &etag);
+                        }
+                        "Name" => {
+                            if let Some(v) = attr_val(&e, "Value") {
+                                name = v;
+                            }
+                            skip_to_end(reader, buf, &etag);
+                        }
+                        _ => {
+                            skip_to_end(reader, buf, &etag);
+                        }
+                    }
+                }
+                Ok(Event::Empty(e)) => {
+                    let etag = tag_name(&e);
+                    match etag.as_str() {
+                        "Time" => {
+                            if let Some(v) = attr_val(&e, "Value") {
+                                time = v;
+                            }
+                        }
+                        "Name" => {
+                            if let Some(v) = attr_val(&e, "Value") {
+                                name = v;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(Event::End(_)) => break,
+                Ok(Event::Eof) => break,
+                _ => {}
+            }
+            buf.clear();
+        }
+
+        if time.is_empty() && name.is_empty() {
+            None
+        } else {
+            Some(clavus_core::types::Marker { time, name })
+        }
     }
 
     fn parse_clip(reader: &mut Reader<&[u8]>, tag: &str, buf: &mut Vec<u8>) -> Option<clavus_core::types::Clip> {

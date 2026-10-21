@@ -106,5 +106,104 @@ def make_als(tracks=8, markers=None, bpm=128, filename="test_project.als"):
     print(f"✅ Generated {out_path} ({tracks} tracks, {len(markers)} markers, {bpm}bpm)")
     return out_path
 
+def make_real_live_als(tracks=3, markers=None, bpm=128, filename="real_live_project.als"):
+    """Generate an .als that mirrors REAL Ableton Live 11/12 output.
+
+    Key differences from the legacy fixture (and from what naive parsers assume):
+      - Tracks are <Track> elements inside <Tracks> (not <AudioTrack>)
+      - Track type comes from <MidiEffectChain> vs <AudioEffectChain>
+      - <Name Value="..."/> is self-closing (an "empty" XML event)
+      - Every track has <Mixer><Track>...</Track></Mixer> (nested same-name tag)
+      - Returns live in <ReturnTracks> as <ReturnTrack>
+      - BPM comes from MasterTrack > DeviceChain > TempoEnvelope
+      - Markers live in <ArrangerAutomation><CuePoints><CuePoint>
+    """
+    if markers is None:
+        markers = [("1.1.1", "Intro"), ("17.1.1", "Verse"), ("33.1.1", "Drop")]
+
+    root = ET.Element("LiveSet")
+    root.set("MajorVersion", "12")
+    root.set("MinorVersion", "0")
+
+    # --- Master track with tempo envelope (canonical BPM location) ---
+    master = ET.SubElement(root, "MasterTrack")
+    ET.SubElement(master, "Name").set("Value", "Master")
+    master_chain = ET.SubElement(master, "DeviceChain")
+    master_audio = ET.SubElement(master_chain, "AudioEffectChain")
+    master_effect = ET.SubElement(master_audio, "AudioEffect")
+    ET.SubElement(master_effect, "Compressor").set("Value", "Master Comp")
+    tempo_env = ET.SubElement(master_chain, "TempoEnvelope")
+    tempo_events = ET.SubElement(tempo_env, "Events")
+    ap = ET.SubElement(tempo_events, "AudioPoint")
+    ap.set("Time", "0.0")
+    ap.set("Value", str(bpm))
+
+    # --- Arrangement markers (CuePoint shape) ---
+    arranger = ET.SubElement(root, "ArrangerAutomation")
+    cue_points = ET.SubElement(arranger, "CuePoints")
+    for time, name in markers:
+        cue = ET.SubElement(cue_points, "CuePoint")
+        ET.SubElement(cue, "Time").set("Value", time)
+        ET.SubElement(cue, "Name").set("Value", name)
+
+    # --- Tracks: <Tracks> > <Track> ---
+    tracks_el = ET.SubElement(root, "Tracks")
+    specs = [
+        ("Drums", "midi", "Glue Comp", True),
+        ("Vocal", "audio", "Hall Reverb", False),
+        ("Audio 1", "audio", None, False),
+    ]
+    for i, (name, kind, device, muted) in enumerate(specs):
+        if i >= tracks:
+            break
+        track = ET.SubElement(tracks_el, "Track")
+        chain = ET.SubElement(track, "DeviceChain")
+        if kind == "midi":
+            eff_chain = ET.SubElement(chain, "MidiEffectChain")
+        else:
+            eff_chain = ET.SubElement(chain, "AudioEffectChain")
+        if device:
+            eff = ET.SubElement(eff_chain, "MidiEffect" if kind == "midi" else "AudioEffect")
+            comp = ET.SubElement(eff, "Compressor" if kind == "midi" else "Reverb")
+            ET.SubElement(comp, "Name").set("Value", device)
+
+        # <Mixer> contains a nested <Track> — the classic parser trap.
+        mixer = ET.SubElement(track, "Mixer")
+        mixer_track = ET.SubElement(mixer, "Track")
+        vol = ET.SubElement(mixer_track, "Volume")
+        ET.SubElement(vol, "Value").set("Value", str(0.8 - i * 0.1))
+
+        ET.SubElement(track, "Mute").set("Value", "true" if muted else "false")
+        ET.SubElement(track, "Solo").set("Value", "false")
+        # Name comes AFTER DeviceChain/Mixer in real Live output.
+        ET.SubElement(track, "Name").set("Value", name)
+
+    # --- Return tracks: <ReturnTracks> > <ReturnTrack> ---
+    returns_el = ET.SubElement(root, "ReturnTracks")
+    for rname in ("A Reverb", "A Delay"):
+        rt = ET.SubElement(returns_el, "ReturnTrack")
+        rchain = ET.SubElement(rt, "DeviceChain")
+        reff = ET.SubElement(rchain, "AudioEffectChain")
+        reff2 = ET.SubElement(reff, "AudioEffect")
+        ET.SubElement(reff2, "Reverb").set("Value", rname)
+        ET.SubElement(rt, "Name").set("Value", rname)
+
+    # --- Locators (older shape) — same markers, must be de-duplicated ---
+    locators = ET.SubElement(root, "Locators")
+    for time, name in markers:
+        loc = ET.SubElement(locators, "Locator")
+        ET.SubElement(loc, "Time").set("Value", time)
+        ET.SubElement(loc, "Name").set("Value", name)
+
+    xml_str = b'<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="utf-8")
+    out_path = FIXTURE_DIR / filename
+    with gzip.open(out_path, "wb") as f:
+        f.write(xml_str)
+
+    print(f"✅ Generated {out_path} (real Live format: {tracks} tracks, {len(markers)} markers, {bpm}bpm)")
+    return out_path
+
+
 if __name__ == "__main__":
     make_als()
+    make_real_live_als()

@@ -72,6 +72,16 @@ fn parse_robust(xml: &str) -> bool {
     result.is_ok()
 }
 
+/// Parse an XML string and return the resulting Project.
+fn parse_project(xml: &str) -> clavus_core::types::Project {
+    let compressed = gzip_encode(xml.as_bytes());
+    let tmp = std::env::temp_dir().join(format!("clavus_proj_{}.als", uuid_simple()));
+    std::fs::write(&tmp, &compressed).expect("write temp als");
+    let parser = AlsParser::new(&tmp).expect("should parse");
+    let _ = std::fs::remove_file(&tmp);
+    parser.project
+}
+
 /// Simple counter for unique temp file names (safe: tests run single-threaded)
 fn uuid_simple() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -374,4 +384,142 @@ fn test_midi_clip_parsed() {
   </MidiTrack>
 </LiveSet>"#;
     assert!(parse_robust(xml), "MidiClip should parse");
+}
+
+// ─── Real Ableton Live format ────────────────────────────────────────────────
+//
+// Regression tests for bugs found by parsing a file that mirrors what
+// Ableton Live 11/12 actually writes on disk. The legacy fixture above uses
+// <AudioTrack>, which real Live never emits — these tests cover the real shape.
+//
+// Fixture: `fixtures/real_live_project.als` — 3 tracks, 2 returns, 3 markers, 128 BPM.
+
+fn real_live_fixture_path() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../fixtures/real_live_project.als")
+}
+
+#[test]
+fn test_real_live_track_count() {
+    // Real Live writes <Track> inside <Tracks>, not <AudioTrack>.
+    let parser = AlsParser::new(&real_live_fixture_path()).expect("fixture should parse");
+    assert_eq!(parser.project.track_count, 3, "expected 3 <Track> elements");
+}
+
+#[test]
+fn test_real_live_track_names() {
+    // <Name Value="Drums"/> is self-closing, so it arrives as an Empty event.
+    let parser = AlsParser::new(&real_live_fixture_path()).expect("fixture should parse");
+    let names: Vec<&str> = parser
+        .project
+        .tracks
+        .iter()
+        .map(|t| t.name.as_str())
+        .collect();
+    assert_eq!(names, vec!["Drums", "Vocal", "Audio 1"]);
+}
+
+#[test]
+fn test_real_live_track_type_inferred_from_chain() {
+    // <MidiEffectChain> => MIDI, <AudioEffectChain> => Audio.
+    let parser = AlsParser::new(&real_live_fixture_path()).expect("fixture should parse");
+    assert_eq!(parser.project.tracks[0].track_type, "MIDI");
+    assert_eq!(parser.project.tracks[1].track_type, "Audio");
+    assert_eq!(parser.project.tracks[2].track_type, "Audio");
+}
+
+#[test]
+fn test_real_live_mute_state() {
+    let parser = AlsParser::new(&real_live_fixture_path()).expect("fixture should parse");
+    assert!(parser.project.tracks[0].is_muted, "Drums should be muted");
+    assert!(!parser.project.tracks[1].is_muted, "Vocal should not be muted");
+}
+
+#[test]
+fn test_real_live_nested_track_in_mixer_does_not_end_parse() {
+    // Every real track contains <Mixer><Track>...</Track></Mixer> — a nested
+    // element with the SAME name. It must not terminate the track early.
+    let parser = AlsParser::new(&real_live_fixture_path()).expect("fixture should parse");
+    assert_eq!(parser.project.tracks.len(), 3, "nested <Track> in <Mixer> broke parsing");
+}
+
+#[test]
+fn test_real_live_return_tracks() {
+    let parser = AlsParser::new(&real_live_fixture_path()).expect("fixture should parse");
+    assert_eq!(parser.project.return_tracks.len(), 2);
+    let names: Vec<&str> = parser
+        .project
+        .return_tracks
+        .iter()
+        .map(|t| t.name.as_str())
+        .collect();
+    assert_eq!(names, vec!["A Reverb", "A Delay"]);
+}
+
+#[test]
+fn test_real_live_markers_deduplicated() {
+    // Fixture carries the same markers in <CuePoints> and <Locators>.
+    let parser = AlsParser::new(&real_live_fixture_path()).expect("fixture should parse");
+    assert_eq!(parser.project.markers.len(), 3, "markers should be de-duplicated");
+    assert_eq!(parser.project.markers[0].name, "Intro");
+    assert_eq!(parser.project.markers[0].time, "1.1.1");
+}
+
+#[test]
+fn test_real_live_bpm_from_tempo_envelope() {
+    // BPM lives in MasterTrack > DeviceChain > TempoEnvelope > Events > AudioPoint.
+    let parser = AlsParser::new(&real_live_fixture_path()).expect("fixture should parse");
+    assert!(
+        (parser.project.bpm - 128.0).abs() < 0.01,
+        "expected 128 BPM from tempo envelope, got {}",
+        parser.project.bpm
+    );
+}
+
+#[test]
+fn test_tempo_from_nested_value_element() {
+    // <Tempo><Value Value="140.0"/></Tempo>
+    let xml = r#"<?xml version="1.0"?><LiveSet>
+  <Tempo><Value Value="140.0"/></Tempo>
+  <Tracks></Tracks>
+</LiveSet>"#;
+    let p = parse_project(xml);
+    assert!((p.bpm - 140.0).abs() < 0.01, "got {}", p.bpm);
+}
+
+#[test]
+fn test_send_channels_parsed() {
+    let xml = r#"<?xml version="1.0"?><LiveSet>
+  <Tracks>
+    <Track>
+      <Name Value="Lead"/>
+      <DeviceChain/>
+      <SendChannels>
+        <SendChannel><Name Value="Reverb"/></SendChannel>
+        <SendChannel><Name Value="Delay"/></SendChannel>
+      </SendChannels>
+    </Track>
+  </Tracks>
+</LiveSet>"#;
+    let p = parse_project(xml);
+    assert_eq!(p.tracks.len(), 1);
+    assert_eq!(p.tracks[0].sends.len(), 2);
+    assert!(p.tracks[0].sends.contains_key("Reverb"));
+    assert!(p.tracks[0].sends.contains_key("Delay"));
+}
+
+#[test]
+fn test_send_name_does_not_overwrite_track_name() {
+    let xml = r#"<?xml version="1.0"?><LiveSet>
+  <Tracks>
+    <Track>
+      <Name Value="Lead"/>
+      <DeviceChain/>
+      <SendChannels>
+        <SendChannel><Name Value="Reverb"/></SendChannel>
+      </SendChannels>
+    </Track>
+  </Tracks>
+</LiveSet>"#;
+    let p = parse_project(xml);
+    assert_eq!(p.tracks[0].name, "Lead", "send name leaked into track name");
 }

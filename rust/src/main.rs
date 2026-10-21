@@ -121,25 +121,34 @@ enum Commands {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
+    // Quiet by default: the CLI prints its own human-readable messages.
+    // Set RUST_LOG=clavus=debug (or =info) for verbose diagnostics.
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("clavus=info".parse()?),
+                .add_directive("clavus=error".parse()?),
         )
+        .with_writer(std::io::stderr)
         .init();
 
-    let projects_dir = cli.dir.unwrap_or_else(projects_dir);
-    let clavus_root = cli.data.unwrap_or_else(clavus_root);
+    let projects_dir = cli.dir.clone().unwrap_or_else(projects_dir);
+    let clavus_root = cli
+        .data
+        .clone()
+        .or_else(|| std::env::var_os("CLAVUS_DATA").map(PathBuf::from))
+        .unwrap_or_else(clavus_root);
 
     match cli.command.unwrap_or(Commands::Tui) {
-        Commands::Tui => run_tui(projects_dir),
-        Commands::Snapshot { project, message, collect } => cmd_snapshot(&project, &message, collect),
+        Commands::Tui => run_tui(projects_dir, clavus_root),
+        Commands::Snapshot { project, message, collect } => {
+            cmd_snapshot(&project, &message, collect, &clavus_root)
+        }
         Commands::Log { project } => cmd_log(&project, &clavus_root),
         Commands::Cue { project, text, position, track } => {
-            cmd_cue(&project, &text, &position, track.as_deref())
+            cmd_cue(&project, &text, &position, track.as_deref(), &clavus_root)
         }
-        Commands::Cues { project, status } => cmd_cues(&project, status.as_deref()),
-        Commands::Relay { bind, state_dir } => cmd_relay(&bind, state_dir),
+        Commands::Cues { project, status } => cmd_cues(&project, status.as_deref(), &clavus_root),
+        Commands::Relay { bind, state_dir } => cmd_relay(&bind, state_dir, &clavus_root),
         Commands::Audit { project, strict } => cmd_audit(&project, strict),
         Commands::Collect { project } => cmd_collect(&project, &clavus_root),
         Commands::Push { relay, project } => cmd_push(&relay, &project, &clavus_root),
@@ -152,7 +161,7 @@ fn main() -> anyhow::Result<()> {
 
 // ─── TUI ─────────────────────────────────────────────────────────
 
-fn run_tui(projects_dir: PathBuf) -> anyhow::Result<()> {
+fn run_tui(projects_dir: PathBuf, clavus_root: PathBuf) -> anyhow::Result<()> {
     let mut app = App::new(projects_dir);
     app.refresh_projects()
         .map_err(|e| anyhow::anyhow!("Failed to scan projects: {}", e))?;
@@ -174,7 +183,7 @@ fn run_tui(projects_dir: PathBuf) -> anyhow::Result<()> {
         terminal.draw(|f| ui::render(f, &mut app))?;
 
         if let Ok(crossterm::event::Event::Key(key)) = crossterm::event::read() {
-            if handle_key(&key, &mut app) {
+            if handle_key(&key, &mut app, &clavus_root) {
                 break;
             }
         }
@@ -185,7 +194,11 @@ fn run_tui(projects_dir: PathBuf) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn handle_key(key: &crossterm::event::KeyEvent, app: &mut App) -> bool {
+fn handle_key(
+    key: &crossterm::event::KeyEvent,
+    app: &mut App,
+    clavus_root: &Path,
+) -> bool {
     use clavus_tui::app::Screen;
     use crossterm::event::{KeyCode, KeyModifiers};
 
@@ -284,7 +297,7 @@ fn handle_key(key: &crossterm::event::KeyEvent, app: &mut App) -> bool {
         (KeyCode::Enter, _) if app.screen == Screen::CueAdd => {
             if !app.input_buf.is_empty() && app.project_detail.is_some() {
                 // Save cue: position from input_buf, empty text, Arrangement track
-                let root = clavus_root();
+                let root = clavus_root.to_path_buf();
                 let name = app.project_detail.as_ref()
                     .and_then(|p| p.path.file_stem())
                     .and_then(|s| s.to_str())
@@ -362,7 +375,12 @@ fn handle_key(key: &crossterm::event::KeyEvent, app: &mut App) -> bool {
 
 // ─── Commands ────────────────────────────────────────────────────
 
-fn cmd_snapshot(project: &Path, message: &Option<String>, collect: bool) -> anyhow::Result<()> {
+fn cmd_snapshot(
+    project: &Path,
+    message: &Option<String>,
+    collect: bool,
+    clavus_root: &Path,
+) -> anyhow::Result<()> {
     use clavus_core::blob::BlobStore;
     use clavus_core::snapshot::SnapshotStore;
 
@@ -403,7 +421,7 @@ fn cmd_snapshot(project: &Path, message: &Option<String>, collect: bool) -> anyh
         }
     }
 
-    let store = BlobStore::new(clavus_root().join("blobs"))
+    let store = BlobStore::new(clavus_root.join("blobs"))
         .map_err(|e| anyhow::anyhow!("BlobStore: {}", e))?;
     let snap_store = SnapshotStore::new(store, &name);
 
@@ -489,25 +507,26 @@ fn cmd_cue(
     text: &str,
     position: &str,
     track: Option<&str>,
+    clavus_root: &Path,
 ) -> anyhow::Result<()> {
-    let root = clavus_root();
+    let root = clavus_root;
     let name = project
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
-    let store = clavus_core::CueStore::new(&root, &name)?;
+    let store = clavus_core::CueStore::new(root, &name)?;
     let cue = store.add(text, position, "cli", "", track.unwrap_or("Arrangement"))?;
     println!("✓ cue {}  @ {}  ({})", &cue.id[..8], cue.position, cue.status.as_str());
     Ok(())
 }
 
-fn cmd_cues(project: &Path, status: Option<&str>) -> anyhow::Result<()> {
-    let root = clavus_root();
+fn cmd_cues(project: &Path, status: Option<&str>, clavus_root: &Path) -> anyhow::Result<()> {
+    let root = clavus_root;
     let name = project
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
-    let store = clavus_core::CueStore::new(&root, &name)?;
+    let store = clavus_core::CueStore::new(root, &name)?;
     let cues = store.list(status)?;
 
     if cues.is_empty() {
@@ -533,8 +552,9 @@ fn cmd_cues(project: &Path, status: Option<&str>) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cmd_relay(bind: &str, state_dir: Option<PathBuf>) -> anyhow::Result<()> {
-    let dir = state_dir.unwrap_or_else(clavus_root).join("relay-state");
+fn cmd_relay(bind: &str, state_dir: Option<PathBuf>, clavus_root: &Path) -> anyhow::Result<()> {
+    let dir = state_dir
+        .unwrap_or_else(|| clavus_root.join("relay-state"));
     println!("Listening on {}…", bind);
     println!("State: {}", dir.display());
     clavus_relay::run(bind, dir)?;

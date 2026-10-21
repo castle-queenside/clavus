@@ -274,3 +274,74 @@ fn flate2_read_gzip(path: &PathBuf) -> Vec<u8> {
     std::io::Read::read_to_end(&mut dec, &mut out).ok();
     out
 }
+
+// ─── Relative path regression ───────────────────────────────────────────────
+//
+// Regression: when the project was given as a relative path (e.g.
+// `clavus audit ./myproject.als`), the project root stayed relative while
+// resolved sample paths were absolute, so `strip_prefix` failed and every
+// sample was wrongly reported as "outside the project folder".
+
+/// `set_current_dir` is process-global, so tests that change it must not
+/// run concurrently.
+static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[test]
+fn test_audit_with_relative_project_path() {
+    let _guard = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let tmp = TempDir::new().unwrap();
+    let proj_dir = tmp.path().join("myproj");
+    fs::create_dir_all(&proj_dir).unwrap();
+
+    // Sample lives INSIDE the project folder.
+    make_sample(&proj_dir.join("Samples").join("kick.wav"), b"audio data");
+
+    // The .als references it by absolute path.
+    let abs = proj_dir.join("Samples").join("kick.wav");
+    let xml = als_xml(&[(abs.to_str().unwrap(), "kick.wav")]);
+    make_als(&proj_dir.join("test.als"), &xml);
+
+    // Audit using a RELATIVE path (simulates running from the parent dir).
+    let prev_cwd = std::env::current_dir().unwrap();
+    std::env::set_current_dir(tmp.path()).unwrap();
+
+    let relative = std::path::Path::new("myproj").join("test.als");
+    let report = audit_project(&relative).unwrap();
+
+    std::env::set_current_dir(prev_cwd).unwrap();
+
+    assert_eq!(report.missing.len(), 0, "sample inside project was reported missing");
+    assert_eq!(
+        report.outside_project.len(),
+        0,
+        "sample inside project was wrongly reported as outside (relative path bug)"
+    );
+    assert_eq!(report.collected.len(), 1, "sample should be collected");
+}
+
+#[test]
+fn test_audit_relative_path_still_detects_outside_samples() {
+    // The relative-path fix must not break genuine outside-project detection.
+    let _guard = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let tmp = TempDir::new().unwrap();
+    let proj_dir = tmp.path().join("myproj");
+    let outside_dir = tmp.path().join("external");
+    fs::create_dir_all(&proj_dir).unwrap();
+    fs::create_dir_all(&outside_dir).unwrap();
+
+    make_sample(&outside_dir.join("snare.wav"), b"audio data");
+    let abs = outside_dir.join("snare.wav");
+    let xml = als_xml(&[(abs.to_str().unwrap(), "snare.wav")]);
+    make_als(&proj_dir.join("test.als"), &xml);
+
+    let prev_cwd = std::env::current_dir().unwrap();
+    std::env::set_current_dir(tmp.path()).unwrap();
+
+    let relative = std::path::Path::new("myproj").join("test.als");
+    let report = audit_project(&relative).unwrap();
+
+    std::env::set_current_dir(prev_cwd).unwrap();
+
+    assert_eq!(report.outside_project.len(), 1, "genuine outside sample not detected");
+    assert_eq!(report.collected.len(), 0);
+}

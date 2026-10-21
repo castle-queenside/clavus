@@ -273,6 +273,13 @@ fn audit_sample_refs(
     let mut missing = Vec::new();
     let mut outside_project = Vec::new();
 
+    // Canonicalize the project root so the inside/outside comparison works
+    // regardless of whether the caller passed a relative project path.
+    // Without this, `clavus audit ./myproj.als` would flag every sample as
+    // "outside project" because the root is relative but resolved sample
+    // paths are absolute.
+    let abs_root = fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
+
     for path in paths {
         let filename = path
             .file_name()
@@ -284,7 +291,7 @@ fn audit_sample_refs(
         // 2. Relative to project root (most common)
         // 3. Filename search (handles Live 10 path corruption bug, case-insensitive on macOS)
         let mut candidates: Vec<PathBuf> = vec![
-            project_root.join(path),
+            abs_root.join(path),
             path.clone(),
         ];
 
@@ -294,7 +301,7 @@ fn audit_sample_refs(
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
         if !fname.is_empty() {
-            if let Ok(entries) = find_files_by_name(project_root, &fname) {
+            if let Ok(entries) = find_files_by_name(&abs_root, &fname) {
                 for f in entries {
                     if !candidates.contains(&f) {
                         candidates.push(f);
@@ -305,9 +312,13 @@ fn audit_sample_refs(
 
         let resolved = candidates.into_iter().find(|c| c.is_file());
 
-        let resolved_path = resolved.clone();
+        // Canonicalize the resolved path so it can be compared against the
+        // canonical root (both may differ in symlink form or absolute/relative).
+        let resolved_path = resolved.map(|p| {
+            fs::canonicalize(&p).unwrap_or(p)
+        });
         let relpath = resolved_path.as_ref().and_then(|p| {
-            p.strip_prefix(project_root)
+            p.strip_prefix(&abs_root)
                 .ok()
                 .map(|s| s.to_string_lossy().replace('\\', "/"))
         });
