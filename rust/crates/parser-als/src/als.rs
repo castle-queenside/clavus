@@ -470,6 +470,10 @@ impl AlsParser {
             "Name", "TempoEnvelope"];
 
         let mut devices = Vec::new();
+        // Stack of indices into `devices` for elements that are still open.
+        // A <Name Value="..."/> inside a device belongs to that device, so we
+        // need to know which one is innermost.
+        let mut device_stack: Vec<usize> = Vec::new();
         let mut chain_kind: Option<String> = None;
         let mut tempo_events: Vec<(f64, f64)> = Vec::new();
         loop {
@@ -500,21 +504,40 @@ impl AlsParser {
                         // so intermediate tags (e.g. <Name> inside <Compressor>) are
                         // handled correctly without being treated as top-level devices.
                         devices.push(clavus_core::types::Device { name: e_name, device_type: e_type });
-                        // DO NOT skip nested content — let outer loop handle child elements
+                        device_stack.push(devices.len() - 1);
                     }
                 }
                 Ok(Event::Empty(e)) => {
                     let etag = tag_name(&e);
-                    if !skip_blocklist.contains(&etag.as_str()) {
+                    if etag == "Name" {
+                        // A device's display name lives in a nested
+                        // <Name Value="Glue Compressor"/>. Assign it to the
+                        // innermost device that is still open.
+                        if let Some(&idx) = device_stack.last() {
+                            let d = &mut devices[idx];
+                            if d.name == d.device_type {
+                                if let Some(v) = attr_val(&e, "Value") {
+                                    if !v.is_empty() {
+                                        d.name = v;
+                                    }
+                                }
+                            }
+                        }
+                    } else if !skip_blocklist.contains(&etag.as_str()) {
                         let name = attr_val(&e, "Value").unwrap_or_else(|| etag.clone());
                         let device_type = etag.clone();
                         devices.push(clavus_core::types::Device { name, device_type });
+                        device_stack.push(devices.len() - 1);
                     }
                 }
                 Ok(Event::End(e)) => {
                     if bytes_end_name(&e) == "DeviceChain" {
                         break;
                     }
+                    // Every End we see corresponds to a device element we
+                    // pushed (blocklisted elements' Ends are consumed by
+                    // skip_to_end), so the stack stays balanced.
+                    device_stack.pop();
                 }
                 Ok(Event::Eof) => break,
                 _ => {}

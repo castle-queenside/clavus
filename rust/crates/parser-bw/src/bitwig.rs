@@ -93,7 +93,11 @@ impl BitwigParser {
                             }
                         }
                         "Track" => {
-                            if let Ok(track) = Self::parse_track(&mut reader, &mut buf) {
+                            // Bitwig puts the channel type on the <Track>
+                            // element itself: <Track Type="Audio" Index="0">.
+                            let kind = attr_val(&e, "Type")
+                                .or_else(|| attr_val(&e, "ChannelType"));
+                            if let Ok(track) = Self::parse_track(&mut reader, &mut buf, kind) {
                                 self.project.tracks.push(track);
                             }
                         }
@@ -135,8 +139,19 @@ impl BitwigParser {
         Ok(())
     }
 
-    fn parse_track(reader: &mut Reader<&[u8]>, buf: &mut Vec<u8>) -> Result<Track, ()> {
+    fn parse_track(
+        reader: &mut Reader<&[u8]>,
+        buf: &mut Vec<u8>,
+        kind: Option<String>,
+    ) -> Result<Track, ()> {
         let mut track = Track::default();
+        if let Some(k) = kind {
+            if !k.is_empty() {
+                track.track_type = k;
+            }
+        }
+        // Nesting depth: a channel group can nest further <Track> elements.
+        let mut depth: usize = 0;
 
         loop {
             match reader.read_event_into(buf) {
@@ -144,35 +159,47 @@ impl BitwigParser {
                     let tag = tag_name(&e);
                     match tag.as_str() {
                         "Name" | "EffectiveName" => {
-                            if let Some(v) = attr_val(&e, "Value") {
+                            if let Some(v) = attr_val(&e, "Value")
+                                .or_else(|| attr_val(&e, "Name"))
+                            {
                                 if !v.is_empty() && track.name.is_empty() {
                                     track.name = v;
                                 }
                             }
                         }
                         "Type" | "ChannelType" => {
-                            if let Some(v) = attr_val(&e, "Value") {
-                                if !v.is_empty() {
+                            if let Some(v) = attr_val(&e, "Value")
+                                .or_else(|| attr_val(&e, "Name"))
+                            {
+                                if !v.is_empty() && track.track_type.is_empty() {
                                     track.track_type = v;
                                 }
                             }
                         }
-                        "DeviceChain" | "Device" => {
-                            let name = attr_val(&e, "Value").unwrap_or_else(|| tag.clone());
+                        "Device" => {
+                            // Bitwig names devices with a Name attribute:
+                            // <Device Name="EQ Eight" />
+                            let name = attr_val(&e, "Name")
+                                .or_else(|| attr_val(&e, "Value"))
+                                .unwrap_or_else(|| tag.clone());
                             track.devices.push(clavus_core::types::Device {
                                 name,
                                 device_type: tag,
                             });
                         }
                         "Mute" | "Muted" => {
-                            if let Some(v) = attr_val(&e, "Value") {
+                            if let Some(v) = attr_val(&e, "Value")
+                                .or_else(|| attr_val(&e, "Name"))
+                            {
                                 if v == "true" || v == "1" {
                                     track.is_muted = true;
                                 }
                             }
                         }
                         "Solo" | "Soloed" => {
-                            if let Some(v) = attr_val(&e, "Value") {
+                            if let Some(v) = attr_val(&e, "Value")
+                                .or_else(|| attr_val(&e, "Name"))
+                            {
                                 if v == "true" || v == "1" {
                                     track.is_solo = true;
                                 }
@@ -182,9 +209,10 @@ impl BitwigParser {
                     }
                 }
                 Ok(Event::End(e)) => {
-                    if bytes_end_name(&e) == "Track" {
+                    if depth == 0 && bytes_end_name(&e) == "Track" {
                         break;
                     }
+                    depth = depth.saturating_sub(1);
                 }
                 Ok(Event::Eof) => break,
                 _ => {}
