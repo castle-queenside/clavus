@@ -17,11 +17,11 @@
 | Relay (real server) | `crates/relay/tests/real_relay.rs` | 9 | 🟢 |
 | Sync client (protocol) | `crates/sync/tests/sync_client.rs` | 6 | 🟢 |
 | Sync client (hostile server) | `crates/sync/tests/hostile_server.rs` | 15 | 🟢 |
-| TUI | `crates/tui/tests/tui_tests.rs` | 39 | 🟢 |
-| CLI commands | `crates/cli/tests/cli_tests.rs` | 39 | 🟢 |
+| TUI | `crates/tui/tests/tui_tests.rs` | 43 | 🟢 |
+| CLI commands | `crates/cli/tests/cli_tests.rs` | 41 | 🟢 |
 | Core unit tests | `crates/core/src/**` | 5 | 🟢 |
 
-**283 tests passing, 0 failed, 0 ignored.**
+**291 tests passing, 0 failed, 0 ignored.**
 
 Legend: 🟢 good  🟡 partial  🟠 manual only  🔴 missing
 
@@ -147,6 +147,8 @@ real ones. Each now has a regression test:
 | **Path traversal via a snapshot hash** | A remote peer could write outside the blob store, and a one-character hash panicked the client | `BlobStore::is_valid_hash()` requires plain lowercase hex |
 | **Path traversal via a ref name** | A snapshot's `parent` is used as a ref name, so a crafted parent could read outside the refs directory | `BlobStore::is_valid_ref_name()` rejects separators and `..` |
 | The relay served malformed snapshots | The relay stored any hash it was given | The relay rejects snapshots with an invalid hash or parent |
+| **Cues never reached the other machine** | The push sent no cues and the pull counted them without storing them, so a collaborator's notes were lost | Both the CLI and the TUI now push and import cues |
+| `restore` could write anywhere | Restoring a pulled snapshot to its recorded path would use a path chosen by the relay | The recorded path must name a `.als` or `.bwproject` file |
 
 ---
 

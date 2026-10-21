@@ -130,8 +130,12 @@ pub fn handle_key(key: &KeyEvent, app: &mut App) -> bool {
                 if snapshots.is_empty() {
                     app.set_info("no local snapshots to push".into());
                 } else {
-                    app.sync_state.send_cmd(SyncCmd::Push(snapshots));
-                    app.set_info(format!("pushing {} snapshot(s)...", n));
+                    // The cues travel with the snapshots — a collaborator's
+                    // notes are the point of the cue system.
+                    let cues = app.project_cues();
+                    let c = cues.len();
+                    app.sync_state.send_cmd(SyncCmd::Push { snapshots, cues });
+                    app.set_info(format!("pushing {} snapshot(s), {} cue(s)...", n, c));
                 }
             } else {
                 app.set_info("press c to connect first".into());
@@ -140,7 +144,13 @@ pub fn handle_key(key: &KeyEvent, app: &mut App) -> bool {
         (KeyCode::Char('G'), KeyModifiers::NONE) if app.screen == Screen::Sync => {
             if app.sync_state.is_connected() {
                 let heads = app.known_heads();
-                app.sync_state.send_cmd(SyncCmd::Pull(heads));
+                let project_name = app.selected_project_name().unwrap_or_default();
+                let clavus_root = app.clavus_root.clone();
+                app.sync_state.send_cmd(SyncCmd::Pull {
+                    known_heads: heads,
+                    project_name,
+                    clavus_root,
+                });
                 app.set_info("pulling...".into());
             } else {
                 app.set_info("press c to connect first".into());

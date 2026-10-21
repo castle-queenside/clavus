@@ -73,10 +73,20 @@ pub struct ProjectEntry {
 pub enum SyncCmd {
     Connect(String),  // relay address
     Disconnect,
-    /// Push the given local snapshots to the relay.
-    Push(Vec<clavus_core::types::Snapshot>),
+    /// Push the given local snapshots and cues to the relay.
+    Push {
+        snapshots: Vec<clavus_core::types::Snapshot>,
+        cues: Vec<clavus_core::types::Cue>,
+    },
     /// Pull snapshots the relay has that we don't, given our known heads.
-    Pull(Vec<String>),
+    ///
+    /// The project name and data root are needed so the background thread
+    /// can store what it receives rather than only counting it.
+    Pull {
+        known_heads: Vec<String>,
+        project_name: String,
+        clavus_root: std::path::PathBuf,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -204,6 +214,11 @@ impl App {
         self.selected_project.and_then(|i| self.projects.get(i))
     }
 
+    /// The name of the currently selected project, if any.
+    pub fn selected_project_name(&self) -> Option<String> {
+        self.selected_entry().map(|e| e.name.clone())
+    }
+
     pub fn set_error(&mut self, msg: String) {
         self.error = Some(msg);
     }
@@ -231,6 +246,20 @@ impl App {
             .list(filter)
             .map_err(|e| format!("list cues: {}", e))?;
         Ok(())
+    }
+
+    /// Every cue for the selected project, ignoring the current filter.
+    ///
+    /// Used when pushing, so a collaborator receives all the notes and
+    /// not just the ones currently on screen.
+    pub fn project_cues(&self) -> Vec<clavus_core::types::Cue> {
+        let Some(entry) = self.selected_entry() else {
+            return Vec::new();
+        };
+        let Ok(store) = clavus_core::CueStore::new(&self.clavus_root, &entry.name) else {
+            return Vec::new();
+        };
+        store.list(None).unwrap_or_default()
     }
 
     /// Load the snapshot chain for the selected project.
@@ -342,21 +371,22 @@ impl App {
                         let _ = result_tx.send("disconnected".to_string());
                         break;
                     }
-                    SyncCmd::Push(snapshots) => {
+                    SyncCmd::Push { snapshots, cues } => {
                         if let Some(ref c) = client {
                             let count = snapshots.len();
-                            match c.push(snapshots, vec![]) {
+                            let cue_count = cues.len();
+                            match c.push(snapshots, cues) {
                                 Ok(()) => {
                                     // Wait for the relay's acknowledgement.
                                     match c.recv_timeout(std::time::Duration::from_secs(10)) {
                                         Some(clavus_sync::client::SyncMsg::Synced) => {
-                                            let _ = result_tx.send(format!("pushed {} snapshot(s)", count));
+                                            let _ = result_tx.send(format!("pushed {} snapshot(s), {} cue(s)", count, cue_count));
                                         }
                                         Some(clavus_sync::client::SyncMsg::Conflict { project, .. }) => {
                                             let _ = result_tx.send(format!("conflict on '{}' — pull first", project));
                                         }
                                         Some(_) => {
-                                            let _ = result_tx.send(format!("pushed {} snapshot(s)", count));
+                                            let _ = result_tx.send(format!("pushed {} snapshot(s), {} cue(s)", count, cue_count));
                                         }
                                         None => {
                                             let _ = result_tx.send("push timed out".to_string());
@@ -371,7 +401,11 @@ impl App {
                             let _ = result_tx.send("not connected".to_string());
                         }
                     }
-                    SyncCmd::Pull(known_heads) => {
+                    SyncCmd::Pull {
+                        known_heads,
+                        project_name,
+                        clavus_root,
+                    } => {
                         if let Some(ref c) = client {
                             // The relay replies to Hello with a Push of
                             // everything we are missing.
@@ -381,9 +415,14 @@ impl App {
                             }
                             match c.recv_timeout(std::time::Duration::from_secs(10)) {
                                 Some(clavus_sync::client::SyncMsg::Push { snapshots, cues }) => {
-                                    let n = snapshots.len();
-                                    let m = cues.len();
-                                    let _ = result_tx.send(format!("pulled {} snapshot(s), {} cue(s)", n, m));
+                                    // Store what arrived, so a pull actually
+                                    // brings the collaborator's work in.
+                                    let (stored, imported) =
+                                        store_pulled(&snapshots, &cues, &clavus_root, &project_name);
+                                    let _ = result_tx.send(format!(
+                                        "pulled {} snapshot(s), {} cue(s)",
+                                        stored, imported
+                                    ));
                                 }
                                 Some(_) => {
                                     let _ = result_tx.send("pulled (nothing new)".to_string());
@@ -480,4 +519,52 @@ impl App {
         let count = store.chain_length(None);
         (head, count)
     }
+}
+
+/// Store snapshots and cues that arrived from a relay.
+///
+/// Returns `(snapshots stored, cues imported)`. Everything that arrives is
+/// untrusted, so the store validates hashes and cue ids before writing.
+pub fn store_pulled(
+    snapshots: &[clavus_core::types::Snapshot],
+    cues: &[clavus_core::types::Cue],
+    clavus_root: &std::path::Path,
+    project_name: &str,
+) -> (usize, usize) {
+    use clavus_core::blob::BlobStore;
+    use clavus_core::cue::{CueStore, ImportOutcome};
+    use clavus_core::snapshot::SnapshotStore;
+
+    let mut stored = 0;
+    let mut imported = 0;
+
+    if !snapshots.is_empty() {
+        if let Ok(blobs) = BlobStore::new(clavus_root.join("blobs")) {
+            let snap_store = SnapshotStore::new(blobs, project_name);
+            for snap in snapshots {
+                if snap_store.has(&snap.hash) {
+                    continue;
+                }
+                if snap_store.save_raw(snap.clone()).is_ok() {
+                    stored += 1;
+                }
+            }
+            // Advance HEAD to the newest snapshot the relay sent.
+            if let Some(newest) = snapshots.last() {
+                let _ = snap_store.set_head(&newest.hash, "pull");
+            }
+        }
+    }
+
+    if !cues.is_empty() {
+        if let Ok(store) = CueStore::new(clavus_root, project_name) {
+            for cue in cues {
+                if matches!(store.import(cue.clone()), Ok(ImportOutcome::Imported)) {
+                    imported += 1;
+                }
+            }
+        }
+    }
+
+    (stored, imported)
 }

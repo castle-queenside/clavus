@@ -789,3 +789,91 @@ fn hostile_relay_with_cues(cues: Vec<clavus_core::types::Cue>) -> String {
     });
     addr
 }
+
+#[test]
+fn pull_imports_cues_from_the_relay() {
+    // Regression: the pull path counted the cues it received but never
+    // stored them, so a collaborator's notes never arrived.
+    let ws = Workspace::new();
+    let als = ws.write_als(&als_xml(&[]));
+    let cue = clavus_core::types::Cue {
+        id: "abc123456789".to_string(),
+        position: "5.1.1".to_string(),
+        text: "bring the vocal up".to_string(),
+        author: "slowhands".to_string(),
+        timestamp: 1.0,
+        status: clavus_core::types::CueStatus::Pending,
+        snapshot_hash: String::new(),
+        track_name: "Vocals".to_string(),
+        assignee: String::new(),
+        in_progress: false,
+        replies: vec![],
+    };
+    let addr = hostile_relay_with_cues(vec![cue]);
+
+    let (out, result) = run(|o, e| cmd_pull(&addr, &als, &ws.root, o, e));
+    assert!(result.is_ok(), "the pull should succeed: {:?}", result);
+    assert!(
+        out.all().contains("bring the vocal up"),
+        "the cue should be reported: {}",
+        out.all()
+    );
+
+    // And it should be in the local cue store.
+    let (list, _) = run(|o, e| cmd_cues(&als, None, &ws.root, o, e));
+    assert!(
+        list.all().contains("bring the vocal up"),
+        "the cue should be stored locally: {}",
+        list.all()
+    );
+}
+
+#[test]
+fn pull_reports_a_conflicting_cue_instead_of_overwriting_the_local_one() {
+    let ws = Workspace::new();
+    let als = ws.write_als(&als_xml(&[]));
+    // A local cue that is newer than the remote one.
+    let (out, result) = run(|o, e| cmd_cue(&als, "local note", "1.1.1", None, &ws.root, o, e));
+    assert!(result.is_ok());
+    let local_id = out
+        .all()
+        .split_whitespace()
+        .find(|w| w.len() == 8 && w.chars().all(|c| c.is_ascii_alphanumeric()))
+        .unwrap_or("")
+        .to_string();
+
+    // A remote cue with the same id but different text and an older timestamp.
+    let remote = clavus_core::types::Cue {
+        id: local_id.clone(),
+        position: "1.1.1".to_string(),
+        text: "remote note".to_string(),
+        author: "slowhands".to_string(),
+        timestamp: 0.0,
+        status: clavus_core::types::CueStatus::Pending,
+        snapshot_hash: String::new(),
+        track_name: String::new(),
+        assignee: String::new(),
+        in_progress: false,
+        replies: vec![],
+    };
+    let addr = hostile_relay_with_cues(vec![remote]);
+    let (out, _result) = run(|o, e| cmd_pull(&addr, &als, &ws.root, o, e));
+    assert!(
+        out.all().contains("Conflict") || out.all().contains("conflict"),
+        "the conflict should be reported: {}",
+        out.all()
+    );
+
+    // The local text must survive.
+    let (list, _) = run(|o, e| cmd_cues(&als, None, &ws.root, o, e));
+    assert!(
+        list.all().contains("local note"),
+        "the local cue must be kept: {}",
+        list.all()
+    );
+    assert!(
+        !list.all().contains("remote note"),
+        "the remote text must not replace the local one: {}",
+        list.all()
+    );
+}

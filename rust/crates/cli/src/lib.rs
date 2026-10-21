@@ -448,7 +448,7 @@ pub fn cmd_collect(project: &Path, _clavus_root: &Path,
 
 pub fn cmd_push(relay: &str, project: &Path, clavus_root: &Path,
     out: &mut dyn Write,
-    _err: &mut dyn Write,
+    err: &mut dyn Write,
 ) -> anyhow::Result<()> {
     use clavus_core::blob::BlobStore;
     use clavus_core::snapshot::SnapshotStore;
@@ -494,15 +494,15 @@ pub fn cmd_push(relay: &str, project: &Path, clavus_root: &Path,
     // Receive relay's state
     let resp = client.recv_timeout(std::time::Duration::from_secs(5));
     match resp {
-        Some(SyncMsg::Push { snapshots: _, cues: _ }) => {
-            outln!(out, "  relay has {} snapshot(s), {} cue(s)", 0, 0);
+        Some(SyncMsg::Push { snapshots, cues }) => {
+            outln!(out, "  relay has {} snapshot(s), {} cue(s)", snapshots.len(), cues.len());
         }
         Some(_) | None => {
             // Relay sent something else or nothing — that's fine
         }
     }
 
-    // Push our local snapshots
+    // Push our local snapshots and cues.
     let push_snaps: Vec<_> = snapshots.into_iter().map(|s| {
         // Reconstruct a minimal Snapshot from what's in the store
         clavus_core::types::Snapshot {
@@ -520,9 +520,21 @@ pub fn cmd_push(relay: &str, project: &Path, clavus_root: &Path,
         }
     }).collect();
 
-    outln!(out, "Pushing {} snapshot(s)...", push_snaps.len());
+    // The project's cues travel with the snapshots — a collaborator's
+    // notes are the point of the cue system.
+    let push_cues = match clavus_core::CueStore::new(clavus_root, &name) {
+        Ok(store) => store.list(None).unwrap_or_default(),
+        Err(e) => {
+            errln!(err, "  ⚠ Could not open the cue store: {}", e);
+            Vec::new()
+        }
+    };
+
+    let push_count = push_snaps.len();
+    let push_cue_count = push_cues.len();
+    outln!(out, "Pushing {} snapshot(s), {} cue(s)...", push_count, push_cue_count);
     client
-        .push(push_snaps, vec![])
+        .push(push_snaps, push_cues)
         .map_err(|e| anyhow::anyhow!("Push: {}", e))?;
 
     // Wait for Synced or Conflict
@@ -530,7 +542,8 @@ pub fn cmd_push(relay: &str, project: &Path, clavus_root: &Path,
     loop {
         match client.recv_timeout(timeout) {
             Some(SyncMsg::Synced) => {
-                outln!(out, "✓ All snapshots pushed successfully");
+                outln!(out, "✓ Pushed {} snapshot(s) and {} cue(s)",
+                    push_count, push_cue_count);
                 break;
             }
             Some(SyncMsg::Conflict { project, relay_head, push_head }) => {
@@ -554,7 +567,7 @@ pub fn cmd_push(relay: &str, project: &Path, clavus_root: &Path,
 
 pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
     out: &mut dyn Write,
-    _err: &mut dyn Write,
+    err: &mut dyn Write,
 ) -> anyhow::Result<()> {
     use clavus_core::blob::BlobStore;
     use clavus_core::snapshot::SnapshotStore;
@@ -588,9 +601,10 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
     // Receive relay's response (Push with missing snapshots)
     let timeout = std::time::Duration::from_secs(10);
     let mut pulled_count = 0;
+    let mut pulled_cues = 0;
     loop {
         match client.recv_timeout(timeout) {
-            Some(SyncMsg::Push { snapshots, cues: _ }) => {
+            Some(SyncMsg::Push { snapshots, cues }) => {
                 let mut newest: Option<String> = None;
                 for snap in &snapshots {
                     if !snap_store.has(&snap.hash) {
@@ -615,6 +629,8 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
                         ),
                     }
                 }
+                // Import the collaborator's cues into the local cue store.
+                pulled_cues += import_cues(&cues, clavus_root, &name, out, err);
                 client.synced().ok();
                 break;
             }
@@ -642,7 +658,52 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
         outln!(out, "✓ Already up to date");
     }
 
+    if pulled_cues > 0 {
+        outln!(out, "✓ Imported {} new cue(s)", pulled_cues);
+    }
+
     Ok(())
+}
+
+/// Import remote cues into the local cue store.
+///
+/// Returns the number of cues that were newly added. A cue that is already
+/// present, or that conflicts with a newer local one, is reported but not
+/// counted as new.
+fn import_cues(
+    cues: &[clavus_core::types::Cue],
+    clavus_root: &Path,
+    project_name: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> usize {
+    if cues.is_empty() {
+        return 0;
+    }
+    let store = match clavus_core::CueStore::new(clavus_root, project_name) {
+        Ok(s) => s,
+        Err(e) => {
+            errln!(err, "  ⚠ Could not open the cue store: {}", e);
+            return 0;
+        }
+    };
+    let mut imported = 0;
+    for cue in cues {
+        match store.import(cue.clone()) {
+            Ok(clavus_core::cue::ImportOutcome::Imported) => {
+                outln!(out, "  ✎ {}  {}", truncate(&cue.id, 8), truncate(&cue.text, 40));
+                imported += 1;
+            }
+            Ok(clavus_core::cue::ImportOutcome::Unchanged) => {}
+            Ok(clavus_core::cue::ImportOutcome::Conflict) => {
+                outln!(out, "  ⚠ Conflict on cue {} — kept the local copy", truncate(&cue.id, 8));
+            }
+            Err(e) => {
+                errln!(err, "  ⚠ Rejected cue {}: {}", truncate(&cue.id, 8), e);
+            }
+        }
+    }
+    imported
 }
 
 pub fn cmd_restore(project: &Path, hash_arg: &str, clavus_root: &Path,

@@ -283,7 +283,30 @@ impl SnapshotStore {
             ClavusError::BlobNotFound(snap.hash.clone())
         })?;
 
-        let dest = target.unwrap_or_else(|| Path::new(&snap.project_path));
+        let dest = match target {
+            Some(t) => t.to_path_buf(),
+            None => {
+                // The project path comes from the snapshot, which may have
+                // been pushed by a remote peer. Only DAW project files are
+                // restored, so a crafted path cannot be used to write
+                // project bytes somewhere else on the disk.
+                let p = Path::new(&snap.project_path);
+                let is_project = p
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| {
+                        e.eq_ignore_ascii_case("als") || e.eq_ignore_ascii_case("bwproject")
+                    })
+                    .unwrap_or(false);
+                if !is_project {
+                    return Err(ClavusError::ParseError(format!(
+                        "refusing to restore to {:?}: not an Ableton (.als) or Bitwig (.bwproject) project",
+                        snap.project_path
+                    )));
+                }
+                p.to_path_buf()
+            }
+        };
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| ClavusError::ParseError(format!("create parent dirs for {}: {}", dest.display(), e)))?;
@@ -293,7 +316,7 @@ impl SnapshotStore {
         let tmp = dest.with_extension("tmp");
         std::fs::write(&tmp, &blob)
             .map_err(|e| ClavusError::ParseError(format!("write {}: {}", tmp.display(), e)))?;
-        std::fs::rename(&tmp, dest)
+        std::fs::rename(&tmp, &dest)
             .map_err(|e| ClavusError::ParseError(format!("rename {}: {}", dest.display(), e)))?;
 
         // Update HEAD to the restored snapshot

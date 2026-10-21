@@ -452,3 +452,48 @@ fn test_a_short_hash_does_not_panic() {
     assert!(store.sample_filename("a").is_none());
     assert!(store.sample_relpath("a").is_none());
 }
+
+#[test]
+fn test_restore_refuses_a_non_project_destination_from_a_remote_snapshot() {
+    // A snapshot's project_path can come from a remote peer, so restoring
+    // to it must not be able to write project bytes anywhere on disk.
+    let tmp = TempDir::new().unwrap();
+    let store = BlobStore::new(tmp.path().join("blobs")).unwrap();
+    let snap_store = SnapshotStore::new(store.clone(), "demo");
+
+    let bytes = b"<LiveSet/>".to_vec();
+    let hash = store.put(&bytes);
+    let mut snap = make_snap(&hash, None);
+    snap.project_path = "/tmp/definitely-not-a-project.txt".to_string();
+    store.write_meta(&snap).unwrap();
+
+    let err = snap_store
+        .restore(&hash, None)
+        .expect_err("restore must refuse a non-project destination");
+    assert!(
+        err.to_string().contains("refusing to restore"),
+        "unexpected error: {}",
+        err
+    );
+    assert!(
+        !std::path::Path::new("/tmp/definitely-not-a-project.txt").exists(),
+        "nothing may be written to the remote path"
+    );
+}
+
+#[test]
+fn test_restore_to_an_explicit_target_still_works() {
+    let tmp = TempDir::new().unwrap();
+    let store = BlobStore::new(tmp.path().join("blobs")).unwrap();
+    let snap_store = SnapshotStore::new(store.clone(), "demo");
+
+    let bytes = b"<LiveSet/>".to_vec();
+    let hash = store.put(&bytes);
+    let mut snap = make_snap(&hash, None);
+    snap.project_path = "/tmp/whatever.txt".to_string();
+    store.write_meta(&snap).unwrap();
+
+    let target = tmp.path().join("Restored.als");
+    snap_store.restore(&hash, Some(&target)).expect("restore");
+    assert_eq!(std::fs::read(&target).unwrap(), bytes);
+}
