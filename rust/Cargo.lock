@@ -351,6 +351,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tracing",
+ "zip",
 ]
 
 [[package]]

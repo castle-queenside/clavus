@@ -5,7 +5,7 @@
 //! were written and the text the user would see.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use clavus_cli::{
@@ -1030,4 +1030,82 @@ fn projects_finds_files_with_an_uppercase_extension() {
 
     let (out, _) = run(|o, e| cmd_projects(false, Some(&scan), o, e));
     assert!(out.all().contains("Loud"), "{}", out.all());
+}
+
+// ─── Bitwig archives with embedded samples ────────────────────────────────
+
+/// Build a `.bwproject` whose project.xml points at an absolute path but
+/// which carries its own copy of the sample.
+fn bwproject_with_embedded_sample(path: &Path, sample_name: &str, reference: &str) {
+    use std::io::Write;
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let opts = zip::write::SimpleFileOptions::default();
+
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<Project VersionMajor="5" VersionMinor="1" Name="Test">
+  <Tracks>
+    <Track Type="Audio" Index="0">
+      <Name Value="Drums" />
+      <DeviceChain />
+      <Mute Value="false" />
+      <Solo Value="false" />
+      <Volume Value="0.8" />
+      <AudioClip File="{}" />
+    </Track>
+  </Tracks>
+</Project>"#,
+        reference
+    );
+    w.start_file("project.xml", opts).unwrap();
+    w.write_all(xml.as_bytes()).unwrap();
+    w.start_file(&format!("samples/{}", sample_name), opts).unwrap();
+    w.write_all(b"RIFF----WAVEfake").unwrap();
+
+    let cursor = w.finish().unwrap();
+    fs::write(path, cursor.into_inner()).unwrap();
+}
+
+#[test]
+fn audit_does_not_call_an_archived_sample_missing() {
+    let tmp = TempDir::new().unwrap();
+    let proj = tmp.path().join("Test.bwproject");
+    bwproject_with_embedded_sample(&proj, "kick.wav", "/Users/other/Library/kick.wav");
+
+    let (out, result) = run(|o, e| cmd_audit(&proj, false, o, e));
+    assert!(result.is_ok(), "{:?}", result);
+    let text = out.all();
+    assert!(
+        !text.contains("missing"),
+        "an archived sample must not be reported missing: {}",
+        text
+    );
+    assert!(
+        text.contains("inside the project archive"),
+        "the user should be told the sample is in the archive: {}",
+        text
+    );
+}
+
+#[test]
+fn collect_extracts_an_archived_sample() {
+    let tmp = TempDir::new().unwrap();
+    let proj = tmp.path().join("Test.bwproject");
+    bwproject_with_embedded_sample(&proj, "kick.wav", "/Users/other/Library/kick.wav");
+
+    let (out, result) = run(|o, e| cmd_collect(&proj, &tmp.path().join(".clavus"), o, e));
+    assert!(result.is_ok(), "{:?} — {}", result, out.all());
+    assert!(
+        tmp.path().join("Samples").join("kick.wav").exists(),
+        "the sample should be extracted: {}",
+        out.all()
+    );
+
+    // The reference inside the archive now points at the extracted copy.
+    let entries = clavus_core::bitwig_archive::list_entries(&proj).unwrap();
+    let xml_name = clavus_core::bitwig_archive::find_project_xml(&entries).unwrap();
+    let xml =
+        String::from_utf8(clavus_core::bitwig_archive::read_entry(&proj, &xml_name).unwrap())
+            .unwrap();
+    assert!(xml.contains(r#"File="Samples/kick.wav""#), "{}", xml);
 }

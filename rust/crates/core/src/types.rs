@@ -303,6 +303,13 @@ pub struct SampleAuditReport {
     /// Samples found on disk but outside the project folder.
     /// Block snapshot creation unless user runs `clavus collect`.
     pub outside_project: Vec<SampleRef>,
+    /// Samples that are not on disk but are inside the project archive.
+    ///
+    /// A `.bwproject` exported from Bitwig carries a copy of every
+    /// sample it uses, so these are present — the snapshot is safe —
+    /// but they can be extracted with `clavus collect`.
+    #[serde(default)]
+    pub embedded: Vec<SampleRef>,
 }
 
 impl SampleAuditReport {
@@ -333,7 +340,7 @@ impl SampleAuditReport {
 
     /// Total number of sample references found.
     pub fn total(&self) -> usize {
-        self.collected.len() + self.missing.len() + self.outside_project.len()
+        self.collected.len() + self.missing.len() + self.outside_project.len() + self.embedded.len()
     }
 
     /// Total size of all collected samples in bytes.

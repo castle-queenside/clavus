@@ -85,6 +85,7 @@ fn test_audit_report_is_clean() {
         collected: vec![],
         missing: vec![],
         outside_project: vec![],
+        embedded: vec![],
     };
     assert!(report.is_clean());
 }
@@ -102,7 +103,8 @@ fn test_audit_report_missing_not_clean() {
             size_bytes: 0,
         }],
         outside_project: vec![],
-    };
+    
+        embedded: vec![],};
     assert!(!report.is_clean());
     assert_eq!(report.total(), 1);
 }
@@ -120,7 +122,8 @@ fn test_audit_report_outside_project_not_clean() {
             hash: Some("deadbeef".to_string()),
             size_bytes: 1024,
         }],
-    };
+    
+        embedded: vec![],};
     assert!(!report.is_clean());
     assert_eq!(report.total(), 1);
 }
@@ -140,7 +143,8 @@ fn test_audit_report_all_present() {
         ],
         missing: vec![],
         outside_project: vec![],
-    };
+    
+        embedded: vec![],};
     assert!(report.is_clean());
     assert_eq!(report.total(), 1);
 }

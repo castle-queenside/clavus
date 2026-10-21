@@ -532,3 +532,126 @@ fn test_audit_accepts_a_plain_xml_live_set() {
     let report = audit_project(&path).expect("plain XML should audit");
     assert_eq!(report.collected.len(), 1);
 }
+
+// ─── Bitwig archives that carry their own samples ──────────────────────────
+//
+// A `.bwproject` exported from Bitwig keeps a copy of every sample it
+// uses, but the references inside project.xml still point at the
+// original machine's absolute paths. On the receiving machine those
+// samples look missing even though they are in the archive.
+
+use std::io::Write;
+
+/// Build a `.bwproject` archive with an absolute sample reference and an
+/// embedded copy of the sample.
+fn make_bwproject(path: &Path, sample_name: &str, reference: &str, embed: bool) {
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let opts = zip::write::SimpleFileOptions::default();
+
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<Project VersionMajor="5" VersionMinor="1" Name="Test">
+  <Tracks>
+    <Track Type="Audio" Index="0">
+      <Name Value="Drums" />
+      <DeviceChain />
+      <Mute Value="false" />
+      <Solo Value="false" />
+      <Volume Value="0.8" />
+      <AudioClip File="{}" />
+    </Track>
+  </Tracks>
+</Project>"#,
+        reference
+    );
+    w.start_file("project.xml", opts).unwrap();
+    w.write_all(xml.as_bytes()).unwrap();
+
+    if embed {
+        w.start_file(&format!("samples/{}", sample_name), opts).unwrap();
+        w.write_all(b"RIFF----WAVEfake").unwrap();
+    }
+
+    let cursor = w.finish().unwrap();
+    std::fs::write(path, cursor.into_inner()).unwrap();
+}
+
+#[test]
+fn test_a_sample_inside_the_archive_is_not_missing() {
+    let tmp = TempDir::new().unwrap();
+    let proj = tmp.path().join("Test.bwproject");
+    make_bwproject(&proj, "kick.wav", "/Users/other/Library/kick.wav", true);
+
+    let report = audit_project(&proj).unwrap();
+    assert!(
+        report.missing.is_empty(),
+        "a sample inside the archive must not be reported missing: {:?}",
+        report.missing
+    );
+    assert_eq!(report.embedded.len(), 1);
+    assert_eq!(report.embedded[0].filename, "kick.wav");
+    // It is present, so the snapshot is not blocked.
+    assert!(report.is_clean());
+}
+
+#[test]
+fn test_a_sample_missing_from_disk_and_the_archive_is_missing() {
+    let tmp = TempDir::new().unwrap();
+    let proj = tmp.path().join("Test.bwproject");
+    make_bwproject(&proj, "kick.wav", "/Users/other/Library/kick.wav", false);
+
+    let report = audit_project(&proj).unwrap();
+    assert_eq!(report.missing.len(), 1);
+    assert!(report.embedded.is_empty());
+    assert!(!report.is_clean());
+}
+
+#[test]
+fn test_collect_extracts_a_sample_from_the_archive() {
+    let tmp = TempDir::new().unwrap();
+    let proj = tmp.path().join("Test.bwproject");
+    make_bwproject(&proj, "kick.wav", "/Users/other/Library/kick.wav", true);
+
+    let report = audit_project(&proj).unwrap();
+    let collect = collect_samples(&proj, &report).unwrap();
+
+    assert_eq!(collect.copied.len(), 1, "{:?}", collect.failed);
+    assert!(collect.failed.is_empty());
+    let extracted = tmp.path().join("Samples").join("kick.wav");
+    assert!(extracted.exists(), "the sample should be extracted");
+    assert_eq!(
+        std::fs::read(&extracted).unwrap(),
+        b"RIFF----WAVEfake"
+    );
+
+    // The reference inside the archive now points at the extracted copy.
+    let entries = clavus_core::bitwig_archive::list_entries(&proj).unwrap();
+    let xml_name = clavus_core::bitwig_archive::find_project_xml(&entries).unwrap();
+    let xml = String::from_utf8(
+        clavus_core::bitwig_archive::read_entry(&proj, &xml_name).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        xml.contains(r#"File="Samples/kick.wav""#),
+        "the reference should be rewritten: {}",
+        xml
+    );
+    assert!(
+        !xml.contains("/Users/other/Library/kick.wav"),
+        "the old path should be gone: {}",
+        xml
+    );
+
+    // The other archive entries survive the rewrite.
+    assert!(entries.contains(&"samples/kick.wav".to_string()));
+    assert_eq!(
+        clavus_core::bitwig_archive::read_entry(&proj, "samples/kick.wav").unwrap(),
+        b"RIFF----WAVEfake"
+    );
+
+    // And the project now audits clean with nothing left in the archive.
+    let after = audit_project(&proj).unwrap();
+    assert!(after.is_clean());
+    assert!(after.embedded.is_empty());
+    assert_eq!(after.collected.len(), 1);
+}

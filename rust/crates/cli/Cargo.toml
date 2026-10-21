@@ -21,3 +21,4 @@ tempfile = "3"
 flate2 = "1"
 clavus-sync = { path = "../sync" }
 serde_json = "1"
+zip = "2"

@@ -21,7 +21,7 @@
 | CLI commands | `crates/cli/tests/cli_tests.rs` | 45 | 🟢 |
 | Core unit tests | `crates/core/src/**` | 5 | 🟢 |
 
-**310 tests passing, 0 failed, 0 ignored.**
+**318 tests passing, 0 failed, 0 ignored.**
 
 Legend: 🟢 good  🟡 partial  🟠 manual only  🔴 missing
 
@@ -157,6 +157,7 @@ real ones. Each now has a regression test:
 | A short hash crashed the display code | Hashes and cue ids were sliced with `[..8]`, which panics on a shorter string — and a hostile relay controls both | `clavus_core::short()` truncates without panicking; incoming data is validated before it is used |
 | A hostile relay could store a malformed snapshot | The client delivered whatever the server sent, unchecked | The client drops snapshots with a bad hash or parent and cues with a bad id |
 | A pre-epoch file timestamp crashed `projects` | `duration_since(UNIX_EPOCH).unwrap()` panicked on a file older than 1970 | The timestamp falls back to `????-??-?? ??:??` |
+| A Bitwig archive's samples looked missing | A `.bwproject` exported from Bitwig keeps a copy of every sample, but `project.xml` still points at the original machine's absolute paths — so the samples looked lost | The audit sees what the archive holds and reports those samples as present; `collect` extracts them and rewrites the reference inside the archive |
 
 ---
 

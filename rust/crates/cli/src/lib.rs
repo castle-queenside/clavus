@@ -385,7 +385,12 @@ pub fn cmd_audit(project: &Path, strict: bool,
     let report = sample::audit_project(project)?;
 
     if report.is_clean() {
-        outln!(out, "✓ {} present", plural(report.collected.len(), "sample", "samples"));
+        outln!(out, "✓ {} present", plural(report.total(), "sample", "samples"));
+        if !report.embedded.is_empty() {
+            outln!(out,
+                "  {} inside the project archive — run `clavus collect` to extract",
+                plural(report.embedded.len(), "sample", "samples"));
+        }
     } else {
         if !report.missing.is_empty() {
             errln!(err, "✗ {} missing:", report.missing.len());
@@ -412,16 +417,17 @@ pub fn cmd_collect(project: &Path, _clavus_root: &Path,
 ) -> anyhow::Result<()> {
     let report = sample::audit_project(project)?;
 
-    if report.is_clean() {
+    if report.is_clean() && report.embedded.is_empty() {
         outln!(out, "✓ {} already present, all inside project folder",
-            plural(report.collected.len(), "sample", "samples"));
+            plural(report.total(), "sample", "samples"));
         return Ok(());
     }
 
     outln!(out, 
-        "  {} missing  ·  {} outside project",
+        "  {} missing  ·  {} outside project  ·  {} inside archive",
         report.missing.len(),
-        report.outside_project.len()
+        report.outside_project.len(),
+        report.embedded.len()
     );
 
     // Copy outside-project samples into project/Samples/ and rewrite paths
@@ -430,7 +436,16 @@ pub fn cmd_collect(project: &Path, _clavus_root: &Path,
     if !collect.copied.is_empty() {
         outln!(out, "\n✓ Collected {} into project/Samples/",
             plural(collect.copied.len(), "sample", "samples"));
-        outln!(out, "  Paths in .als rewritten — restart Ableton to reload");
+        let is_bitwig = project
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|e| e.eq_ignore_ascii_case("bwproject"))
+            .unwrap_or(false);
+        if is_bitwig {
+            outln!(out, "  Paths in the project archive rewritten — reopen the project in Bitwig");
+        } else {
+            outln!(out, "  Paths in .als rewritten — restart Ableton to reload");
+        }
     }
 
     if !collect.failed.is_empty() {

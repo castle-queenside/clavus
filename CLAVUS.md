@@ -60,6 +60,15 @@ streams rather than straight to stdout.
   project was snapshotted last owned the chain, and the other project's
   `log`, `push` and `restore` showed the wrong history.
 
+### Bitwig archives
+A `.bwproject` is a ZIP archive holding `project.xml` and, usually, a copy
+of every sample the project uses. The references inside `project.xml`
+still point at the original machine's absolute paths, so on another
+machine those samples look missing even though they are in the archive.
+`clavus_core::bitwig_archive` reads and rewrites the archive: the audit
+knows which samples the archive holds, and `collect` extracts them into
+`Samples/` and rewrites the reference inside `project.xml`.
+
 ### Untrusted remote data
 Snapshots, cues, hashes and ref names all arrive from remote peers.
 Everything that becomes a file name is validated before it is used:

@@ -190,8 +190,33 @@ pub fn audit_project(project_path: &Path) -> Result<SampleAuditReport, ClavusErr
         extract_als_sample_paths_from_xml(&xml)
     };
 
-    debug!("audit_project: {} sample refs from {}", refs.len(), project_path.display());
-    audit_sample_refs(&refs, project_root)
+    // A `.bwproject` archive usually carries a copy of every sample it
+    // uses. Those samples are not on disk, but they are not lost either,
+    // so the audit has to know what the archive holds before it calls a
+    // sample missing.
+    let embedded = if ext == "bwproject" {
+        let entries = crate::bitwig_archive::list_entries(project_path)?;
+        entries
+            .iter()
+            .filter(|n| !n.ends_with('/') && !n.ends_with('\\'))
+            .map(|n| {
+                n.rsplit(['/', '\\'])
+                    .next()
+                    .unwrap_or(n)
+                    .to_string()
+            })
+            .collect::<Vec<String>>()
+    } else {
+        Vec::new()
+    };
+
+    debug!(
+        "audit_project: {} sample refs ({} embedded in archive) from {}",
+        refs.len(),
+        embedded.len(),
+        project_path.display()
+    );
+    audit_sample_refs(&refs, project_root, &embedded)
 }
 
 /// Validate that `xml` is an Ableton Live set.
@@ -358,10 +383,12 @@ pub fn project_root_of(project_path: &Path) -> Option<&Path> {
 fn audit_sample_refs(
     paths: &[PathBuf],
     project_root: &Path,
+    archive_files: &[String],
 ) -> Result<SampleAuditReport, ClavusError> {
     let mut collected = Vec::new();
     let mut missing = Vec::new();
     let mut outside_project = Vec::new();
+    let mut embedded = Vec::new();
 
     // De-duplicate references: a sample used by six clips is one file, and
     // reporting it six times hides the real problem behind noise.
@@ -458,6 +485,13 @@ fn audit_sample_refs(
             size_bytes: size,
         };
 
+        // A sample that is not on disk may still be inside the project
+        // archive. That is a present sample, not a missing one.
+        let in_archive = ref_.resolved_path.is_none()
+            && archive_files
+                .iter()
+                .any(|e: &String| e.eq_ignore_ascii_case(&ref_.filename));
+
         match (ref_.resolved_path.is_some(), relpath.is_some()) {
             (true, true) => {
                 // Found AND inside project folder
@@ -466,6 +500,10 @@ fn audit_sample_refs(
             (true, false) => {
                 // Found but OUTSIDE project folder
                 outside_project.push(ref_);
+            }
+            (false, _) if in_archive => {
+                // Inside the project archive — present, just not extracted
+                embedded.push(ref_);
             }
             (false, _) => {
                 // NOT FOUND
@@ -478,6 +516,7 @@ fn audit_sample_refs(
         collected,
         missing,
         outside_project,
+        embedded,
     };
 
     if !report.is_clean() {
@@ -525,8 +564,26 @@ pub fn collect_samples(
     // Map: original path as stored in XML → new relative path (Unix-slash)
     let mut path_replacements: HashMap<String, String> = HashMap::new();
 
-    // Collect outside_project + missing (samples we CAN find)
-    for ref_ in report.outside_project.iter().chain(report.missing.iter()) {
+    // A `.bwproject` archive carries its own copies of the samples it
+    // uses. Those can be extracted even though nothing is on disk.
+    let is_bitwig = project_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|e| e.eq_ignore_ascii_case("bwproject"))
+        .unwrap_or(false);
+    let archive_entries = if is_bitwig {
+        crate::bitwig_archive::list_entries(project_path).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    // Collect outside_project + missing + embedded (samples we CAN find)
+    let candidates = report
+        .outside_project
+        .iter()
+        .chain(report.missing.iter())
+        .chain(report.embedded.iter());
+    for ref_ in candidates {
         if let Some(ref resolved) = ref_.resolved_path {
             let dest = samples_dir.join(&ref_.filename);
             match fs::copy(resolved, &dest) {
@@ -543,15 +600,46 @@ pub fn collect_samples(
                     failed.push((ref_.path.clone(), e.to_string()));
                 }
             }
+        } else if let Some(entry) =
+            crate::bitwig_archive::find_entry_by_filename(&archive_entries, &ref_.filename)
+        {
+            // The sample is inside the project archive — extract it.
+            let dest = samples_dir.join(&ref_.filename);
+            match crate::bitwig_archive::read_entry(project_path, &entry)
+                .and_then(|data| {
+                    fs::write(&dest, &data).map_err(|e| {
+                        ClavusError::ParseError(format!("write {}: {}", dest.display(), e))
+                    })?;
+                    Ok::<(), ClavusError>(())
+                }) {
+                Ok(()) => {
+                    info!("Extracted {} from the project archive", ref_.filename);
+                    copied.push(dest);
+                    let new_rel = format!("Samples/{}", ref_.filename);
+                    let orig = ref_.path.to_string_lossy().replace('\\', "/");
+                    path_replacements.insert(orig, new_rel);
+                }
+                Err(e) => {
+                    error!("Failed to extract {}: {}", ref_.filename, e);
+                    failed.push((ref_.path.clone(), e.to_string()));
+                }
+            }
         } else {
-            // Missing: file doesn't exist on disk, can't copy
+            // Missing: file doesn't exist on disk and isn't in the archive
             failed.push((ref_.path.clone(), "file not found on disk".to_string()));
         }
     }
 
     // Rewrite project file sample paths
     if !path_replacements.is_empty() {
-        rewrite_project_sample_paths(project_path, path_replacements)?;
+        if is_bitwig {
+            // The reference lives inside the archive's project.xml.
+            for (old, new) in &path_replacements {
+                crate::bitwig_archive::rewrite_sample_path(project_path, old, new)?;
+            }
+        } else {
+            rewrite_project_sample_paths(project_path, path_replacements)?;
+        }
     }
 
     Ok(CollectReport { copied, failed })
