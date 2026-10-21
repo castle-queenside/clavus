@@ -14,7 +14,10 @@ flate2 = "1"
 tracing = "0.1"
 thiserror = "1"
 anyhow = "1"
-zip = "2"
+# Only the deflate compression is needed, and the default features pull
+# in zstd, which compiles C and needs a cross-compiler for the musl
+# release targets. The Bitwig archive is a plain ZIP.
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile = "3"

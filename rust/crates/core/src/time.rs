@@ -45,8 +45,16 @@ impl LocalTime {
 pub fn local_time(secs: i64) -> LocalTime {
     // `localtime_r` fills in a `tm` the caller owns, so this is safe to
     // call from more than one thread.
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    // `libc::time_t` is 64 bits on most platforms but 32 bits on musl
+    // before 1.2, and the libc crate warns about the alias. An instant
+    // that the platform's type cannot hold falls back to UTC rather
+    // than wrapping into the wrong year.
+    #[allow(deprecated)]
     let time_t = secs as libc::time_t;
+    if secs as i128 != time_t as i128 {
+        return utc_time(secs);
+    }
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     let ok = !unsafe { libc::localtime_r(&time_t, &mut tm) }.is_null();
     if !ok {
         return utc_time(secs);

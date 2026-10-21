@@ -11,7 +11,6 @@ clavus-parser-bw = { path = "../parser-bw" }
 clavus-sync = { path = "../sync" }
 ratatui = "0.26"
 crossterm = "0.27"
-tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"

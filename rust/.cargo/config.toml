@@ -1,2 +1,11 @@
+# The musl release targets are built from a macOS machine as well as from
+# Linux, so they link themselves: rustup ships the musl libc and the
+# start files with the target, and rust-lld does the linking. No musl-gcc
+# and no cross toolchain is needed on the build machine.
 [target.x86_64-unknown-linux-musl]
-linker = "musl-gcc"
+linker = "rust-lld"
+rustflags = ["-C", "link-self-contained=yes", "-C", "target-feature=+crt-static"]
+
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"
+rustflags = ["-C", "link-self-contained=yes", "-C", "target-feature=+crt-static"]

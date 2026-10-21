@@ -10,7 +10,10 @@ sha2 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 quick-xml = "0.31"
-zip = "2"
+# Only the deflate compression is needed, and the default features pull
+# in zstd, which compiles C and needs a cross-compiler for the musl
+# release targets. The Bitwig archive is a plain ZIP.
+zip = { version = "2", default-features = false, features = ["deflate"] }
 flate2 = "1"
 tracing = "0.1"
 thiserror = "1"
@@ -18,4 +21,4 @@ anyhow = "1"
 
 [dev-dependencies]
 tempfile = "3"
-zip = "2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
