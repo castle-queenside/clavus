@@ -18,6 +18,11 @@ use tempfile::TempDir;
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
 fn make_snap(hash: &str, parent: Option<&str>) -> Snapshot {
+    make_snap_for(hash, parent, "test")
+}
+
+/// A snapshot belonging to `project`.
+fn make_snap_for(hash: &str, parent: Option<&str>, project: &str) -> Snapshot {
     Snapshot {
         hash: hash.to_string(),
         parent: parent.map(|s| s.to_string()),
@@ -29,13 +34,19 @@ fn make_snap(hash: &str, parent: Option<&str>) -> Snapshot {
         notes: String::new(),
         sample_hashes: vec![],
         sample_paths: HashMap::new(),
-        project_path: "/tmp/test.als".to_string(),
+        project_path: format!("/tmp/{}.als", project),
     }
 }
 
 fn make_cue(id: &str) -> Cue {
+    make_cue_for(id, "demo")
+}
+
+/// A cue belonging to `project`.
+fn make_cue_for(id: &str, project: &str) -> Cue {
     Cue {
         id: id.to_string(),
+        project: project.to_string(),
         position: "1.1.1".to_string(),
         text: "test cue".to_string(),
         author: "test".to_string(),
@@ -115,20 +126,21 @@ fn real_relay_stores_and_returns_pushed_snapshots() {
     let tmp = TempDir::new().unwrap();
     let addr = start_real_relay(&tmp);
 
+    // Both clients work on the same project, so both name it in Hello.
     let client = SyncClient::connect(&addr).expect("connect");
-    client.hello("pusher", vec![]).expect("hello");
+    client.hello("test", vec![]).expect("hello");
     let _ = client.recv_timeout(Duration::from_secs(3));
 
     client
         .send(SyncMsg::Push {
             snapshots: vec![make_snap("a".repeat(64).as_str(), None)],
-            cues: vec![make_cue("cue-1")],
+            cues: vec![make_cue_for("cue-1", "test")],
         })
         .expect("push");
 
     // A second client should be offered the stored snapshot.
     let client2 = SyncClient::connect(&addr).expect("connect");
-    client2.hello("puller", vec![]).expect("hello");
+    client2.hello("test", vec![]).expect("hello");
     let msg = client2
         .recv_timeout(Duration::from_secs(3))
         .expect("relay should push stored snapshots");
@@ -207,7 +219,7 @@ fn real_relay_persists_across_restart() {
     {
         let addr = start_real_relay(&tmp);
         let client = SyncClient::connect(&addr).expect("connect");
-        client.hello("writer", vec![]).expect("hello");
+        client.hello("test", vec![]).expect("hello");
         let _ = client.recv_timeout(Duration::from_secs(3));
         client
             .send(SyncMsg::Push {
@@ -224,7 +236,7 @@ fn real_relay_persists_across_restart() {
     {
         let addr = start_real_relay(&tmp);
         let client = SyncClient::connect(&addr).expect("connect");
-        client.hello("reader", vec![]).expect("hello");
+        client.hello("test", vec![]).expect("hello");
         let msg = client
             .recv_timeout(Duration::from_secs(3))
             .expect("relay should offer the persisted snapshot");
@@ -286,7 +298,7 @@ fn real_relay_ignores_a_duplicate_push() {
     let addr = start_real_relay(&tmp);
 
     let client = SyncClient::connect(&addr).expect("connect");
-    client.hello("dupe", vec![]).expect("hello");
+    client.hello("test", vec![]).expect("hello");
     let _ = client.recv_timeout(Duration::from_secs(3));
 
     let snap = make_snap(&"e".repeat(64), None);
@@ -302,7 +314,7 @@ fn real_relay_ignores_a_duplicate_push() {
 
     // The relay should still hold exactly one copy.
     let client2 = SyncClient::connect(&addr).expect("connect");
-    client2.hello("check", vec![]).expect("hello");
+    client2.hello("test", vec![]).expect("hello");
     match client2.recv_timeout(Duration::from_secs(3)).expect("reply") {
         SyncMsg::Push { snapshots, .. } => {
             assert_eq!(snapshots.len(), 1, "duplicate pushes must not duplicate");
@@ -344,11 +356,153 @@ fn relay_state_lists_stored_snapshots() {
     let snap = make_snap(&"f".repeat(64), None);
     state.store(vec![snap.clone()], vec![]);
 
-    let found = state.find_missing(&[]);
+    // The snapshot's project path is "/tmp/test.als", so it belongs to
+    // the project "test".
+    let found = state.find_missing("test", &[]);
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].hash, "f".repeat(64));
 
     // A client that already knows the head gets nothing.
     let known = vec!["f".repeat(64)];
-    assert!(state.find_missing(&known).is_empty());
+    assert!(state.find_missing("test", &known).is_empty());
+
+    // A client on a different project is offered nothing.
+    assert!(
+        state.find_missing("some-other-project", &[]).is_empty(),
+        "another project must not be offered this history"
+    );
+}
+
+#[test]
+fn real_relay_keeps_each_projects_cues_to_itself() {
+    // Regression: the relay grouped cues by track name, so two projects
+    // with a track called "Drums" mixed their notes together.
+    let tmp = TempDir::new().unwrap();
+    let addr = start_real_relay(&tmp);
+
+    // Project "alpha" pushes a cue.
+    let alpha = SyncClient::connect(&addr).expect("connect");
+    alpha.hello("alpha", vec![]).expect("hello");
+    let _ = alpha.recv_timeout(Duration::from_secs(2));
+    alpha
+        .push(vec![], vec![make_cue_for("alpha-cue", "alpha")])
+        .expect("push");
+    let _ = alpha.recv_timeout(Duration::from_secs(2));
+
+    // Project "beta" pushes a cue with the same track name.
+    let beta = SyncClient::connect(&addr).expect("connect");
+    beta.hello("beta", vec![]).expect("hello");
+    let _ = beta.recv_timeout(Duration::from_secs(2));
+    beta
+        .push(vec![], vec![make_cue_for("beta-cue", "beta")])
+        .expect("push");
+    let _ = beta.recv_timeout(Duration::from_secs(2));
+
+    // A client on "alpha" sees only alpha's cue.
+    let alpha2 = SyncClient::connect(&addr).expect("connect");
+    alpha2.hello("alpha", vec![]).expect("hello");
+    let msg = alpha2.recv_timeout(Duration::from_secs(3));
+    match msg {
+        Some(SyncMsg::Push { cues, .. }) => {
+            let ids: Vec<&str> = cues.iter().map(|c| c.id.as_str()).collect();
+            assert!(
+                ids.contains(&"alpha-cue"),
+                "alpha should see its own cue: {:?}",
+                ids
+            );
+            assert!(
+                !ids.contains(&"beta-cue"),
+                "alpha must not see beta's cue: {:?}",
+                ids
+            );
+        }
+        other => panic!("unexpected reply: {:?}", other),
+    }
+
+    alpha.close();
+    beta.close();
+    alpha2.close();
+}
+
+#[test]
+fn real_relay_does_not_duplicate_a_repeatedly_pushed_cue() {
+    let tmp = TempDir::new().unwrap();
+    let addr = start_real_relay(&tmp);
+
+    let client = SyncClient::connect(&addr).expect("connect");
+    client.hello("test", vec![]).expect("hello");
+    let _ = client.recv_timeout(Duration::from_secs(2));
+
+    for _ in 0..3 {
+        client
+            .push(vec![], vec![make_cue_for("cue-1", "test")])
+            .expect("push");
+        let _ = client.recv_timeout(Duration::from_secs(2));
+    }
+
+    let client2 = SyncClient::connect(&addr).expect("connect");
+    client2.hello("test", vec![]).expect("hello");
+    let msg = client2.recv_timeout(Duration::from_secs(3));
+    match msg {
+        Some(SyncMsg::Push { cues, .. }) => {
+            let count = cues.iter().filter(|c| c.id == "cue-1").count();
+            assert_eq!(count, 1, "the cue should appear once: {:?}", cues);
+        }
+        other => panic!("unexpected reply: {:?}", other),
+    }
+    client.close();
+    client2.close();
+}
+
+#[test]
+fn real_relay_does_not_offer_one_projects_snapshots_to_another() {
+    // Regression: the relay offered every snapshot it held to every
+    // client, so pulling one project pulled another project's history
+    // into the wrong store.
+    let tmp = TempDir::new().unwrap();
+    let addr = start_real_relay(&tmp);
+
+    // Project "alpha" pushes a snapshot.
+    let alpha = SyncClient::connect(&addr).expect("connect");
+    alpha.hello("alpha", vec![]).expect("hello");
+    let _ = alpha.recv_timeout(Duration::from_secs(2));
+    alpha
+        .push(
+            vec![make_snap_for(&"a".repeat(64), None, "alpha")],
+            vec![],
+        )
+        .expect("push");
+    let _ = alpha.recv_timeout(Duration::from_secs(2));
+
+    // A client on "beta" is offered nothing.
+    let beta = SyncClient::connect(&addr).expect("connect");
+    beta.hello("beta", vec![]).expect("hello");
+    let msg = beta.recv_timeout(Duration::from_secs(3));
+    match msg {
+        Some(SyncMsg::Push { snapshots, cues }) => {
+            assert!(
+                snapshots.is_empty(),
+                "beta must not be offered alpha's snapshots: {:?}",
+                snapshots
+            );
+            assert!(cues.is_empty(), "beta must not be offered alpha's cues");
+        }
+        other => panic!("unexpected reply: {:?}", other),
+    }
+
+    // A client on "alpha" is offered alpha's snapshot.
+    let alpha2 = SyncClient::connect(&addr).expect("connect");
+    alpha2.hello("alpha", vec![]).expect("hello");
+    let msg = alpha2.recv_timeout(Duration::from_secs(3));
+    match msg {
+        Some(SyncMsg::Push { snapshots, .. }) => {
+            assert_eq!(snapshots.len(), 1, "alpha should get its snapshot");
+            assert_eq!(snapshots[0].hash, "a".repeat(64));
+        }
+        other => panic!("unexpected reply: {:?}", other),
+    }
+
+    alpha.close();
+    beta.close();
+    alpha2.close();
 }

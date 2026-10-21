@@ -55,16 +55,19 @@ impl BlobStore {
 
     /// Check that `name` is usable as a reference file name.
     ///
-    /// Ref names become file names under the refs directory. A snapshot's
-    /// parent is used as a ref name, and that comes from a remote peer, so
-    /// it must not be able to escape the refs directory.
+    /// Ref names become file names under the refs directory, and a
+    /// snapshot's parent is used as a ref name — that comes from a remote
+    /// peer, so it must not be able to escape the refs directory.
+    ///
+    /// A `/` separates path segments (a project's HEAD lives at
+    /// `<project>/HEAD`), so each segment is checked individually.
     pub fn is_valid_ref_name(name: &str) -> bool {
-        !name.is_empty()
-            && name.len() <= 128
-            && !name.contains('/')
-            && !name.contains('\\')
-            && !name.contains("..")
-            && name != "."
+        if name.is_empty() || name.len() > 128 || name.contains('\\') {
+            return false;
+        }
+        name.split('/').all(|segment| {
+            !segment.is_empty() && segment != "." && segment != ".."
+        })
     }
 
     // ─── Initialization ──────────────────────────────────────────────

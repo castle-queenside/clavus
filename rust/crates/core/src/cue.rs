@@ -13,6 +13,9 @@ use tracing::{debug, info};
 #[derive(Debug)]
 pub struct CueStore {
     cues_dir: PathBuf,
+    /// The project these cues belong to, stamped onto every cue so the
+    /// relay can group them correctly.
+    project_name: String,
 }
 
 /// Outcome of importing a remote cue.
@@ -41,7 +44,10 @@ impl CueStore {
     pub fn new(clavus_root: &Path, project_name: &str) -> std::io::Result<Self> {
         let cues_dir = clavus_root.join("cues").join(project_name);
         fs::create_dir_all(&cues_dir)?;
-        Ok(Self { cues_dir })
+        Ok(Self {
+            cues_dir,
+            project_name: project_name.to_string(),
+        })
     }
 
     fn cue_path(&self, id: &str) -> PathBuf {
@@ -54,7 +60,7 @@ impl CueStore {
     /// project's cue directory. Cues arrive from remote peers over the
     /// sync protocol, so a hostile peer must not be able to read or write
     /// arbitrary files by sending a crafted id.
-    fn validate_cue_id(id: &str) -> Result<(), ClavusError> {
+    pub fn validate_cue_id(id: &str) -> Result<(), ClavusError> {
         if id.is_empty() {
             return Err(ClavusError::ParseError("cue id must not be empty".into()));
         }
@@ -95,6 +101,7 @@ impl CueStore {
 
         let cue = Cue {
             id: id.clone(),
+            project: self.project_name.clone(),
             position: position.to_string(),
             text: text.to_string(),
             author: author.to_string(),
@@ -305,6 +312,10 @@ impl CueStore {
     pub fn import(&self, remote_cue: Cue) -> Result<ImportOutcome, ClavusError> {
         // The cue comes from a remote peer — never trust its id.
         Self::validate_cue_id(&remote_cue.id)?;
+        // The cue now lives in this project's store, so that is the
+        // project it belongs to, whatever the sender said.
+        let mut remote_cue = remote_cue;
+        remote_cue.project = self.project_name.clone();
         if let Some(local) = self.load(&remote_cue.id)? {
             let key = |c: &Cue| {
                 format!("{}|{}|{}|{}", c.text, c.status.as_str(), c.position, c.assignee)

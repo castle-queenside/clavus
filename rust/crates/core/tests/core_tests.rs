@@ -497,3 +497,110 @@ fn test_restore_to_an_explicit_target_still_works() {
     snap_store.restore(&hash, Some(&target)).expect("restore");
     assert_eq!(std::fs::read(&target).unwrap(), bytes);
 }
+
+// ─── Per-project HEAD ──────────────────────────────────────────────────────
+//
+// The blob store is shared by every project, so each project needs its own
+// HEAD. With a single shared ref, whichever project was snapshotted last
+// owned the chain, and `log`, `push` and `restore` for the other project
+// showed the wrong history.
+
+#[test]
+fn test_each_project_has_its_own_head() {
+    let tmp = TempDir::new().unwrap();
+    let store = BlobStore::new(tmp.path().join("blobs")).unwrap();
+    let alpha = SnapshotStore::new(store.clone(), "Alpha");
+    let beta = SnapshotStore::new(store.clone(), "Beta");
+
+    let a = tmp.path().join("Alpha.als");
+    let b = tmp.path().join("Beta.als");
+    std::fs::write(&a, b"<LiveSet id='alpha'/>").unwrap();
+    std::fs::write(&b, b"<LiveSet id='beta'/>").unwrap();
+
+    let snap_a = alpha.save(&a, "alpha work", None, 1, 120.0, vec![], Default::default()).unwrap();
+    let snap_b = beta.save(&b, "beta work", None, 2, 130.0, vec![], Default::default()).unwrap();
+
+    assert_ne!(snap_a.hash, snap_b.hash);
+
+    // Each project sees its own HEAD.
+    assert_eq!(
+        alpha.head().expect("alpha should have a head").hash,
+        snap_a.hash
+    );
+    assert_eq!(
+        beta.head().expect("beta should have a head").hash,
+        snap_b.hash
+    );
+
+    // And each chain has exactly one entry — beta's snapshot did not
+    // become a child of alpha's.
+    assert_eq!(alpha.chain_length(None), 1);
+    assert_eq!(beta.chain_length(None), 1);
+    assert!(alpha.walk_chain(None)[0].parent.is_none());
+    assert!(beta.walk_chain(None)[0].parent.is_none());
+
+    // The messages do not leak across projects.
+    assert!(alpha.walk_chain(None)[0].message.contains("alpha"));
+    assert!(beta.walk_chain(None)[0].message.contains("beta"));
+}
+
+#[test]
+fn test_a_second_project_does_not_become_a_child_of_the_first() {
+    let tmp = TempDir::new().unwrap();
+    let store = BlobStore::new(tmp.path().join("blobs")).unwrap();
+    let alpha = SnapshotStore::new(store.clone(), "Alpha");
+    let beta = SnapshotStore::new(store.clone(), "Beta");
+
+    let a = tmp.path().join("Alpha.als");
+    let b = tmp.path().join("Beta.als");
+    std::fs::write(&a, b"<LiveSet id='alpha'/>").unwrap();
+    std::fs::write(&b, b"<LiveSet id='beta'/>").unwrap();
+
+    alpha.save(&a, "alpha one", None, 1, 120.0, vec![], Default::default()).unwrap();
+    beta.save(&b, "beta one", None, 1, 120.0, vec![], Default::default()).unwrap();
+
+
+    // A second snapshot of alpha must chain from alpha's first snapshot,
+    // not from beta's. The file has to change first, or the content hash
+    // is the same and the snapshot is deduplicated.
+    std::fs::write(&a, b"<LiveSet id='alpha' version='2'/>").unwrap();
+    // The parent is the current HEAD of *this* project, as the CLI does.
+    let alpha_head = alpha.head().expect("alpha head").hash;
+    let a2 = alpha
+        .save(&a, "alpha two", Some(&alpha_head), 1, 120.0, vec![], Default::default())
+        .unwrap();
+    assert_eq!(alpha.chain_length(None), 2);
+    assert_eq!(beta.chain_length(None), 1);
+
+    let chain = alpha.walk_chain(None);
+    assert_eq!(chain.len(), 2);
+    assert_eq!(chain[0].hash, a2.hash);
+    assert_eq!(
+        chain[0].parent,
+        chain[1].hash.clone().into(),
+        "the second alpha snapshot should chain from the first"
+    );
+}
+
+#[test]
+fn test_the_legacy_shared_head_is_only_used_by_its_own_project() {
+    let tmp = TempDir::new().unwrap();
+    let store = BlobStore::new(tmp.path().join("blobs")).unwrap();
+    let alpha = SnapshotStore::new(store.clone(), "Alpha");
+    let beta = SnapshotStore::new(store.clone(), "Beta");
+
+    let a = tmp.path().join("Alpha.als");
+    std::fs::write(&a, b"<LiveSet/>").unwrap();
+    let snap = alpha.save(&a, "alpha work", None, 1, 120.0, vec![], Default::default()).unwrap();
+
+    // Simulate the old layout: a single shared HEAD ref.
+    store.update_ref("HEAD", &snap.hash).unwrap();
+
+    // Alpha may use it — the snapshot belongs to it.
+    assert_eq!(alpha.head().expect("alpha head").hash, snap.hash);
+    // Beta must not: that is another project's chain.
+    assert!(
+        beta.head().is_none(),
+        "beta must not inherit alpha's chain"
+    );
+}

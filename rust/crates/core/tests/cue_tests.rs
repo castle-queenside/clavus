@@ -244,6 +244,7 @@ fn import_adds_a_remote_cue() {
 
     let remote = clavus_core::types::Cue {
         id: "remote-1".to_string(),
+        project: "demo".to_string(),
         position: "5.1.1".to_string(),
         text: "from a teammate".to_string(),
         author: "slowhands".to_string(),
@@ -314,6 +315,7 @@ fn remote_cue_with_id(id: &str) -> clavus_core::types::Cue {
     use clavus_core::types::{Cue, CueStatus};
     Cue {
         id: id.to_string(),
+        project: "demo".to_string(),
         position: "1.1.1".into(),
         text: "from a peer".into(),
         author: "attacker".into(),

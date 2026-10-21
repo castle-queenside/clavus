@@ -10,18 +10,18 @@
 | Parser ALS | `crates/parser-als/tests/als_parser.rs` | 48 | 🟢 |
 | Parser Bitwig | `crates/parser-bw/tests/bw_parser.rs` | 21 | 🟢 |
 | Sample audit + collect | `crates/core/tests/collect_tests.rs` | 19 | 🟢 |
-| BlobStore / snapshot core | `crates/core/tests/core_tests.rs` | 35 | 🟢 |
+| BlobStore / snapshot core | `crates/core/tests/core_tests.rs` | 43 | 🟢 |
 | Cue store | `crates/core/tests/cue_tests.rs` | 26 | 🟢 |
 | Property-based (core) | `crates/core/tests/property_tests.rs` | 11 | 🟢 |
 | Relay sync | `crates/relay/tests/relay_tests.rs` | 10 | 🟢 |
-| Relay (real server) | `crates/relay/tests/real_relay.rs` | 9 | 🟢 |
+| Relay (real server) | `crates/relay/tests/real_relay.rs` | 13 | 🟢 |
 | Sync client (protocol) | `crates/sync/tests/sync_client.rs` | 6 | 🟢 |
 | Sync client (hostile server) | `crates/sync/tests/hostile_server.rs` | 15 | 🟢 |
 | TUI | `crates/tui/tests/tui_tests.rs` | 43 | 🟢 |
-| CLI commands | `crates/cli/tests/cli_tests.rs` | 41 | 🟢 |
+| CLI commands | `crates/cli/tests/cli_tests.rs` | 45 | 🟢 |
 | Core unit tests | `crates/core/src/**` | 5 | 🟢 |
 
-**291 tests passing, 0 failed, 0 ignored.**
+**299 tests passing, 0 failed, 0 ignored.**
 
 Legend: 🟢 good  🟡 partial  🟠 manual only  🔴 missing
 
@@ -149,6 +149,9 @@ real ones. Each now has a regression test:
 | The relay served malformed snapshots | The relay stored any hash it was given | The relay rejects snapshots with an invalid hash or parent |
 | **Cues never reached the other machine** | The push sent no cues and the pull counted them without storing them, so a collaborator's notes were lost | Both the CLI and the TUI now push and import cues |
 | `restore` could write anywhere | Restoring a pulled snapshot to its recorded path would use a path chosen by the relay | The recorded path must name a `.als` or `.bwproject` file |
+| **Every project shared one HEAD** | The blob store is shared, so whichever project was snapshotted last owned the chain — `log`, `push` and `restore` for the other project showed the wrong history | Each project's HEAD lives at `<project>/HEAD`; the old shared ref is only used by the project that owns it |
+| The relay mixed up projects | Cues were grouped by track name and every snapshot was offered to every client | Cues carry a project name; the relay indexes snapshots per project and only serves a client its own project |
+| A repeated push duplicated cues | The relay appended the cue each time, so every client got N copies | The relay replaces a cue with the same id |
 
 ---
 

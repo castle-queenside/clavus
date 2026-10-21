@@ -31,8 +31,14 @@ fn make_snap(hash: &str, parent: Option<&str>) -> Snapshot {
 }
 
 fn make_cue(id: &str) -> Cue {
+    make_cue_for(id, "demo")
+}
+
+/// A cue belonging to `project`.
+fn make_cue_for(id: &str, project: &str) -> Cue {
     Cue {
         id: id.to_string(),
+        project: project.to_string(),
         position: "1.1.1".to_string(),
         text: "test cue".to_string(),
         author: "test".to_string(),
@@ -70,6 +76,8 @@ fn test_relay_accepts_connection() {
 #[test]
 fn test_relay_state_persistence() {
     let tmp = TempDir::new().unwrap();
+    // A snapshot hash is a SHA-256 digest; the relay rejects anything else.
+    let hash = "a".repeat(64);
 
     // Start relay, store a snapshot
     {
@@ -77,7 +85,7 @@ fn test_relay_state_persistence() {
         let client = SyncClient::connect(&addr).unwrap();
         client.hello("test", vec![]).unwrap();
         let _ = client.recv_timeout(Duration::from_secs(2));
-        client.push(vec![make_snap("abc", None)], vec![]).unwrap();
+        client.push(vec![make_snap(&hash, None)], vec![]).unwrap();
         let _ = client.recv_timeout(Duration::from_secs(2));
         drop(client);
     } // relay drops here
@@ -86,12 +94,12 @@ fn test_relay_state_persistence() {
     {
         let addr = start_real_relay(&tmp);
         let client = SyncClient::connect(&addr).unwrap();
-        client.hello("test2", vec![]).unwrap();
+        client.hello("test", vec![]).unwrap();
         let msg = client.recv_timeout(Duration::from_secs(2));
         match msg {
             Some(SyncMsg::Push { snapshots, cues: _ }) => {
                 assert!(
-                    snapshots.iter().any(|s| s.hash == "abc"),
+                    snapshots.iter().any(|s| s.hash == hash),
                     "after restart, relay should serve previously stored snapshot"
                 );
             }
@@ -109,7 +117,7 @@ fn test_relay_cues_persisted() {
     {
         let addr = start_real_relay(&tmp);
         let client = SyncClient::connect(&addr).unwrap();
-        client.hello("test", vec![]).unwrap();
+        client.hello("demo", vec![]).unwrap();
         let _ = client.recv_timeout(Duration::from_secs(2));
         client.push(vec![], vec![make_cue("cue1")]).unwrap();
         let _ = client.recv_timeout(Duration::from_secs(2));
@@ -120,7 +128,7 @@ fn test_relay_cues_persisted() {
     {
         let addr = start_real_relay(&tmp);
         let client = SyncClient::connect(&addr).unwrap();
-        client.hello("test2", vec![]).unwrap();
+        client.hello("demo", vec![]).unwrap();
         let msg = client.recv_timeout(Duration::from_secs(2));
         match msg {
             Some(SyncMsg::Push { snapshots: _, cues }) => {

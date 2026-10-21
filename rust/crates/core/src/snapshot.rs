@@ -31,6 +31,47 @@ impl SnapshotStore {
         }
     }
 
+    /// The ref that holds this project's HEAD.
+    ///
+    /// Every project needs its own HEAD. A single shared ref meant that
+    /// whichever project was snapshotted last owned the chain, so
+    /// `log`, `push` and `restore` for one project showed another's
+    /// history.
+    pub fn head_ref(&self) -> String {
+        format!("{}/HEAD", self.project_name)
+    }
+
+    /// Read this project's HEAD.
+    ///
+    /// Falls back to the old shared `HEAD` ref, but only when that
+    /// snapshot belongs to this project — otherwise another project's
+    /// chain would leak in.
+    pub fn head(&self) -> Option<Snapshot> {
+        if let Some(h) = self.store.read_ref(&self.head_ref()) {
+            if let Some(snap) = self.store.load_meta(&h) {
+                return Some(snap);
+            }
+        }
+
+        // Legacy layout: one shared HEAD ref for every project.
+        if let Some(h) = self.store.read_ref("HEAD") {
+            if let Some(snap) = self.store.load_meta(&h) {
+                if Self::belongs_to(&snap, &self.project_name) {
+                    return Some(snap);
+                }
+            }
+        }
+        None
+    }
+
+    /// Whether a snapshot was taken from the given project.
+    fn belongs_to(snap: &Snapshot, project_name: &str) -> bool {
+        Path::new(&snap.project_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy() == project_name)
+            .unwrap_or(false)
+    }
+
     /// Save a snapshot of a project file.
     ///
     /// 1. Read raw bytes → store as blob (THIS is the identity)
@@ -100,9 +141,9 @@ impl SnapshotStore {
             message
         );
 
-        // 5. Update HEAD ref
+        // 5. Update this project's HEAD ref
         self.store
-            .update_ref("HEAD", &als_hash)
+            .update_ref(&self.head_ref(), &als_hash)
             .map_err(|e| ClavusError::IndexCorrupted(e.to_string()))?;
 
         Ok(snapshot)
@@ -113,16 +154,11 @@ impl SnapshotStore {
         self.store.load_meta(hash)
     }
 
-    /// Get the current HEAD snapshot.
-    pub fn head(&self) -> Option<Snapshot> {
-        self.store
-            .read_ref("HEAD")
-            .and_then(|h| self.store.load_meta(&h))
-    }
-
     /// Count how many snapshots are reachable from `head`.
     pub fn chain_length(&self, head: Option<&str>) -> usize {
-        let mut current = head.and_then(|h| self.store.read_ref(h)).or_else(|| self.store.read_ref("HEAD"));
+        let mut current = head
+            .and_then(|h| self.store.read_ref(h))
+            .or_else(|| self.store.read_ref(&self.head_ref()));
         let mut seen = std::collections::HashSet::new();
         let mut count = 0;
 
@@ -153,7 +189,7 @@ impl SnapshotStore {
                     }
                 })
             })
-            .or_else(|| self.store.read_ref("HEAD"));
+            .or_else(|| self.store.read_ref(&self.head_ref()));
         let mut snapshots = Vec::new();
         let mut seen = std::collections::HashSet::new();
 
@@ -184,7 +220,7 @@ impl SnapshotStore {
 
         // Prevent shrinking the chain unless explicitly restoring
         let allow_shrink = source == "restore" || source == "restore-cli";
-        if let Some(current) = self.store.read_ref("HEAD") {
+        if let Some(current) = self.store.read_ref(&self.head_ref()) {
             let old_len = self.chain_length(Some(&current));
             let new_len = self.chain_length(Some(new_head));
             if !allow_shrink && new_len < old_len {
@@ -204,10 +240,15 @@ impl SnapshotStore {
         }
 
         self.store
-            .update_ref("HEAD", new_head)
+            .update_ref(&self.head_ref(), new_head)
             .map_err(|e| ClavusError::IndexCorrupted(e.to_string()))?;
 
-        info!("HEAD {}→{} (source={})", self.store.read_ref("HEAD").unwrap_or_default(), new_head, source);
+        info!(
+            "HEAD {}→{} (source={})",
+            self.store.read_ref(&self.head_ref()).unwrap_or_default(),
+            new_head,
+            source
+        );
         Ok(())
     }
 

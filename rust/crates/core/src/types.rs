@@ -185,6 +185,14 @@ impl Snapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Cue {
     pub id: String,
+    /// The project this cue belongs to.
+    ///
+    /// Cues travel over the sync protocol, and the relay has to know which
+    /// project each cue belongs to. Before this field existed the relay
+    /// guessed from the track name, so two projects sharing a track name
+    /// mixed their notes together.
+    #[serde(default)]
+    pub project: String,
     /// Position in the DAW timeline.
     /// Ableton: "4.1.1" (bar.beat.sixteenth)
     /// Bitwig: "4.1.01" (bar.beat.sixteenth, zero-padded)

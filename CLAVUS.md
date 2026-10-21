@@ -55,6 +55,20 @@ streams rather than straight to stdout.
 - Raw `.als` bytes are the blob. SHA256 = snapshot hash.
 - Duplicate saves detected automatically — same bytes = same hash.
 - `BlobStore` handles raw bytes; `SnapshotStore` handles metadata + refs.
+- The blob store is shared by every project, so each project has its own
+  HEAD at `<project>/HEAD`. A single shared HEAD meant that whichever
+  project was snapshotted last owned the chain, and the other project's
+  `log`, `push` and `restore` showed the wrong history.
+
+### Untrusted remote data
+Snapshots, cues, hashes and ref names all arrive from remote peers.
+Everything that becomes a file name is validated before it is used:
+- Hashes must be plain lowercase hex (a SHA-256 digest).
+- Cue ids must be alphanumeric, `-` or `_`.
+- Ref names may not contain `..` or escape the refs directory.
+- The relay rejects malformed snapshots and cues rather than serving them.
+- The relay only ever serves a client the history of the project that
+  client named in its Hello.
 
 ### Audio audit before snapshot
 `SampleAuditReport.ensure_clean()` is called before every `SnapshotStore::save()`.

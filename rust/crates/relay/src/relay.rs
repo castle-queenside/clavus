@@ -53,6 +53,12 @@ pub struct RelayState {
     /// Current HEAD hash per project (derived from project_path filename).
     /// Used for conflict detection.
     heads: HashMap<String, String>,
+    /// Snapshot hashes per project, in the order they were pushed.
+    ///
+    /// A client working on one project must not be offered another
+    /// project's history, so the relay needs to know which snapshots
+    /// belong to which project.
+    by_project: HashMap<String, Vec<String>>,
     /// Connected clients (not persisted).
     clients: Vec<Client>,
     /// Directory for persisted state.
@@ -66,6 +72,13 @@ impl RelayState {
         let snapshots = Self::load_snaps(&state_dir).unwrap_or_default();
         let cues = Self::load_cues(&state_dir).unwrap_or_default();
         let heads = Self::load_heads(&state_dir).unwrap_or_default();
+        // The per-project index is rebuilt from the snapshots themselves,
+        // so an older state file still works.
+        let mut by_project: HashMap<String, Vec<String>> = HashMap::new();
+        for (hash, snap) in &snapshots {
+            let project = project_name_from_path(&snap.project_path);
+            by_project.entry(project).or_default().push(hash.clone());
+        }
         info!(
             "Relay state loaded: {} snapshots, {} cue lists, {} project heads",
             snapshots.len(),
@@ -76,6 +89,7 @@ impl RelayState {
             snapshots,
             cues,
             heads,
+            by_project,
             clients: Vec::new(),
             state_dir,
         })
@@ -162,12 +176,18 @@ impl RelayState {
         self.clients.retain(|c| &c.addr != addr);
     }
 
-    /// Find snapshots the client is missing.
-    pub fn find_missing(&self, known: &[String]) -> Vec<Snapshot> {
-        self.snapshots
-            .values()
-            .filter(|s| !known.contains(&s.hash))
-            .cloned()
+    /// Find snapshots the client is missing, for one project only.
+    ///
+    /// `project` is the client's project name; snapshots belonging to
+    /// other projects are never offered.
+    pub fn find_missing(&self, project: &str, known: &[String]) -> Vec<Snapshot> {
+        let Some(hashes) = self.by_project.get(project) else {
+            return Vec::new();
+        };
+        hashes
+            .iter()
+            .filter(|h| !known.contains(h))
+            .filter_map(|h| self.snapshots.get(h).cloned())
             .collect()
     }
 
@@ -218,16 +238,40 @@ impl RelayState {
             // Store the snapshot
             self.snapshots.insert(snap_hash.clone(), snap);
 
+            // Remember which project it belongs to, so it is only ever
+            // offered to a client working on that project.
+            let project_hashes = self.by_project.entry(project_name.clone()).or_default();
+            if !project_hashes.contains(&snap_hash) {
+                project_hashes.push(snap_hash.clone());
+            }
+
             // Update HEAD for this project to the latest snapshot
             self.heads.insert(project_name, snap_hash);
         }
 
         for cue in cues {
-            let project = cue.track_name.clone();
-            self.cues
-                .entry(project)
-                .or_default()
-                .push(cue);
+            // A cue id becomes a file name on every client that pulls it,
+            // so a malformed one is rejected here rather than served to
+            // the network.
+            if clavus_core::cue::CueStore::validate_cue_id(&cue.id).is_err() {
+                warn!("Rejected cue with invalid id: {:?}", cue.id);
+                continue;
+            }
+            // Cues are grouped by project, not by track name — two
+            // projects with a track called "Drums" must not share notes.
+            let project = if cue.project.is_empty() {
+                // An older client that does not send the project name.
+                cue.track_name.clone()
+            } else {
+                cue.project.clone()
+            };
+            let entry = self.cues.entry(project).or_default();
+            // Replacing by id keeps a repeated push from duplicating the
+            // cue in every client's list.
+            match entry.iter_mut().find(|c| c.id == cue.id) {
+                Some(existing) => *existing = cue,
+                None => entry.push(cue),
+            }
         }
 
         // Persist after every store to ensure durability
@@ -356,8 +400,10 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
 
                 let resp = {
                     let s = state.lock().unwrap();
-                    let snaps = s.find_missing(&known_heads);
-                    let cues: Vec<Cue> = s.cues.values().flatten().cloned().collect();
+                    let snaps = s.find_missing(&client_name, &known_heads);
+                    // Only the client's own project's cues — sending every
+                    // project's notes would mix them up.
+                    let cues: Vec<Cue> = s.cues.get(&client_name).cloned().unwrap_or_default();
                     SyncMsg::Push { snapshots: snaps, cues }
                 };
 
@@ -372,7 +418,7 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
                         .iter()
                         .filter_map(|h| s.snapshots.get(h).cloned())
                         .collect();
-                    let cues: Vec<Cue> = s.cues.values().flatten().cloned().collect();
+                    let cues: Vec<Cue> = s.cues.get(&client.name).cloned().unwrap_or_default();
                     (snapshots, cues)
                 };
                 let _ = client.send(&SyncMsg::PullResp { snapshots, cues });

@@ -524,6 +524,7 @@ fn store_pulled_saves_snapshots_and_imports_cues() {
     };
     let cue = clavus_core::types::Cue {
         id: "abc123456789".to_string(),
+        project: "demo".to_string(),
         position: "1.1.1".to_string(),
         text: "a note from a collaborator".to_string(),
         author: "slowhands".to_string(),
@@ -593,6 +594,7 @@ fn store_pulled_rejects_a_cue_with_a_crafted_id() {
 
     let cue = clavus_core::types::Cue {
         id: "../../escaped".to_string(),
+        project: "demo".to_string(),
         position: "1.1.1".to_string(),
         text: "hostile".to_string(),
         author: "attacker".to_string(),

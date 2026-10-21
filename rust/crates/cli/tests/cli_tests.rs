@@ -735,6 +735,7 @@ fn pull_from_a_hostile_relay_with_a_traversing_cue_id_cannot_escape() {
     let als = ws.write_als(&als_xml(&[]));
     let evil_cue = clavus_core::types::Cue {
         id: "../../escaped".to_string(),
+        project: "demo".to_string(),
         position: "1.1.1".into(),
         text: "evil".into(),
         author: "attacker".into(),
@@ -798,6 +799,7 @@ fn pull_imports_cues_from_the_relay() {
     let als = ws.write_als(&als_xml(&[]));
     let cue = clavus_core::types::Cue {
         id: "abc123456789".to_string(),
+        project: "demo".to_string(),
         position: "5.1.1".to_string(),
         text: "bring the vocal up".to_string(),
         author: "slowhands".to_string(),
@@ -845,6 +847,7 @@ fn pull_reports_a_conflicting_cue_instead_of_overwriting_the_local_one() {
     // A remote cue with the same id but different text and an older timestamp.
     let remote = clavus_core::types::Cue {
         id: local_id.clone(),
+        project: "demo".to_string(),
         position: "1.1.1".to_string(),
         text: "remote note".to_string(),
         author: "slowhands".to_string(),
@@ -876,4 +879,85 @@ fn pull_reports_a_conflicting_cue_instead_of_overwriting_the_local_one() {
         "the remote text must not replace the local one: {}",
         list.all()
     );
+}
+
+// ─── Multiple projects in one data root ────────────────────────────────────
+
+#[test]
+fn two_projects_keep_separate_chains() {
+    // Regression: every project shared one HEAD ref, so the project
+    // snapshotted last owned the chain and the other project's log, push
+    // and restore showed the wrong history.
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().join(".clavus");
+    let alpha_dir = tmp.path().join("Alpha");
+    let beta_dir = tmp.path().join("Beta");
+    fs::create_dir_all(&alpha_dir).unwrap();
+    fs::create_dir_all(&beta_dir).unwrap();
+
+    let alpha = alpha_dir.join("Alpha.als");
+    let beta = beta_dir.join("Beta.als");
+    fs::write(&alpha, gzip_als("alpha")).unwrap();
+    fs::write(&beta, gzip_als("beta")).unwrap();
+
+    let msg = "alpha work".to_string();
+    run(|o, e| cmd_snapshot(&alpha, &Some(msg), false, &root, o, e));
+    let msg = "beta work".to_string();
+    run(|o, e| cmd_snapshot(&beta, &Some(msg), false, &root, o, e));
+
+    // Each project logs only its own snapshot.
+    let (out, _) = run(|o, e| cmd_log(&alpha, &root, o, e));
+    let text = out.all();
+    assert!(text.contains("alpha work"), "alpha log: {}", text);
+    assert!(!text.contains("beta work"), "alpha log leaked beta: {}", text);
+    assert!(text.contains("1 snapshot"), "alpha chain length: {}", text);
+
+    let (out, _) = run(|o, e| cmd_log(&beta, &root, o, e));
+    let text = out.all();
+    assert!(text.contains("beta work"), "beta log: {}", text);
+    assert!(!text.contains("alpha work"), "beta log leaked alpha: {}", text);
+    assert!(text.contains("1 snapshot"), "beta chain length: {}", text);
+}
+
+#[test]
+fn a_second_project_does_not_become_a_child_of_the_first() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().join(".clavus");
+    let alpha_dir = tmp.path().join("Alpha");
+    let beta_dir = tmp.path().join("Beta");
+    fs::create_dir_all(&alpha_dir).unwrap();
+    fs::create_dir_all(&beta_dir).unwrap();
+
+    let alpha = alpha_dir.join("Alpha.als");
+    let beta = beta_dir.join("Beta.als");
+    fs::write(&alpha, gzip_als("alpha")).unwrap();
+    fs::write(&beta, gzip_als("beta")).unwrap();
+
+    run(|o, e| cmd_snapshot(&alpha, &None, false, &root, o, e));
+    run(|o, e| cmd_snapshot(&beta, &None, false, &root, o, e));
+
+    // Change alpha and snapshot it again.
+    fs::write(&alpha, gzip_als("alpha v2")).unwrap();
+    run(|o, e| cmd_snapshot(&alpha, &None, false, &root, o, e));
+
+    // Alpha's chain has two entries; beta's still has one.
+    let (out, _) = run(|o, e| cmd_log(&alpha, &root, o, e));
+    assert!(out.all().contains("2 snapshot"), "alpha: {}", out.all());
+    let (out, _) = run(|o, e| cmd_log(&beta, &root, o, e));
+    assert!(out.all().contains("1 snapshot"), "beta: {}", out.all());
+}
+
+/// A gzip-compressed `.als` whose content differs between calls.
+fn gzip_als(marker: &str) -> Vec<u8> {
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<LiveSet><Tempo Value="128" /><MasterTrack><Name Value="Master" /><DeviceChain /></MasterTrack>
+<!-- {} --></LiveSet>"#,
+        marker
+    );
+    let mut enc = GzEncoder::new(Vec::new(), Compression::default());
+    std::io::Write::write_all(&mut enc, xml.as_bytes()).unwrap();
+    enc.finish().unwrap()
 }
