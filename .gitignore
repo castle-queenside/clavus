@@ -32,6 +32,3 @@ venv/
 # Log files
 *.log
 .pytest_cache/
-
-# Generated test fixtures
-fixtures/*.bwproject
