@@ -127,6 +127,27 @@ clavus audit "/path/to/YourProject.bwproject"
 - Does it handle Bitwig's ZIP format without errors?
 - Any path format differences from Ableton?
 
+### 2.4 Audit a Bitwig Project That Was Shared With You
+
+**Setup:** A `.bwproject` that came from another machine — exported from
+Bitwig with "copy samples" on. The archive holds a copy of every sample,
+but the references inside it still point at the other machine's paths.
+
+**Test:**
+```bash
+clavus audit "/path/to/SharedProject.bwproject"
+```
+
+**Expected:**
+```
+✓ 24 samples present
+  24 samples inside the project archive — run `clavus collect` to extract
+```
+
+**What to watch for:** The samples must **not** be reported as missing.
+They are present — they are in the archive. If they are reported missing,
+the audit does not understand the Bitwig bundle.
+
 ---
 
 ## Part 3: Collecting Samples
@@ -199,6 +220,35 @@ Collecting 0 sample(s) into project/Samples/
 ```
 
 **What to watch for:** Does it clearly report which files are missing rather than crashing or silently failing?
+
+### 3.4 Collect a Bitwig Project That Carries Its Own Samples
+
+**Setup:** The shared `.bwproject` from test 2.4.
+
+**Test:**
+```bash
+clavus collect "/path/to/SharedProject.bwproject"
+```
+
+**Expected:**
+```
+  0 missing  ·  0 outside project  ·  24 inside archive
+
+✓ Collected 24 sample(s) into project/Samples/
+  Paths in the project archive rewritten — reopen the project in Bitwig
+```
+
+**Verify:**
+1. A `Samples/` folder appeared next to the `.bwproject`
+2. The samples are in it
+3. Re-running `clavus audit` now says the samples are present with no
+   "inside the project archive" note
+4. Opening the project in Bitwig still finds its samples
+
+**What to watch for:** The references inside the archive must be
+rewritten to the extracted copies, and the rest of the archive must
+survive the rewrite. If Bitwig cannot open the project afterwards, the
+rewrite is wrong.
 
 ---
 
@@ -491,6 +541,53 @@ clavus snapshot "/path/to/project.als" -m "with auto collect" --collect
 ✓ snapshot 9f8e7d6c  ·  2026-10-20 15:30  ·  8 tracks  ·  128 BPM
 ```
 
+### 8.5 Two Projects in One Data Directory
+
+Every project keeps its own snapshot chain, its own cues and its own
+history. This test checks that one project never bleeds into another.
+
+**Setup:** Two projects in the same folder.
+
+**Test:**
+```bash
+clavus snapshot "/path/to/Alpha.als" -m "alpha work"
+clavus snapshot "/path/to/Beta.als"  -m "beta work"
+clavus snapshot "/path/to/Alpha.als" -m "alpha again"
+
+clavus log "/path/to/Alpha.als"
+clavus log "/path/to/Beta.als"
+```
+
+**Expected:**
+```
+$ clavus log Alpha.als
+2 snapshot(s) in chain
+  …  alpha again  <- …  [8 tracks · 128 BPM]
+  …  alpha work   [8 tracks · 128 BPM]
+
+$ clavus log Beta.als
+1 snapshot(s) in chain
+  …  beta work  [3 tracks · 140 BPM]
+```
+
+**What to watch for:** Alpha's log must show two snapshots and Beta's
+must show one. If either shows the other's history, the projects are
+sharing a chain.
+
+### 8.6 A Snapshot From One Project Must Not Restore Over Another
+
+**Test:**
+```bash
+clavus log "/path/to/Alpha.als"          # note a short hash
+clavus restore "/path/to/Beta.als" a1b2c3d4
+```
+
+**Expected:** An error — *"No snapshot found matching 'a1b2c3d4'"* — and
+`Beta.als` is **not** modified.
+
+**What to watch for:** This must not silently write Alpha's contents
+into Beta.als.
+
 ---
 
 ## Part 9: Edge Cases
@@ -658,6 +755,8 @@ DISCOVERY & STATUS
 [ ] status: shows samples, snapshots, cues
 [ ] restore: restores to a specific snapshot
 [ ] snapshot --collect: auto-collects before snapshotting
+[ ] restore: refuses another project's snapshot
+[ ] two projects: separate chains and separate cues
 
 EDGE CASES
 [ ] Unicode in project name
@@ -668,6 +767,8 @@ EDGE CASES
 FILE FORMATS
 [ ] .als is gzip (not plain XML)
 [ ] .bwproject is ZIP with project.xml
+[ ] .bwproject with embedded samples: audit does not call them missing
+[ ] .bwproject collect: extracts the embedded samples and rewrites the reference
 ```
 
 ---
