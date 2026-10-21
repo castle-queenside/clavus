@@ -60,8 +60,8 @@ Clavus watches your project files and maintains a content-addressed snapshot cha
 | Feature | What it does |
 |---------|-------------|
 | **Snapshot** | Save a content-addressed checkpoint. SHA256 of `.als`/`.bwproject` bytes. Duplicates detected automatically. |
-| **Audio audit** | Before every snapshot: verify all sample references are present and inside the project folder. No silent missing samples. A Bitwig bundle's own samples count as present, and `collect` extracts them. |
-| **Cue markers** | Pin timeline comments at bar positions. Filter by Pending / Resolved / Skipped. |
+| **Audio audit** | Before every snapshot: verify all sample references are present and inside the project folder. No silent missing samples. A Bitwig bundle's own samples count as present, and `collect` keeps the bundle self-contained. |
+| **Cue markers** | Pin timeline comments at bar positions. Filter by Pending / Resolved / Skipped / Deferred / Archived. Each note records who wrote it. |
 | **Relay sync** | Push/pull snapshots over TCP to a collaborator's relay. No cloud. |
 | **Diff** | Walk the chain. See what changed: BPM, track count, sample manifest, message. |
 | **Restore** | Roll back to any snapshot — restore the raw project bytes from the blob store. A snapshot only ever restores within its own project. |
@@ -108,8 +108,8 @@ cargo build --release
 # List the snapshot chain
 ./clavus log ~/Music/Ableton/MySet.als
 
-# Add a cue marker
-./clavus cue ~/Music/Ableton/MySet.als "drop bass at bar 17" --position 17.1.0 --track "Bass"
+# Add a cue marker (the position is bars.beats.sixteenths)
+./clavus cue ~/Music/Ableton/MySet.als -t "drop bass at bar 17" -p 17.1.0 --track "Bass"
 
 # List cues
 ./clavus cues ~/Music/Ableton/MySet.als
@@ -118,7 +118,11 @@ cargo build --release
 ./clavus audit ~/Music/Ableton/MySet.als
 
 # Run the sync relay (your machine is the server)
-./clavus relay --bind 127.0.0.1:4477
+./clavus relay 127.0.0.1:4477
+
+# Push to / pull from a relay
+./clavus push --relay 192.168.1.10:4477 ~/Music/Ableton/MySet.als
+./clavus pull --relay 192.168.1.10:4477 ~/Music/Ableton/MySet.als
 
 # Open the TUI
 ./clavus tui --dir ~/Music/Ableton
@@ -136,8 +140,9 @@ n          Snapshot list
 s          Sync screen
 a          Add cue (in CueList)
 r          Resolve cue
-f          Cycle filter (Pending → Resolved → Skipped → all)
+f          Cycle filter (Pending → Resolved → Skipped → Deferred → Archived → all)
 c          Connect relay (in Sync screen)
+r          Relay address (in Sync screen)
 P          Push
 G          Pull
 Esc/q      Back / quit
@@ -179,14 +184,15 @@ One person runs `clavus relay`. Others run `clavus tui`, press `c` to connect, t
 | | |
 |---|---|
 | Binary | ✅ 4MB standalone Rust binary |
-| Ableton parser | ✅ `.als` (gzip XML) |
+| Ableton parser | ✅ `.als` (gzip or plain XML, Live 9/10/11) |
 | Bitwig parser | ✅ `.bwproject` (zip XML) — fixture needed |
-| Snapshot store | ✅ Content-addressed blob + metadata |
+| Snapshot store | ✅ Content-addressed blob + metadata, a chain per project |
 | Audio audit | ✅ Checks all sample references before snapshot |
-| Cue markers | ✅ Pending / Resolved / Skipped |
-| Relay sync | ✅ TCP framed JSON, push/pull/connect |
+| Cue markers | ✅ Pending / Resolved / Skipped / Deferred / Archived |
+| Relay sync | ✅ TCP framed JSON, push/pull/connect, isolated per project |
 | TUI | ✅ Ratatui, full keyboard nav |
-| CI | ✅ GitHub Actions, clippy clean |
+| CI | ✅ GitHub Actions, clippy clean, 391 tests |
+| Project isolation | ✅ Two same-named projects never share a chain |
 | Windows | 🔜 Linux binary first |
 
 ---

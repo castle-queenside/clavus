@@ -297,7 +297,28 @@ clavus snapshot "/path/to/project.als" -m "Should be blocked"
 
 **What to watch for:** Does it produce a clear error message, or does it silently create a bad snapshot?
 
-### 4.4 View Snapshot Log
+### 4.4 A Snapshot of Unchanged Content
+
+**Setup:** Snapshot the project twice in a row without changing anything.
+
+**Test:**
+```bash
+clavus snapshot "/path/to/project.als" -m "Same content again"
+```
+
+**Expected:** The tool says the content is unchanged and that no new
+snapshot was created — it does **not** print a "✓ snapshot" line for
+work it did not store:
+```
+= snapshot a1b2c3d4  ·  unchanged — no new snapshot was created
+  (already in this project's history as "Initial idea")
+  (the message "Same content again" was not recorded — change the project first)
+```
+
+**What to watch for:** A "✓" for a snapshot that does not appear in
+`clavus log` is a false success. Report it.
+
+### 4.5 View Snapshot Log
 
 **Test:**
 ```bash
@@ -306,9 +327,15 @@ clavus log "/path/to/project.als"
 
 **Expected:** A list showing the chain of snapshots with timestamps and messages:
 ```
-e5f6a7b8  2026-10-20 14:35  8 tracks  128 BPM  Added reverb to vocals
-a1b2c3d4  2026-10-20 14:30  8 tracks  128 BPM  Initial idea
+2 snapshot(s) in chain — times are local (UTC-07:00)
+
+  e5f6a7b8  2026-10-20 14:35  Added reverb to vocals  [8 tracks · 128 BPM]
+  a1b2c3d4  2026-10-20 14:30  Initial idea  [8 tracks · 128 BPM]
 ```
+
+**What to watch for:** The times must match your own clock. If they are
+in UTC, or if the header does not say which clock they are on, that is a
+bug — report it.
 
 ---
 
@@ -329,13 +356,30 @@ clavus cues "/path/to/project.als"
 
 **Test:**
 ```bash
-clavus cue "/path/to/project.als" 4.1.1 "Fix bass level"
+clavus cue "/path/to/project.als" -t "Fix bass level" -p 4.1.1
 ```
 
 **Expected:**
 ```
-✓ cue 9a8b7c6d  ·  4.1.1  ·  Fix bass level
+✓ cue 9a8b7c6d  @  4.1.1  (pending)
+  Fix bass level
 ```
+
+**What to watch for:** The cue must name *you* as the author, not a
+constant like "cli" — otherwise you cannot tell whose notes are whose
+after a sync. If the author says "cli", report it. You can set it
+yourself with `--author "Dana"`.
+
+### 5.2b A Cue With a Bad Position
+
+**Test:**
+```bash
+clavus cue "/path/to/project.als" -t "typo" -p "4.1"
+```
+
+**Expected:** An error. A position must be `bars.beats.sixteenths`, so
+`4.1` is not one. A cue stored with a position that can never be
+resolved to a time is worse than a refusal.
 
 ### 5.3 Resolve a Cue
 
@@ -374,6 +418,17 @@ clavus tui
 - For each project: name, track count, BPM, snapshot count
 - Key hints at the bottom
 
+### 6.1b The TUI's Project List
+
+**What to watch for:**
+
+- The **track count** and **BPM** must be the project's own, not the
+  same numbers for every project. A row that always says "120 BPM" and
+  "0 tracks" is a bug.
+- Projects in **sub-folders** must appear. A project the CLI can see
+  but the TUI cannot is a bug.
+- A project that **cannot be parsed** must show an error, not vanish.
+
 ### 6.2 Navigate the TUI
 
 **Test each key:**
@@ -385,12 +440,12 @@ clavus tui
 | `←` / `→` | Navigate screens | Switches between views |
 | `c` | Snapshot hint | Shows `c: snapshot` hint |
 | `a` | Add cue | Opens cue entry form |
-| `f` | Filter cues | Cycles: all → pending → resolved |
+| `f` | Filter cues | Cycles: all → pending → resolved → skipped → deferred → archived → all |
 | `r` | Resolve cue | Marks selected cue resolved |
 | `s` | Sync screen | Shows sync/relay status |
 | `P` | Push | Pushes to relay |
 | `G` | Pull | Pulls from relay |
-| `q` / `Esc` | Quit | Exits cleanly |
+| `q` / `Esc` | Quit / go back | `Esc` walks back one screen and drops what you typed |
 
 ### 6.3 TUI Snapshot List
 
@@ -441,8 +496,15 @@ clavus push --relay 192.168.1.X:4477 "/path/to/project.als"
 
 **Expected:**
 ```
-✓ pushed snapshot abc12345
+Connecting to 192.168.1.X:4477...
+  relay has 3 snapshot(s), 1 cue(s)
+Pushing the local chain — 3 snapshot(s), 1 cue(s)...
+✓ Pushed the local chain — 3 snapshot(s) and 1 cue(s) sent
 ```
+
+**What to watch for:** The count is the whole local chain, not the
+number that were new to the relay. A push that fails must exit
+non-zero — a script that runs `clavus push` has to be able to tell.
 
 ### 7.3 Pull from Machine A
 
@@ -453,8 +515,23 @@ clavus pull --relay 192.168.1.X:4477 "/path/to/project.als"
 
 **Expected:**
 ```
-✓ pulled 1 new snapshot(s)
+Connecting to 192.168.1.X:4477...
+  ↳ abc12345  added reverb
+  HEAD → abc12345
+  ✎ 9a8b7c6d…  Fix bass level
+✓ Pulled 1 new snapshot(s)
+  Note: sync transfers snapshot metadata, not project file contents.
+        Restoring a pulled snapshot isn't possible on this machine.
+✓ Imported 1 new cue(s)
 ```
+
+**What to watch for:**
+
+- A pull must **never** move your HEAD backwards. If you had a newer
+  local snapshot and the pull replaced it, your work is gone — report it.
+- A pull against a relay that does not answer must **fail**, not print
+  "✓ up to date".
+- The relay must not hand you another project's snapshots or cues.
 
 ### 7.4 Conflict Detection
 
@@ -495,10 +572,16 @@ clavus status "/path/to/project.als"
 ```
 MyProject  (Ableton Live)
 ──────────────────────────────────────────────────
-✓  12 samples present, all inside project folder
+✓ 12 samples accounted for
+  12 on disk in the project folder
 📷  3 snapshot(s)  (HEAD: a1b2c3d4 — added reverb)
 🎯  4 cue(s)  (2 pending, 2 resolved)
 ```
+
+**What to watch for:** `clavus status` and `clavus audit` must agree on
+the numbers. For a `.bwproject`, the samples inside the archive are
+counted separately from the samples on disk — a bundle whose samples
+are all inside it should not say "0 samples present".
 
 ### 8.3 `clavus restore`
 
@@ -592,7 +675,64 @@ into Beta.als.
 
 ## Part 9: Edge Cases
 
-### 8.1 Unicode in Project Names
+### 9.0 Two Projects With the Same Name
+
+**Setup:** Two different projects that happen to share a file name:
+
+```
+~/Music/AlbumA/Track.als
+~/Music/AlbumB/Track.als
+```
+
+**Test:**
+```bash
+clavus snapshot "~/Music/AlbumA/Track.als" -m "album A"
+clavus snapshot "~/Music/AlbumB/Track.als" -m "album B"
+clavus log "~/Music/AlbumA/Track.als"
+clavus log "~/Music/AlbumB/Track.als"
+clavus cue "~/Music/AlbumA/Track.als" -t "only for A" -p 1.1.1
+clavus cues "~/Music/AlbumB/Track.als"
+```
+
+**Expected:**
+
+- The two logs show **different** chains, each with its own snapshot.
+- The cue added to AlbumA does **not** appear for AlbumB.
+- `clavus restore "~/Music/AlbumB/Track.als" <album A's hash>` must be
+  **refused** — it must not write Album A's bytes over Album B.
+
+**What to watch for:** If one project's history shows up under the
+other, or a restore writes the wrong file, that is a critical bug.
+Report it with both paths.
+
+### 9.0b A Shared Bitwig Archive
+
+**Setup:** A `.bwproject` exported from Bitwig Studio. The archive
+holds a copy of every sample, but `project.xml` still points at the
+original machine's absolute paths.
+
+**Test:**
+```bash
+clavus audit "/path/to/Bundle.bwproject"
+clavus collect "/path/to/Bundle.bwproject"
+clavus audit "/path/to/Bundle.bwproject"
+```
+
+**Expected:**
+
+- The first audit says the samples are **inside the project archive**,
+  not missing.
+- `collect` keeps the bundle **self-contained**: the reference inside
+  `project.xml` is rewritten to the sample's path *inside* the
+  archive, and the sample is not copied out beside the project.
+- The second audit is clean.
+
+**What to watch for:** If `collect` copies the samples into a `Samples/`
+folder next to the bundle, or if the bundle stops opening in Bitwig,
+that is a bug. The bundle has to stay a working Bitwig project.
+
+
+### 9.1 Unicode in Project Names
 
 **Setup:** A project with Unicode characters in the path or filename.
 
@@ -604,7 +744,7 @@ clavus snapshot "/path/to/プロジェクト.als" -m "テスト"
 
 **Expected:** Works without path encoding errors.
 
-### 8.2 Very Long Paths
+### 9.2 Very Long Paths
 
 **Setup:** A project nested several directories deep.
 
@@ -615,7 +755,7 @@ clavus audit "/path/with/very/long/nested/directories/project.als"
 
 **Expected:** No truncation errors or path length issues.
 
-### 8.3 Large Number of Samples
+### 9.3 Large Number of Samples
 
 **Setup:** A project with 100+ samples.
 
@@ -627,7 +767,7 @@ clavus collect "/path/to/project.als"
 
 **Expected:** Completes without crashing or running out of memory.
 
-### 8.4 Mixed DAW Projects
+### 9.4 Mixed DAW Projects
 
 **Setup:** Have both Ableton (`.als`) and Bitwig (`.bwproject`) projects.
 
@@ -639,7 +779,7 @@ clavus collect "/path/to/project.als"
 
 ## Part 10: File Formats
 
-### 9.1 `.als` File Integrity
+### 10.1 `.als` File Integrity
 
 **Test:**
 ```bash
@@ -654,7 +794,7 @@ gunzip -k -c "/path/to/project.als" | head -1
 
 **What to watch for:** Does Clavus handle both gzip-compressed and plain `.als` files correctly?
 
-### 9.2 `.bwproject` ZIP Structure
+### 10.2 `.bwproject` ZIP Structure
 
 **Test:**
 ```bash

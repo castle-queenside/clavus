@@ -66,8 +66,29 @@ of every sample the project uses. The references inside `project.xml`
 still point at the original machine's absolute paths, so on another
 machine those samples look missing even though they are in the archive.
 `clavus_core::bitwig_archive` reads and rewrites the archive: the audit
-knows which samples the archive holds, and `collect` extracts them into
-`Samples/` and rewrites the reference inside `project.xml`.
+knows which samples the archive holds, and they are **present**, not
+missing. `collect` keeps the bundle **self-contained** — it rewrites the
+reference inside `project.xml` to the sample's path *inside* the archive
+rather than copying a duplicate out beside the project. A bundle that
+already points at its own internal sample needs no repair.
+
+### Project identity
+`clavus_core::project::ProjectId` is the identity of a project, and it
+carries four names:
+- `key` — the storage key: the project's folder and file name, made safe
+  for use as a directory name (`Album1__Track.als`). It names the
+  project's HEAD, its snapshot records and its cues.
+- `name` — the display name: the file's stem (`Track`).
+- `file_name` — the file name with its extension (`Track.als`).
+- `sync_name()` — the name on the wire: the file name with its extension,
+  because two machines holding the same project have it at different
+  paths and must still agree, while an `.als` and a `.bwproject` with the
+  same stem stay apart.
+
+The identity is path-aware on purpose. A shared file name is not a shared
+project: `Album1/Track.als` and `Album2/Track.als` are two different sets
+with two different histories, and a snapshot of one must never be written
+over the other.
 
 ### Untrusted remote data
 Snapshots, cues, hashes and ref names all arrive from remote peers.
@@ -78,6 +99,12 @@ Everything that becomes a file name is validated before it is used:
 - The relay rejects malformed snapshots and cues rather than serving them.
 - The relay only ever serves a client the history of the project that
   client named in its Hello.
+
+### Times
+`clavus_core::time` formats every time the tool shows. The times are
+**local** — the system's own time zone rules do the work, so daylight
+saving needs no table of our own — and the offset is named once per
+list, so a reader knows whose clock they are looking at.
 
 ### Audio audit before snapshot
 `SampleAuditReport.ensure_clean()` is called before every `SnapshotStore::save()`.
@@ -114,28 +141,30 @@ git add -A && git commit && git push
 ## Current Status
 
 ### Working ✅
-- `.als` parser (gzip XML, quick-xml)
-- Bitwig `.bwproject` parser (zip XML) — **needs fixture to test**
-- Snapshot store (content-addressed blobs + metadata)
-- Audio sample audit (checks refs before snapshot)
-- Cue markers (Pending / Resolved / Skipped)
-- TUI: all screens, keyboard nav, Omarchy theme
+- `.als` parser (gzip or plain XML, quick-xml) — Live 9/10/11 path handling
+- Bitwig `.bwproject` parser (zip XML) — **needs a real export to validate**
+- Snapshot store (content-addressed blobs + metadata, a HEAD per project)
+- Audio sample audit (checks refs before snapshot; sees inside a bundle)
+- Cue markers (Pending / Resolved / Skipped / Deferred / Archived)
+- TUI: all screens, keyboard nav, Omarchy theme, editable relay address
 - Cliamp spectrum analyzer (sync screen)
-- Relay sync server + client
-- Clippy clean, CI green
+- Relay sync server + client, isolated per project
+- Project identity: path-aware, so two same-named projects never mix
+- 391 tests passing, clippy clean, CI green
 
 ### Blocked ⛔
 | Item | Blocker |
 |------|---------|
-| parser-bw tests | No `.bwproject` fixture — user saves one in Bitwig Studio → `~/Projects/clavus/fixtures/test_project.bwproject` → remove `#[ignore]` |
+| Bitwig schema | The committed fixtures are realistic but synthetic — a real export from Bitwig Studio is still needed to confirm the schema |
 | Windows binary | Cross-compile target TBD — need studio machine distro |
+| Blob transfer | Sync carries metadata only, so a pulled snapshot cannot be restored on another machine yet |
 
 ## Pending Work
 
 ### High Priority
-1. **Bitwig fixture** — user action needed
-2. **Windows cross-compile** — configure musl target
-3. **Linux deploy** — binary for studio machine
+1. **Real Bitwig export** — user action needed, to confirm the schema
+2. **Linux musl binaries** — build and test on the studio machine
+3. **Blob transfer** — decide whether v0.1.0 ships with metadata-only sync
 4. **PR #13 review** — ready for review
 
 ### Nice to Have

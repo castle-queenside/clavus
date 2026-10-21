@@ -1,7 +1,7 @@
 # Clavus Testing Plan
 
 > Last updated: 2026-10-21
-> Status: 🟢 Core suites complete — CLI-level automation and a real Bitwig fixture remain
+> Status: 🟢 Core suites complete — the AI beta wave's findings are all fixed and covered
 
 ## Coverage at a Glance
 
@@ -13,15 +13,18 @@
 | BlobStore / snapshot core | `crates/core/tests/core_tests.rs` | 43 | 🟢 |
 | Cue store | `crates/core/tests/cue_tests.rs` | 26 | 🟢 |
 | Property-based (core) | `crates/core/tests/property_tests.rs` | 11 | 🟢 |
+| Beta regressions (core) | `crates/core/tests/beta_regressions.rs` | 24 | 🟢 |
 | Relay sync | `crates/relay/tests/relay_tests.rs` | 10 | 🟢 |
-| Relay (real server) | `crates/relay/tests/real_relay.rs` | 13 | 🟢 |
-| Sync client (protocol) | `crates/sync/tests/sync_client.rs` | 6 | 🟢 |
+| Relay (real server) | `crates/relay/tests/real_relay.rs` | 17 | 🟢 |
+| Sync client (protocol) | `crates/sync/tests/sync_client.rs` | 8 | 🟢 |
 | Sync client (hostile server) | `crates/sync/tests/hostile_server.rs` | 15 | 🟢 |
 | TUI | `crates/tui/tests/tui_tests.rs` | 43 | 🟢 |
+| TUI (beta regressions) | `crates/tui/tests/beta_tui_tests.rs` | 10 | 🟢 |
 | CLI commands | `crates/cli/tests/cli_tests.rs` | 45 | 🟢 |
-| Core unit tests | `crates/core/src/**` | 5 | 🟢 |
+| CLI (beta regressions) | `crates/cli/tests/beta_cli_tests.rs` | 16 | 🟢 |
+| Core unit tests | `crates/core/src/**` | 35 | 🟢 |
 
-**331 tests passing, 0 failed, 0 ignored.**
+**391 tests passing, 0 failed, 0 ignored.**
 
 Legend: 🟢 good  🟡 partial  🟠 manual only  🔴 missing
 
@@ -161,6 +164,56 @@ real ones. Each now has a regression test:
 | One project could be restored over another | A snapshot lookup fell back to "every snapshot we know about", and the blob store is shared — so `restore Beta.als <alpha-hash>` wrote Alpha's contents into Beta.als | A lookup only considers snapshots whose file name says they belong to that project |
 | The relay stored hashes no client could file | The relay accepted a hash of any length, but a client can only file a 64-character digest | The relay refuses a hash or parent that is not exactly 64 hex characters |
 | A Bitwig archive's samples looked missing | A `.bwproject` exported from Bitwig keeps a copy of every sample, but `project.xml` still points at the original machine's absolute paths — so the samples looked lost | The audit sees what the archive holds and reports those samples as present; `collect` extracts them and rewrites the reference inside the archive |
+
+---
+
+## The AI Beta Wave
+
+Six AI beta agents (Ableton producer, Bitwig producer, collaborator,
+adversary, CLI ergonomics, TUI navigator) ran the compiled binary
+against isolated sandboxes. Every finding was reproduced by hand before
+a line of code changed, and every fix has a regression test.
+
+| Finding | Symptom | Fix | Test |
+|---------|---------|-----|------|
+| A1 | `audit` and `status` gave a clean bill of health to a Bitwig bundle whose `project.xml` was corrupt or missing | The bundle is rejected before it is audited | `core/tests/beta_regressions.rs` |
+| A2 | A `.als` truncated by one byte audited as "0 samples present" | The document must end in `>` | `core/tests/beta_regressions.rs` |
+| A3 | A dead relay printed "✓ Already up to date" and exited 0 | A missing answer is an error | `cli/tests/beta_cli_tests.rs` |
+| B1 | A pull rewound the local HEAD to an older snapshot and dropped the newer one | A pull only advances to a descendant of the local HEAD | `cli/tests/cli_tests.rs` |
+| B2 | The relay merged two projects with the same file name | Every project has its own chain, cues and relay bucket | `relay/tests/real_relay.rs` |
+| B3 | Restoring an older snapshot dropped the newer ones from the history | The history is kept; the restore says so | `cli/tests/cli_tests.rs` |
+| B4 | `audit` and `status` reported different sample counts for the same bundle | Both use one summary | `cli/tests/beta_cli_tests.rs` |
+| B5 | The error message told the user to run `clavus collect --copy-missing` — a flag that does not exist | The hint names a command that works | `core/tests/beta_regressions.rs` |
+| B6 | `clavus cue` accepted "abc" as a position and reported success | A position must be `bars.beats.sixteenths` | `cli/tests/cli_tests.rs` |
+| B7 | `clavus tui` exited 101 with no message when the terminal had no size | The tool says why it cannot start | `tui/src/ui.rs` |
+| B8 | The TUI's cue form swapped the message and the position | The message is asked for first | `tui/tests/beta_tui_tests.rs` |
+| B9 | A `q` could not be typed in a text field | The text field takes the key | `tui/tests/beta_tui_tests.rs` |
+| B10 | The TUI showed 120 BPM and 0 tracks for every project | The real values are parsed | `tui/tests/beta_tui_tests.rs` |
+| B11 | The TUI listed only the top folder | The scan is recursive, with a depth cap | `tui/tests/beta_tui_tests.rs` |
+| B12 | The TUI could not talk to a relay on another machine | The relay address is editable | `tui/tests/beta_tui_tests.rs` |
+| B13 | The cue filter stopped after "skipped" | Every status can be filtered on | `tui/tests/beta_tui_tests.rs` |
+| B14 | Every cue was authored by the constant "cli" | The author is the user's name, or `--author` | `cli/tests/beta_cli_tests.rs` |
+| B15 | A push dropped the cues of a project with no snapshots | The cues are collected before the early return | `cli/tests/beta_cli_tests.rs`, `relay/tests/real_relay.rs` |
+| B16 | A push to a firewalled address froze for 75 seconds | The connect gives up after ten seconds | `sync/tests/sync_client.rs` |
+| B17 | The relay's per-project order was rebuilt from a hash map, so it changed on every restart | The order is rebuilt from the parent links | `relay/tests/real_relay.rs` |
+| B18 | The snapshot log printed UTC times with no label | The times are local, and the offset is named | `core/src/time.rs` |
+| B19 | The TUI's idle phrase never changed | The phrases rotate | `tui/tests/beta_tui_tests.rs` |
+| B20 | `Esc` did not walk back one level in the TUI | `Esc` goes back and drops the text | `tui/tests/beta_tui_tests.rs` |
+
+### The Beta Harness
+
+The harness lives outside the repository, in `~/agent-state/beta-lab/`:
+
+- `playbook.md` — the rules the agents follow
+- `charters/` — one charter per persona
+- `seed.sh` — creates an isolated sandbox per agent
+- `run.sh` — runs the agents in parallel with a time limit
+- `jsonl_to_text.py` — renders Pi's JSONL events into readable logs
+- `findings/` — the findings each agent filed
+- `sandboxes/` — the isolated data directories
+
+Every agent runs the **compiled binary** in its own `CLAVUS_DATA`
+sandbox. The repository is never touched.
 
 ---
 
