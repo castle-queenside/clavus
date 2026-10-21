@@ -462,3 +462,73 @@ fn test_audit_deduplicates_missing_references() {
     let report = audit_project(&als_path).unwrap();
     assert_eq!(report.missing.len(), 1, "missing file counted once");
 }
+
+// ─── Non-project files must not audit as clean ─────────────────────────────
+
+#[test]
+fn test_audit_rejects_a_file_that_is_not_a_live_set() {
+    let tmp = TempDir::new().unwrap();
+    let project_dir = tmp.path().to_path_buf();
+
+    let path = project_dir.join("notes.txt");
+    fs::write(&path, b"not a project at all").unwrap();
+
+    let err = audit_project(&path).expect_err("a non-project must not audit clean");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("LiveSet") || msg.contains("Ableton") || msg.contains("malformed"),
+        "the error should explain the problem: {}",
+        msg
+    );
+}
+
+#[test]
+fn test_audit_rejects_valid_xml_that_is_not_a_live_set() {
+    let tmp = TempDir::new().unwrap();
+    let project_dir = tmp.path().to_path_buf();
+
+    let path = project_dir.join("Other.als");
+    fs::write(
+        &path,
+        br#"<?xml version="1.0" encoding="UTF-8"?><SomeOtherApp><Thing/></SomeOtherApp>"#,
+    )
+    .unwrap();
+
+    let err = audit_project(&path).expect_err("a non-Live XML must not audit clean");
+    assert!(
+        err.to_string().contains("not an Ableton Live project"),
+        "unexpected error: {}",
+        err
+    );
+}
+
+#[test]
+fn test_audit_rejects_malformed_xml() {
+    let tmp = TempDir::new().unwrap();
+    let project_dir = tmp.path().to_path_buf();
+
+    let path = project_dir.join("Broken.als");
+    fs::write(&path, b"<LiveSet><unclosed>").unwrap();
+
+    assert!(
+        audit_project(&path).is_err(),
+        "malformed XML must not audit clean"
+    );
+}
+
+#[test]
+fn test_audit_accepts_a_plain_xml_live_set() {
+    let tmp = TempDir::new().unwrap();
+    let project_dir = tmp.path().to_path_buf();
+
+    let path = project_dir.join("Plain.als");
+    fs::write(
+        &path,
+        als_xml(&[("Samples/kick.wav", "kick.wav")]).as_bytes(),
+    )
+    .unwrap();
+    make_sample(&project_dir.join("Samples").join("kick.wav"), b"FAKE_AUDIO");
+
+    let report = audit_project(&path).expect("plain XML should audit");
+    assert_eq!(report.collected.len(), 1);
+}

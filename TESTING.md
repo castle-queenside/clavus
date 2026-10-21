@@ -9,7 +9,7 @@
 |------|-----------|-------|--------|
 | Parser ALS | `crates/parser-als/tests/als_parser.rs` | 48 | 🟢 |
 | Parser Bitwig | `crates/parser-bw/tests/bw_parser.rs` | 21 | 🟢 |
-| Sample audit + collect | `crates/core/tests/collect_tests.rs` | 15 | 🟢 |
+| Sample audit + collect | `crates/core/tests/collect_tests.rs` | 19 | 🟢 |
 | BlobStore / snapshot core | `crates/core/tests/core_tests.rs` | 27 | 🟢 |
 | Cue store | `crates/core/tests/cue_tests.rs` | 20 | 🟢 |
 | Property-based (core) | `crates/core/tests/property_tests.rs` | 11 | 🟢 |
@@ -18,10 +18,10 @@
 | Sync client (protocol) | `crates/sync/tests/sync_client.rs` | 6 | 🟢 |
 | Sync client (hostile server) | `crates/sync/tests/hostile_server.rs` | 15 | 🟢 |
 | TUI | `crates/tui/tests/tui_tests.rs` | 39 | 🟢 |
+| CLI commands | `crates/cli/tests/cli_tests.rs` | 36 | 🟢 |
 | Core unit tests | `crates/core/src/**` | 5 | 🟢 |
-| CLI commands | — | 0 | 🟡 |
 
-**226 tests passing, 0 failed, 0 ignored.**
+**266 tests passing, 0 failed, 0 ignored.**
 
 Legend: 🟢 good  🟡 partial  🟠 manual only  🔴 missing
 
@@ -46,11 +46,14 @@ Relay + collect integration tests are written and passing. See:
 
 ## Priority 2: Remaining Gaps
 
-### 2.1 CLI command tests 🟡
+### 2.1 CLI command tests ✅
 
-The CLI is exercised end-to-end by hand (see `BETA_TESTING.md`) but has no
-automated tests. The natural next step is to move each `cmd_*` function
-into a testable module and drive it with `assert_cmd`.
+The command implementations were moved out of the binary into the
+`clavus-cli` crate so they can be driven directly, with output written to
+injectable streams. `crates/cli/tests/cli_tests.rs` covers `audit`,
+`snapshot`, `log`, `cue`, `cues`, `status`, `restore`, `collect`,
+`projects`, `push` and `pull`, plus three end-to-end tests that run the
+compiled binary.
 
 ### 2.2 Snapshot rendering snapshots 🟡
 
@@ -124,6 +127,22 @@ Implemented with `proptest` in `crates/core/tests/property_tests.rs`:
 
 Still worth adding: arbitrary XML that is valid LiveSet structure, and
 arbitrary DAGs of snapshots for conflict detection.
+
+---
+
+## Bugs Found By These Tests
+
+The CLI suite was written to hunt for failure modes, and it found several
+real ones. Each now has a regression test:
+
+| Bug | Symptom | Fix |
+|-----|---------|-----|
+| False all-clear on a corrupt project | `audit` printed "✓ 0 samples present" for a file that was not a Live set | `validate_als_xml()` rejects non-Live and malformed XML before auditing |
+| UTF-8 panic in `cues` | Listing a cue whose text had a multi-byte character at byte 22 panicked | Truncation is now character-based |
+| Unknown status silently matched nothing | `cues --status open` printed "No cues." and exited 0 | `CueStatus::parse()` returns `None` for unknown names and `list()` errors |
+| `collect` exited 0 after failing | A sample missing from disk was reported but the command still succeeded | `collect` now exits non-zero and explains what to do |
+| `snapshot` claimed a new snapshot for unchanged content | The user's message was silently dropped but "✓ snapshot" was printed | The unchanged case is detected and reported honestly |
+| `audit` printed "1 samples" | Grammar | Count-aware pluralisation |
 
 ---
 

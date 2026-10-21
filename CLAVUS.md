@@ -33,9 +33,14 @@ rust/
 │   ├── parser-bw/          # .bwproject parser (zip XML → Project)
 │   ├── relay/              # TCP relay server (accepts clients, broadcasts)
 │   ├── sync/               # SyncClient (TCP framed JSON)
-│   └── tui/                # Ratatui app (screens, theme, key handling)
-└── src/main.rs             # CLI entry point + TUI event loop
+│   ├── tui/                # Ratatui app (screens, theme, key handling)
+│   └── cli/                # command implementations (testable, stream-injectable)
+└── src/main.rs             # argument parsing + dispatch + TUI event loop
 ```
+
+The command implementations live in `clavus-cli` rather than in the binary so
+they can be driven directly from tests, with output written to injectable
+streams rather than straight to stdout.
 
 ## Core Types
 

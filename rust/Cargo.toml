@@ -7,6 +7,7 @@ members = [
     "crates/sync",
     "crates/relay",
     "crates/tui",
+    "crates/cli",
 ]
 
 [[bin]]
@@ -27,6 +28,7 @@ clavus-parser-bw = { path = "crates/parser-bw" }
 clavus-sync = { path = "crates/sync" }
 clavus-relay = { path = "crates/relay" }
 clavus-tui = { path = "crates/tui" }
+clavus-cli = { path = "crates/cli" }
 
 # CLI & TUI
 clap = { version = "4", features = ["derive"] }

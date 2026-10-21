@@ -184,11 +184,72 @@ pub fn audit_project(project_path: &Path) -> Result<SampleAuditReport, ClavusErr
             .map_err(|e| ClavusError::ParseError(format!("gzip: {}", e)))?;
         let xml = String::from_utf8(xml_bytes)
             .map_err(ClavusError::from)?;
+        // Reject anything that is not a Live set before auditing it — a
+        // corrupt or unrelated file must not audit as "0 samples present".
+        validate_als_xml(&xml)?;
         extract_als_sample_paths_from_xml(&xml)
     };
 
     debug!("audit_project: {} sample refs from {}", refs.len(), project_path.display());
     audit_sample_refs(&refs, project_root)
+}
+
+/// Validate that `xml` is an Ableton Live set.
+///
+/// The sample extractor is deliberately lenient — it only looks for
+/// `<SampleRef>` elements — so without this check a corrupt or unrelated
+/// file would audit as "0 samples present" and look clean.
+///
+/// The whole document is parsed, so a truncated or malformed file is
+/// rejected even when its opening tags look like a Live set.
+pub fn validate_als_xml(xml: &str) -> Result<(), ClavusError> {
+    let mut reader = quick_xml::Reader::from_str(xml);
+    reader.trim_text(true);
+    let mut buf = Vec::new();
+    let mut saw_liveset = false;
+    // quick-xml does not report an element that is never closed, so the
+    // nesting depth is tracked here to catch a truncated document.
+    let mut depth: i64 = 0;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(quick_xml::events::Event::Start(e)) => {
+                depth += 1;
+                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                if tag == "LiveSet" || tag == "Ableton" {
+                    saw_liveset = true;
+                }
+            }
+            Ok(quick_xml::events::Event::Empty(e)) => {
+                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                if tag == "LiveSet" || tag == "Ableton" {
+                    saw_liveset = true;
+                }
+            }
+            Ok(quick_xml::events::Event::End(_)) => {
+                depth -= 1;
+            }
+            Ok(quick_xml::events::Event::Eof) => break,
+            Err(e) => {
+                return Err(ClavusError::ParseError(format!("malformed XML: {}", e)));
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    if depth != 0 {
+        return Err(ClavusError::ParseError(
+            "malformed XML: the document ends with an unclosed element".into(),
+        ));
+    }
+
+    if !saw_liveset {
+        return Err(ClavusError::ParseError(
+            "not an Ableton Live project: no <Ableton> or <LiveSet> element".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Extract audio sample paths from a Bitwig `.bwproject` ZIP archive.

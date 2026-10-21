@@ -224,6 +224,17 @@ impl CueStore {
 
     /// List all cues, optionally filtered by status.
     pub fn list(&self, filter: Option<&str>) -> Result<Vec<Cue>, ClavusError> {
+        // An unrecognised status must not silently match nothing — the
+        // user would see "No cues." and think they have none.
+        if let Some(status) = filter {
+            if CueStatus::parse(status).is_none() {
+                return Err(ClavusError::ParseError(format!(
+                    "unknown cue status '{}' (expected one of: {})",
+                    status,
+                    CueStatus::ALL.join(", ")
+                )));
+            }
+        }
         let mut cues = Vec::new();
 
         if let Ok(entries) = fs::read_dir(&self.cues_dir) {

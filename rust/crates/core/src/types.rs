@@ -226,12 +226,27 @@ impl CueStatus {
 
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
+        Self::parse(s).unwrap_or(CueStatus::Pending)
+    }
+
+    /// Every valid status name, in the order they are displayed.
+    pub const ALL: [&'static str; 5] = [
+        "pending",
+        "resolved",
+        "skipped",
+        "deferred",
+        "archived",
+    ];
+
+    /// Parse a status name, returning `None` when it is not recognised.
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
-            "resolved" => CueStatus::Resolved,
-            "skipped" => CueStatus::Skipped,
-            "deferred" => CueStatus::Deferred,
-            "archived" => CueStatus::Archived,
-            _ => CueStatus::Pending,
+            "pending" => Some(CueStatus::Pending),
+            "resolved" => Some(CueStatus::Resolved),
+            "skipped" => Some(CueStatus::Skipped),
+            "deferred" => Some(CueStatus::Deferred),
+            "archived" => Some(CueStatus::Archived),
+            _ => None,
         }
     }
 }

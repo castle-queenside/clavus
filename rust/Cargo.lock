@@ -318,6 +318,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "clavus-cli",
  "clavus-core",
  "clavus-parser-als",
  "clavus-parser-bw",
@@ -331,6 +332,24 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "clavus-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "clavus-core",
+ "clavus-parser-als",
+ "clavus-parser-bw",
+ "clavus-relay",
+ "clavus-sync",
+ "clavus-tui",
+ "dirs",
+ "flate2",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]
