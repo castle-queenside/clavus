@@ -13,7 +13,7 @@ pub mod snapshot;
 pub use snapshot::SnapshotStore;
 
 pub mod cue;
-pub use cue::CueStore;
+pub use cue::{CueStore, ImportOutcome};
 
 pub mod sample;
 pub use sample::{audit_project, collect_samples, CollectReport};

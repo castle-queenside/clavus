@@ -15,6 +15,27 @@ pub struct CueStore {
     cues_dir: PathBuf,
 }
 
+/// Outcome of importing a remote cue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportOutcome {
+    /// The remote cue was new (or newer) and has been stored.
+    Imported,
+    /// The remote cue was identical to the local one.
+    Unchanged,
+    /// The local cue was newer; a conflict note was added to it.
+    Conflict,
+}
+
+impl std::fmt::Display for ImportOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ImportOutcome::Imported => write!(f, "imported"),
+            ImportOutcome::Unchanged => write!(f, "unchanged"),
+            ImportOutcome::Conflict => write!(f, "conflict"),
+        }
+    }
+}
+
 impl CueStore {
     /// Create a CueStore for a project.
     pub fn new(clavus_root: &Path, project_name: &str) -> std::io::Result<Self> {
@@ -237,17 +258,17 @@ impl CueStore {
     }
 
     /// Import a cue from a remote sync.
-    pub fn import(&self, remote_cue: Cue) -> Result<String, ClavusError> {
+    pub fn import(&self, remote_cue: Cue) -> Result<ImportOutcome, ClavusError> {
         if let Some(local) = self.load(&remote_cue.id)? {
             let key = |c: &Cue| {
                 format!("{}|{}|{}|{}", c.text, c.status.as_str(), c.position, c.assignee)
             };
             if key(&local) == key(&remote_cue) {
-                return Ok("unchanged".to_string());
+                return Ok(ImportOutcome::Unchanged);
             }
             if remote_cue.timestamp > local.timestamp {
                 self.save(&remote_cue)?;
-                return Ok("imported".to_string());
+                return Ok(ImportOutcome::Imported);
             }
             // Local is newer — mark conflict
             let mut conflicted = local;
@@ -263,10 +284,10 @@ impl CueStore {
                 snapshot_hash: String::new(),
             });
             self.save(&conflicted)?;
-            Ok("conflict".to_string())
+            Ok(ImportOutcome::Conflict)
         } else {
             self.save(&remote_cue)?;
-            Ok("imported".to_string())
+            Ok(ImportOutcome::Imported)
         }
     }
 
