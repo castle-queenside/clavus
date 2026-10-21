@@ -60,11 +60,12 @@ Clavus watches your project files and maintains a content-addressed snapshot cha
 | Feature | What it does |
 |---------|-------------|
 | **Snapshot** | Save a content-addressed checkpoint. SHA256 of `.als`/`.bwproject` bytes. Duplicates detected automatically. |
-| **Audio audit** | Before every snapshot: verify all sample references are present and inside the project folder. No silent missing samples. |
+| **Audio audit** | Before every snapshot: verify all sample references are present and inside the project folder. No silent missing samples. A Bitwig bundle's own samples count as present, and `collect` extracts them. |
 | **Cue markers** | Pin timeline comments at bar positions. Filter by Pending / Resolved / Skipped. |
 | **Relay sync** | Push/pull snapshots over TCP to a collaborator's relay. No cloud. |
 | **Diff** | Walk the chain. See what changed: BPM, track count, sample manifest, message. |
-| **Restore** | Roll back to any snapshot — restore the raw project bytes from the blob store. |
+| **Restore** | Roll back to any snapshot — restore the raw project bytes from the blob store. A snapshot only ever restores within its own project. |
+| **Project isolation** | Every project keeps its own chain, cues and history. One project's work never lands in another's. |
 
 ---
 
