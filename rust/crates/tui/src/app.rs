@@ -71,12 +71,21 @@ pub struct ProjectEntry {
 /// Commands sent from the TUI event loop to the background sync thread.
 #[derive(Debug)]
 pub enum SyncCmd {
-    Connect(String),  // relay address
+    /// Connect to a relay, optionally for a named project.
+    Connect {
+        addr: String,
+        project: Option<String>,
+    },
     Disconnect,
+    /// Tell the relay which project we are working on.
+    SetProject(String),
     /// Push the given local snapshots and cues to the relay.
     Push {
         snapshots: Vec<clavus_core::types::Snapshot>,
         cues: Vec<clavus_core::types::Cue>,
+        /// The project these belong to — the relay keys its storage by
+        /// project name, so this has to be right.
+        project: Option<String>,
     },
     /// Pull snapshots the relay has that we don't, given our known heads.
     ///
@@ -207,6 +216,13 @@ impl App {
         self.project_detail = Some(project);
         self.selected_project = Some(idx);
         self.loading = false;
+
+        // Tell the relay which project we switched to, so it serves the
+        // right history and stores our pushes under the right name.
+        let name = self.selected_project_name();
+        if let (Some(name), Some(tx)) = (name, self.sync_state.cmd_tx.as_ref()) {
+            let _ = tx.send(SyncCmd::SetProject(name));
+        }
         Ok(())
     }
 
@@ -342,8 +358,18 @@ impl App {
         // here so the UI can show failures instead of assuming success.
         let (result_tx, result_rx) = mpsc::channel::<String>();
 
+        // The project we are working on, so the relay serves us the
+        // right history.
+        let initial_project = self.selected_project_name();
+
         // Spawn the background sync thread.
         thread::spawn(move || {
+            // The relay keys its storage by project name, so the client
+            // has to introduce itself with the project it is working on.
+            // A placeholder is used until a project is chosen, so the
+            // connection is not rejected before then.
+            let mut project: Option<String> = initial_project.clone();
+
             // Use Option to allow re-binding client on reconnect.
             let mut client: Option<SyncClient> = match SyncClient::connect(&addr_owned) {
                 Ok(c) => Some(c),
@@ -354,7 +380,7 @@ impl App {
             };
 
             if let Some(ref c) = client {
-                if let Err(e) = c.hello("clavus-tui", vec![]) {
+                if let Err(e) = c.hello(project.as_deref().unwrap_or("clavus-tui"), vec![]) {
                     let _ = result_tx.send(format!("hello failed: {}", e));
                     return;
                 }
@@ -371,8 +397,23 @@ impl App {
                         let _ = result_tx.send("disconnected".to_string());
                         break;
                     }
-                    SyncCmd::Push { snapshots, cues } => {
+                    SyncCmd::SetProject(name) => {
+                        project = Some(name.clone());
+                        // Re-introduce ourselves so the relay serves the
+                        // new project's history from now on.
                         if let Some(ref c) = client {
+                            let _ = c.hello(project.as_deref().unwrap_or("clavus-tui"), vec![]);
+                        }
+                    }
+                    SyncCmd::Push {
+                        snapshots,
+                        cues,
+                        project: push_project,
+                    } => {
+                        if let Some(ref c) = client {
+                            if let Some(p) = push_project {
+                                project = Some(p.clone());
+                            }
                             let count = snapshots.len();
                             let cue_count = cues.len();
                             match c.push(snapshots, cues) {
@@ -409,7 +450,9 @@ impl App {
                         if let Some(ref c) = client {
                             // The relay replies to Hello with a Push of
                             // everything we are missing.
-                            if let Err(e) = c.hello("clavus-tui", known_heads) {
+                            if let Err(e) =
+                                c.hello(project.as_deref().unwrap_or("clavus-tui"), known_heads)
+                            {
                                 let _ = result_tx.send(format!("pull failed: {}", e));
                                 continue;
                             }
@@ -435,14 +478,17 @@ impl App {
                             let _ = result_tx.send("not connected".to_string());
                         }
                     }
-                    SyncCmd::Connect(new_addr) => {
+                    SyncCmd::Connect { addr: new_addr, project: new_project } => {
+                        if let Some(p) = new_project {
+                            project = Some(p);
+                        }
                         // Close the old connection, then reconnect.
                         if let Some(c) = client.take() {
                             c.close();
                         }
                         client = match SyncClient::connect(&new_addr) {
                             Ok(c) => {
-                                let _ = c.hello("clavus-tui", vec![]);
+                                let _ = c.hello(project.as_deref().unwrap_or("clavus-tui"), vec![]);
                                 let _ = result_tx.send(format!("connected to {}", new_addr));
                                 Some(c)
                             }

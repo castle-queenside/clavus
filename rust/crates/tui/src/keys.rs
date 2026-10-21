@@ -134,7 +134,14 @@ pub fn handle_key(key: &KeyEvent, app: &mut App) -> bool {
                     // notes are the point of the cue system.
                     let cues = app.project_cues();
                     let c = cues.len();
-                    app.sync_state.send_cmd(SyncCmd::Push { snapshots, cues });
+                    // The relay keys its storage by project, so the push
+                    // has to say which project these belong to.
+                    let project = app.selected_project_name();
+                    app.sync_state.send_cmd(SyncCmd::Push {
+                        snapshots,
+                        cues,
+                        project,
+                    });
                     app.set_info(format!("pushing {} snapshot(s), {} cue(s)...", n, c));
                 }
             } else {

@@ -630,3 +630,123 @@ fn pushing_includes_the_projects_cues() {
     assert_eq!(cues.len(), 1, "the project's cues should be picked up");
     assert_eq!(cues[0].text, "a note worth sharing");
 }
+
+// ─── Sync project identity ─────────────────────────────────────────────────
+//
+// The relay keys its storage by project name, so the TUI has to
+// introduce itself with the project it is working on. It used to say
+// "clavus-tui", which put every project's snapshots and cues under one
+// name and served the wrong history on a pull.
+
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+/// A relay that records the client name of every Hello it receives.
+fn recording_relay() -> (String, mpsc::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let (tx, rx) = mpsc::channel();
+
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            loop {
+                let mut len_buf = [0u8; 4];
+                if stream.read_exact(&mut len_buf).is_err() {
+                    break;
+                }
+                let len = u32::from_be_bytes(len_buf) as usize;
+                let mut body = vec![0u8; len];
+                if stream.read_exact(&mut body).is_err() {
+                    break;
+                }
+                let json: serde_json::Value = match serde_json::from_slice(&body) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                if json.get("type").and_then(|t| t.as_str()) == Some("hello") {
+                    if let Some(name) = json.get("client_name").and_then(|n| n.as_str()) {
+                        let _ = tx.send(name.to_string());
+                    }
+                }
+                // Answer every frame so the client does not block.
+                let reply = serde_json::json!({"type": "synced"});
+                let payload = serde_json::to_vec(&reply).unwrap();
+                if stream.write_all(&(payload.len() as u32).to_be_bytes()).is_err() {
+                    break;
+                }
+                let _ = stream.write_all(&payload);
+                let _ = stream.flush();
+            }
+        }
+    });
+
+    (addr, rx)
+}
+
+/// Wait for the relay to report a client name.
+fn wait_for_hello(rx: &mpsc::Receiver<String>) -> String {
+    rx.recv_timeout(Duration::from_secs(5))
+        .expect("the relay should receive a Hello")
+}
+
+#[test]
+fn the_tui_introduces_itself_with_the_selected_project() {
+    let (addr, rx) = recording_relay();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let projects = tmp.path().join("projects");
+    let data = tmp.path().join("data");
+    std::fs::create_dir_all(&projects).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(projects.join("Alpha.als"), MINIMAL_ALS).unwrap();
+    std::fs::write(projects.join("Beta.als"), MINIMAL_ALS).unwrap();
+
+    let mut app = App::new(projects);
+    app.clavus_root = data;
+    app.refresh_projects().unwrap();
+
+    // Select Alpha. The order of the project list comes from the
+    // filesystem, so the index is looked up by name.
+    let alpha = app.projects.iter().position(|p| p.name == "Alpha").unwrap();
+    app.load_project(alpha).unwrap();
+    assert_eq!(app.selected_project_name().as_deref(), Some("Alpha"));
+
+    app.sync_connect(&addr);
+
+    // The initial Hello names the selected project, not a fixed string.
+    let hello = wait_for_hello(&rx);
+    assert_eq!(
+        hello, "Alpha",
+        "the TUI must introduce itself with the project it is working on"
+    );
+}
+
+#[test]
+fn the_tui_tells_the_relay_when_the_selection_changes() {
+    let (addr, rx) = recording_relay();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let projects = tmp.path().join("projects");
+    let data = tmp.path().join("data");
+    std::fs::create_dir_all(&projects).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(projects.join("Alpha.als"), MINIMAL_ALS).unwrap();
+    std::fs::write(projects.join("Beta.als"), MINIMAL_ALS).unwrap();
+
+    let mut app = App::new(projects);
+    app.clavus_root = data;
+    app.refresh_projects().unwrap();
+
+    let alpha = app.projects.iter().position(|p| p.name == "Alpha").unwrap();
+    let beta = app.projects.iter().position(|p| p.name == "Beta").unwrap();
+    app.load_project(alpha).unwrap();
+    app.sync_connect(&addr);
+    assert_eq!(wait_for_hello(&rx), "Alpha");
+
+    // Switch to the other project: the relay must be told.
+    app.load_project(beta).unwrap();
+    assert_eq!(wait_for_hello(&rx), "Beta");
+}
