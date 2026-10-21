@@ -376,6 +376,12 @@ Listening on 0.0.0.0:4477…
 State: ~/.clavus/relay-state
 ```
 
+The bind address can also be given positionally: `clavus relay 0.0.0.0:4477`
+
+> **Note:** sync transfers snapshot *metadata* (hash, message, track count, BPM, samples),
+> not the project file contents. A pulled snapshot can be viewed in `clavus log`, but
+> can't be restored on the receiving machine.
+
 ### 7.2 Push from Machine B
 
 **On Machine B:**
@@ -412,7 +418,82 @@ clavus pull --relay 192.168.1.X:4477 "/path/to/project.als"
 
 ---
 
-## Part 8: Edge Cases
+## Part 8: Project Discovery & Status
+
+### 8.1 `clavus projects`
+
+Scans `~/Music` and `~/Documents` for Ableton/Bitwig projects.
+
+**Test:**
+```bash
+clavus projects
+clavus projects --recursive
+```
+
+**Expected:** A list of project names, last-modified times, and full paths.
+
+### 8.2 `clavus status`
+
+A one-command overview of a project.
+
+**Test:**
+```bash
+clavus status "/path/to/project.als"
+```
+
+**Expected:**
+```
+MyProject  (Ableton Live)
+──────────────────────────────────────────────────
+✓  12 samples present, all inside project folder
+📷  3 snapshot(s)  (HEAD: a1b2c3d4 — added reverb)
+🎯  4 cue(s)  (2 pending, 2 resolved)
+```
+
+### 8.3 `clavus restore`
+
+Restores a project to a previous snapshot.
+
+**Test:**
+```bash
+# Restore to the latest snapshot
+clavus restore "/path/to/project.als"
+
+# Restore to a specific snapshot (hash prefix works)
+clavus log "/path/to/project.als"
+clavus restore "/path/to/project.als" a1b2c3
+```
+
+**Expected:**
+```
+Restoring MyProject to snapshot a1b2c3d4...
+✓ Restored to: a1b2c3d4
+  added reverb
+  Restart Ableton/Bitwig to load the restored file.
+```
+
+**What to watch for:** Open the project in Ableton after restoring — does it look like
+the state described by that snapshot's message?
+
+### 8.4 `clavus snapshot --collect`
+
+Auto-collects samples before snapshotting instead of failing.
+
+**Test:**
+```bash
+clavus snapshot "/path/to/project.als" -m "with auto collect" --collect
+```
+
+**Expected:**
+```
+→ Running `clavus collect` to copy samples into project folder...
+✓ Collect complete — proceeding with snapshot
+✓ snapshot 9f8e7d6c  ·  2026-10-20 15:30  ·  8 tracks  ·  128 BPM
+```
+
+---
+
+## Part 9: Edge Cases
 
 ### 8.1 Unicode in Project Names
 
@@ -459,7 +540,7 @@ clavus collect "/path/to/project.als"
 
 ---
 
-## Part 9: File Formats
+## Part 10: File Formats
 
 ### 9.1 `.als` File Integrity
 
@@ -571,6 +652,12 @@ RELAY
 [ ] relay: starts and listens
 [ ] push/pull: works between two machines
 [ ] conflict: detected when simultaneous edits
+
+DISCOVERY & STATUS
+[ ] projects: finds .als and .bwproject files
+[ ] status: shows samples, snapshots, cues
+[ ] restore: restores to a specific snapshot
+[ ] snapshot --collect: auto-collects before snapshotting
 
 EDGE CASES
 [ ] Unicode in project name

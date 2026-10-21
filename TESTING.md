@@ -27,17 +27,17 @@ Legend: 🟢 good  🟡 partial  🟠 manual only  🔴 missing
 
 | Area | Unit tests | Integration tests | Status |
 |------|-----------|-----------------|--------|
-| Parser ALS | 27 | 0 | 🟢 |
+| Parser ALS | 38 | 0 | 🟢 |
 | Parser Bitwig | 2 | 0 | 🟡 (needs fixture) |
-| BlobStore / Core | 25 | 0 | 🟡 |
-| Sample audit + collect | 9 | 0 | 🟢 ✅ DONE |
-| Relay sync | 10 | 0 | 🟢 ✅ DONE |
-| Sync client | 0 | 0 | 🟠 |
+| BlobStore / Core | 27 | 0 | 🟡 |
+| Sample audit + collect | 11 | 0 | 🟢 |
+| Relay sync | 10 | 0 | 🟢 |
+| Sync client | 6 | 0 | 🟢 |
 | Conflict detection | 3 (relay) | 0 | 🟡 |
 | TUI | 0 | 0 | 🟠 |
 | CLI commands | 0 | 0 | 🟡 |
 
-**78 tests passing, 1 ignored (needs Bitwig fixture).**
+**99 tests passing, 1 ignored (needs Bitwig fixture).**
 
 ---
 
@@ -53,19 +53,13 @@ Relay + collect integration tests are written and passing. See:
 
 ### 2.1 SyncClient Unit Tests
 
-Add `crates/sync/tests/client_tests.rs`:
-- `test_hello_contains_known_heads`
-- `test_recv_timeout_returns_none_on_close`
-- `test_send_after_close_returns_error`
-- `test_conflict_msg_variant` (already covered in relay_tests.rs but add explicit unit test)
+Done — see `crates/sync/tests/sync_client.rs` (6 tests).
 
 ### 2.2 SnapshotStore Tests
 
-Add `crates/core/tests/snapshot_tests.rs`:
-- `test_save_and_load_snapshot`
-- `test_head_tracking`
-- `test_walk_chain`
-- `test_chain_length`
+Done — `has()`, `save_raw()` covered in `crates/core/tests/core_tests.rs`.
+
+Still missing: dedicated `walk_chain` / `chain_length` / `set_head` shrink-guard tests.
 
 ### 2.3 TUI Key Handler Tests
 

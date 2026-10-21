@@ -66,8 +66,11 @@ enum Commands {
     },
     /// Run the sync relay server
     Relay {
-        #[arg(default_value = "127.0.0.1:4477")]
+        /// Bind address, e.g. 0.0.0.0:4477
+        #[arg(short, long, default_value = "127.0.0.1:4477")]
         bind: String,
+        /// Bind address (positional form, overrides --bind)
+        bind_positional: Option<String>,
         /// Directory for persisted relay state
         #[arg(long)]
         state_dir: Option<PathBuf>,
@@ -148,7 +151,10 @@ fn main() -> anyhow::Result<()> {
             cmd_cue(&project, &text, &position, track.as_deref(), &clavus_root)
         }
         Commands::Cues { project, status } => cmd_cues(&project, status.as_deref(), &clavus_root),
-        Commands::Relay { bind, state_dir } => cmd_relay(&bind, state_dir, &clavus_root),
+        Commands::Relay { bind, bind_positional, state_dir } => {
+            let bind = bind_positional.unwrap_or(bind);
+            cmd_relay(&bind, state_dir, &clavus_root)
+        }
         Commands::Audit { project, strict } => cmd_audit(&project, strict),
         Commands::Collect { project } => cmd_collect(&project, &clavus_root),
         Commands::Push { relay, project } => cmd_push(&relay, &project, &clavus_root),
@@ -762,15 +768,29 @@ fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path) -> anyhow::Result<(
     loop {
         match client.recv_timeout(timeout) {
             Some(SyncMsg::Push { snapshots, cues: _ }) => {
+                let mut newest: Option<String> = None;
                 for snap in &snapshots {
                     if !snap_store.has(&snap.hash) {
                         snap_store.save_raw(snap.clone())?;
                         println!("  ↳ {}  {}", &snap.hash[..8], snap.message);
                         pulled_count += 1;
                     }
+                    // Track the newest pulled snapshot (relay sends root → head)
+                    newest = Some(snap.hash.clone());
                 }
                 if snapshots.is_empty() {
                     println!("  Relay has no new snapshots");
+                } else if let Some(hash) = newest {
+                    // Advance HEAD to the pulled head so the chain is usable.
+                    // A shrink is refused (that would be a divergent history),
+                    // so report it instead of silently rewinding.
+                    match snap_store.set_head(&hash, "pull") {
+                        Ok(()) => println!("  HEAD → {}", &hash[..8]),
+                        Err(e) => println!(
+                            "  ⚠ Could not advance HEAD to {}: {}",
+                            &hash[..8], e
+                        ),
+                    }
                 }
                 client.synced().ok();
                 break;
@@ -793,6 +813,8 @@ fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path) -> anyhow::Result<(
 
     if pulled_count > 0 {
         println!("✓ Pulled {} new snapshot(s)", pulled_count);
+        println!("  Note: sync transfers snapshot metadata, not project file contents.");
+        println!("        Restoring a pulled snapshot isn't possible on this machine.");
     } else {
         println!("✓ Already up to date");
     }
