@@ -81,6 +81,11 @@ impl CueStore {
         Ok(())
     }
 
+    /// Whether `id` is usable as a cue id.
+    pub fn is_valid_cue_id(id: &str) -> bool {
+        Self::validate_cue_id(id).is_ok()
+    }
+
     // ─── CRUD ──────────────────────────────────────────────────────
 
     /// Add a new cue.

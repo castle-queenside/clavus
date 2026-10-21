@@ -21,7 +21,7 @@
 | CLI commands | `crates/cli/tests/cli_tests.rs` | 45 | 🟢 |
 | Core unit tests | `crates/core/src/**` | 5 | 🟢 |
 
-**299 tests passing, 0 failed, 0 ignored.**
+**310 tests passing, 0 failed, 0 ignored.**
 
 Legend: 🟢 good  🟡 partial  🟠 manual only  🔴 missing
 
@@ -152,6 +152,11 @@ real ones. Each now has a regression test:
 | **Every project shared one HEAD** | The blob store is shared, so whichever project was snapshotted last owned the chain — `log`, `push` and `restore` for the other project showed the wrong history | Each project's HEAD lives at `<project>/HEAD`; the old shared ref is only used by the project that owns it |
 | The relay mixed up projects | Cues were grouped by track name and every snapshot was offered to every client | Cues carry a project name; the relay indexes snapshots per project and only serves a client its own project |
 | A repeated push duplicated cues | The relay appended the cue each time, so every client got N copies | The relay replaces a cue with the same id |
+| `projects --dir` was ignored | The command always scanned the standard locations, even though its own message told the user to pass `--dir` | An explicit directory is scanned; the standard locations are the fallback |
+| A symlink loop hung the project scan | The recursive walk followed symlinks and could revisit a directory forever | Each directory is canonicalised and visited at most once; depth is capped |
+| A short hash crashed the display code | Hashes and cue ids were sliced with `[..8]`, which panics on a shorter string — and a hostile relay controls both | `clavus_core::short()` truncates without panicking; incoming data is validated before it is used |
+| A hostile relay could store a malformed snapshot | The client delivered whatever the server sent, unchecked | The client drops snapshots with a bad hash or parent and cues with a bad id |
+| A pre-epoch file timestamp crashed `projects` | `duration_since(UNIX_EPOCH).unwrap()` panicked on a file older than 1970 | The timestamp falls back to `????-??-?? ??:??` |
 
 ---
 

@@ -224,7 +224,7 @@ pub fn cmd_snapshot(
         // nothing new was stored and the message was not recorded.
         outln!(out,
             "= snapshot {}  ·  unchanged — no new snapshot was created",
-            &snapshot.hash[..8],
+            clavus_core::short(&snapshot.hash, 8),
         );
         outln!(out, "  (the message \"{}\" was not recorded — change the project first)", msg);
         return Ok(());
@@ -232,7 +232,7 @@ pub fn cmd_snapshot(
 
     outln!(out, 
         "✓ snapshot {}  ·  {}  ·  {} tracks  ·  {:.0} BPM",
-        &snapshot.hash[..8],
+        clavus_core::short(&snapshot.hash, 8),
         format_timestamp(snapshot.timestamp),
         snapshot.track_count,
         snapshot.bpm,
@@ -268,11 +268,15 @@ pub fn cmd_log(project: &Path, clavus_root: &Path,
     outln!(out, "{} snapshot(s) in chain\n", chain.len());
 
     for s in &chain {
-        let parent = s.parent.as_ref().map(|p| format!(" <- {}", &p[..8])).unwrap_or_default();
+        let parent = s
+            .parent
+            .as_ref()
+            .map(|p| format!(" <- {}", clavus_core::short(p, 8)))
+            .unwrap_or_default();
         let ts = format_timestamp(s.timestamp);
         outln!(out, 
             "  {}  {}  {}{}  [{} tracks · {:.0} BPM]",
-            &s.hash[..8],
+            clavus_core::short(&s.hash, 8),
             ts,
             s.message.replace('\n', " "),
             parent,
@@ -548,7 +552,9 @@ pub fn cmd_push(relay: &str, project: &Path, clavus_root: &Path,
             }
             Some(SyncMsg::Conflict { project, relay_head, push_head }) => {
                 outln!(out, "⚠ Conflict detected on '{}': relay head {} vs our latest {}",
-                    project, &relay_head[..8], &push_head[..8]);
+                    project,
+            clavus_core::short(&relay_head, 8),
+            clavus_core::short(&push_head, 8));
                 outln!(out, "  Run `clavus pull --relay {}` first to merge.", relay);
                 break;
             }
@@ -609,7 +615,12 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
                 for snap in &snapshots {
                     if !snap_store.has(&snap.hash) {
                         snap_store.save_raw(snap.clone())?;
-                        outln!(out, "  ↳ {}  {}", &snap.hash[..8], snap.message);
+                        outln!(
+                        out,
+                        "  ↳ {}  {}",
+                        clavus_core::short(&snap.hash, 8),
+                        snap.message
+                    );
                         pulled_count += 1;
                     }
                     // Track the newest pulled snapshot (relay sends root → head)
@@ -622,10 +633,11 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
                     // A shrink is refused (that would be a divergent history),
                     // so report it instead of silently rewinding.
                     match snap_store.set_head(&hash, "pull") {
-                        Ok(()) => outln!(out, "  HEAD → {}", &hash[..8]),
+                        Ok(()) => outln!(out, "  HEAD → {}", clavus_core::short(&hash, 8)),
                         Err(e) => outln!(out, 
                             "  ⚠ Could not advance HEAD to {}: {}",
-                            &hash[..8], e
+                            clavus_core::short(&hash, 8),
+                            e
                         ),
                     }
                 }
@@ -637,7 +649,8 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
             Some(SyncMsg::Conflict { project, relay_head, push_head }) => {
                 outln!(out, "⚠ Conflict detected on '{}'", project);
                 outln!(out, "  relay HEAD: {}  your HEAD: {}",
-                    &relay_head[..8], &push_head[..8]);
+                    clavus_core::short(&relay_head, 8),
+            clavus_core::short(&push_head, 8));
                 break;
             }
             Some(msg) => {
@@ -738,11 +751,16 @@ pub fn cmd_restore(project: &Path, hash_arg: &str, clavus_root: &Path,
         })?
     };
 
-    outln!(out, "Restoring {} to snapshot {}...", name, &target_hash[..8]);
+    outln!(
+        out,
+        "Restoring {} to snapshot {}...",
+        name,
+        clavus_core::short(&target_hash, 8)
+    );
 
     let restored = snap_store.restore(&target_hash, Some(project))?;
 
-    outln!(out, "✓ Restored to: {}", &restored.hash[..8]);
+    outln!(out, "✓ Restored to: {}", clavus_core::short(&restored.hash, 8));
     outln!(out, "  {}", restored.message);
     outln!(out, "  Restart Ableton/Bitwig to load the restored file.");
 
@@ -813,20 +831,29 @@ pub fn cmd_status(project: &Path, clavus_root: &Path,
     Ok(())
 }
 
-pub fn cmd_projects(recursive: bool,
+pub fn cmd_projects(
+    recursive: bool,
+    dir: Option<&Path>,
     out: &mut dyn Write,
     _err: &mut dyn Write,
 ) -> anyhow::Result<()> {
-    let dirs = standard_albeton_dirs();
+    // An explicit directory wins over the standard locations. Ignoring it
+    // made `clavus projects --dir <path>` scan the user's home folder
+    // instead of the directory they asked for.
+    let dirs: Vec<PathBuf> = match dir {
+        Some(d) => vec![d.to_path_buf()],
+        None => standard_albeton_dirs(),
+    };
     if dirs.is_empty() {
         outln!(out, "No standard locations found. Pass --dir explicitly.");
         return Ok(());
     }
 
     let mut projects: Vec<(String, PathBuf)> = Vec::new();
+    let mut visited = std::collections::HashSet::new();
 
     for base in dirs {
-        find_projects_in(&base, recursive, &mut projects);
+        find_projects_in(&base, recursive, &mut projects, &mut visited, 0);
     }
 
     if projects.is_empty() {
@@ -864,7 +891,11 @@ pub fn standard_albeton_dirs() -> Vec<PathBuf> {
 }
 
 fn format_modified_time(t: std::time::SystemTime) -> String {
-    let dur = t.duration_since(std::time::UNIX_EPOCH).unwrap();
+    // A file's timestamp can predate the Unix epoch — an archive with a
+    // bogus time, or a volume with a bad clock. That must not panic.
+    let Ok(dur) = t.duration_since(std::time::UNIX_EPOCH) else {
+        return "????-??-?? ??:??".to_string();
+    };
     // Simple UTC format: YYYY-MM-DD HH:MM
     let secs = dur.as_secs();
     let days = secs / 86400;
@@ -885,7 +916,7 @@ fn format_modified_time(t: std::time::SystemTime) -> String {
             break;
         }
     }
-    let yday = days_left as usize;
+    let yday = days_left.max(0) as usize;
     let month_day = month_and_day(year, yday);
     format!(
         "{:04}-{:02}-{:02} {:02}:{:02}",
@@ -917,7 +948,29 @@ fn month_and_day(year: i64, yday: usize) -> (u8, u8) {
     (12, 31)
 }
 
-fn find_projects_in(dir: &Path, recursive: bool, out: &mut Vec<(String, PathBuf)>) {
+/// How deep a recursive project scan will go.
+const MAX_SCAN_DEPTH: usize = 12;
+
+fn find_projects_in(
+    dir: &Path,
+    recursive: bool,
+    out: &mut Vec<(String, PathBuf)>,
+    visited: &mut std::collections::HashSet<PathBuf>,
+    depth: usize,
+) {
+    if depth > MAX_SCAN_DEPTH {
+        return;
+    }
+
+    // A symlink that points at an ancestor makes the walk go in circles.
+    // Canonicalising each directory and refusing to visit one twice stops
+    // that instead of recursing until the stack runs out.
+    if let Ok(real) = dir.canonicalize() {
+        if !visited.insert(real) {
+            return;
+        }
+    }
+
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -927,12 +980,16 @@ fn find_projects_in(dir: &Path, recursive: bool, out: &mut Vec<(String, PathBuf)
         let path = entry.path();
         if path.is_dir() {
             if recursive {
-                find_projects_in(&path, recursive, out);
+                find_projects_in(&path, recursive, out, visited, depth + 1);
             }
             continue;
         }
 
-        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+        let ext = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
         if ext == "als" || ext == "bwproject" {
             if let Some(name) = path.file_stem().map(|s| s.to_string_lossy().to_string()) {
                 out.push((name, path));

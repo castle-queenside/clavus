@@ -307,3 +307,134 @@ fn concurrent_clients_each_get_their_own_connection() {
         }
     }
 }
+
+// ─── Untrusted content ─────────────────────────────────────────────────────
+//
+// A hostile relay can send well-formed JSON with a well-formed message
+// type but a hostile payload. The client must drop the bad parts rather
+// than store them or crash on them.
+
+fn push_server(snapshots: Vec<clavus_core::types::Snapshot>, cues: Vec<clavus_core::types::Cue>) -> String {
+    hostile_server(move |mut stream| {
+        // Read the client's Hello frame so the client is not left waiting.
+        let mut len_buf = [0u8; 4];
+        if stream.read_exact(&mut len_buf).is_ok() {
+            let len = u32::from_be_bytes(len_buf) as usize;
+            let mut body = vec![0u8; len];
+            let _ = stream.read_exact(&mut body);
+        }
+        let msg = SyncMsg::Push { snapshots, cues };
+        let json = serde_json::to_vec(&msg).unwrap();
+        let _ = stream.write_all(&(json.len() as u32).to_be_bytes());
+        let _ = stream.write_all(&json);
+        let _ = stream.flush();
+        thread::sleep(Duration::from_millis(400));
+    })
+}
+
+fn test_snapshot(hash: &str, parent: Option<&str>) -> clavus_core::types::Snapshot {
+    clavus_core::types::Snapshot {
+        hash: hash.to_string(),
+        parent: parent.map(|p| p.to_string()),
+        timestamp: 0.0,
+        message: "hostile".into(),
+        track_count: 0,
+        bpm: 120.0,
+        tags: vec![],
+        notes: String::new(),
+        sample_hashes: vec![],
+        sample_paths: Default::default(),
+        project_path: "/tmp/p.als".into(),
+    }
+}
+
+fn test_cue(id: &str) -> clavus_core::types::Cue {
+    clavus_core::types::Cue {
+        id: id.to_string(),
+        project: "p".into(),
+        position: "1.1.1".into(),
+        text: "hostile".into(),
+        author: "a".into(),
+        timestamp: 0.0,
+        status: clavus_core::types::CueStatus::Pending,
+        snapshot_hash: String::new(),
+        track_name: "T".into(),
+        assignee: String::new(),
+        in_progress: false,
+        replies: vec![],
+    }
+}
+
+#[test]
+fn a_snapshot_with_a_short_hash_is_dropped() {
+    let addr = push_server(
+        vec![test_snapshot("a", None), test_snapshot(&"b".repeat(64), None)],
+        vec![],
+    );
+    let client = SyncClient::connect(&addr).expect("connect");
+    client.hello("p", vec![]).expect("hello");
+
+    match recv_within(&client, Duration::from_secs(3)) {
+        Some(SyncMsg::Push { snapshots, .. }) => {
+            assert_eq!(
+                snapshots.len(),
+                1,
+                "only the well-formed snapshot may be delivered"
+            );
+            assert_eq!(snapshots[0].hash, "b".repeat(64));
+        }
+        other => panic!("unexpected: {:?}", other),
+    }
+}
+
+#[test]
+fn a_snapshot_with_a_traversing_parent_is_dropped() {
+    let addr = push_server(
+        vec![test_snapshot(&"c".repeat(64), Some("../../../../etc/passwd"))],
+        vec![],
+    );
+    let client = SyncClient::connect(&addr).expect("connect");
+    client.hello("p", vec![]).expect("hello");
+
+    match recv_within(&client, Duration::from_secs(3)) {
+        Some(SyncMsg::Push { snapshots, .. }) => {
+            assert!(snapshots.is_empty(), "a traversing parent must be dropped");
+        }
+        other => panic!("unexpected: {:?}", other),
+    }
+}
+
+#[test]
+fn a_cue_with_a_traversing_id_is_dropped() {
+    let addr = push_server(
+        vec![],
+        vec![
+            test_cue("../../escaped"),
+            test_cue("good-cue-id"),
+        ],
+    );
+    let client = SyncClient::connect(&addr).expect("connect");
+    client.hello("p", vec![]).expect("hello");
+
+    match recv_within(&client, Duration::from_secs(3)) {
+        Some(SyncMsg::Push { cues, .. }) => {
+            assert_eq!(cues.len(), 1, "only the well-formed cue may be delivered");
+            assert_eq!(cues[0].id, "good-cue-id");
+        }
+        other => panic!("unexpected: {:?}", other),
+    }
+}
+
+#[test]
+fn a_cue_with_an_empty_id_is_dropped() {
+    let addr = push_server(vec![], vec![test_cue("")]);
+    let client = SyncClient::connect(&addr).expect("connect");
+    client.hello("p", vec![]).expect("hello");
+
+    match recv_within(&client, Duration::from_secs(3)) {
+        Some(SyncMsg::Push { cues, .. }) => {
+            assert!(cues.is_empty(), "an empty cue id must be dropped");
+        }
+        other => panic!("unexpected: {:?}", other),
+    }
+}

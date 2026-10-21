@@ -86,7 +86,11 @@ fn main() -> anyhow::Result<()> {
         Commands::Pull { relay, project } => {
             cmd_pull(&relay, &project, &clavus_root, &mut stdout, &mut stderr)
         }
-        Commands::Projects { recursive } => cmd_projects(recursive, &mut stdout, &mut stderr),
+        Commands::Projects { recursive } => {
+            // `cli.dir` is None unless the user asked for a specific
+            // directory; otherwise the standard locations are scanned.
+            cmd_projects(recursive, cli.dir.as_deref(), &mut stdout, &mut stderr)
+        }
         Commands::Status { project } => cmd_status(&project, &clavus_root, &mut stdout, &mut stderr),
         Commands::Restore { project, hash } => {
             cmd_restore(&project, &hash, &clavus_root, &mut stdout, &mut stderr)

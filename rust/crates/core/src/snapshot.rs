@@ -226,8 +226,8 @@ impl SnapshotStore {
             if !allow_shrink && new_len < old_len {
                 warn!(
                     "Rejected HEAD change {}→{}: chain would shrink {}→{} (source={})",
-                    &current[..8],
-                    &new_head[..8],
+                    crate::short(&current, 8),
+                    crate::short(new_head, 8),
                     old_len,
                     new_len,
                     source
@@ -293,7 +293,9 @@ impl SnapshotStore {
         if let Some(second) = matches.next() {
             return Err(ClavusError::AmbiguousSnapshot(format!(
                 "{} (matches {} and {})",
-                prefix, &first[..8], &second[..8]
+                prefix,
+                crate::short(&first, 8),
+                crate::short(&second, 8)
             )));
         }
         Ok(first)

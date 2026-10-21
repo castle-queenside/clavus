@@ -62,7 +62,11 @@ fn render_project_list(frame: &mut Frame, app: &mut App) {
 
         // Snapshot badge: count + short hash, or muted dash
         let (snap_text, snap_fg) = if p.snap_count > 0 {
-            let hash = p.head.as_ref().map(|h| &h[..8]).unwrap_or("?");
+            let hash = p
+                .head
+                .as_ref()
+                .map(|h| clavus_core::short(h, 8))
+                .unwrap_or_else(|| "?".to_string());
             (format!("{}·{}", p.snap_count, hash), ACCENT)
         } else {
             ("—".to_string(), MUTED)
@@ -247,7 +251,12 @@ fn render_cue_list(frame: &mut Frame, app: &mut App) {
         ))
         .style(Style::new().fg(color));
 
-        let line2 = Line::raw(format!("      {} · {} · {}", c.track_name, &c.id[..8], c.author))
+        let line2 = Line::raw(format!(
+            "      {} · {} · {}",
+            c.track_name,
+            clavus_core::short(&c.id, 8),
+            c.author
+        ))
             .style(Style::new().fg(MUTED));
 
         ListItem::new(vec![line1, line2])
@@ -334,7 +343,7 @@ fn render_snapshot_list(frame: &mut Frame, app: &mut App) {
     let snap_rows: Vec<Row<'_>> = app.snapshots.iter().map(|s| {
         let ts = unix_to_rel(s.timestamp as i64);
         Row::new(vec![
-            Span::raw(&s.hash[..8]).style(Style::new().fg(WARM)),
+            Span::raw(clavus_core::short(&s.hash, 8)).style(Style::new().fg(WARM)),
             Span::raw(s.message.replace('\n', " ")),
             Span::raw(format!("{:.0}", s.bpm)),
             Span::raw(s.track_count.to_string()),
@@ -576,7 +585,15 @@ fn split_v(area: Rect) -> [Rect; 3] {
 /// Split area horizontally into 2 parts by percentage ratio.
 fn split_h(area: Rect, ratio: &[usize; 2]) -> [Rect; 2] {
     let total = ratio[0] + ratio[1];
-    let w0 = (area.width as usize * ratio[0] / total) as u16;
+    if total == 0 {
+        // A zero ratio would divide by zero; give everything to the
+        // first pane rather than panicking.
+        return [
+            Rect::new(area.x, area.y, area.width, area.height),
+            Rect::new(area.x, area.y, 0, area.height),
+        ];
+    }
+    let w0 = u16::try_from(area.width as usize * ratio[0] / total).unwrap_or(area.width);
     [
         Rect::new(area.x, area.y, w0, area.height),
         Rect::new(area.x + w0, area.y, area.width.saturating_sub(w0), area.height),

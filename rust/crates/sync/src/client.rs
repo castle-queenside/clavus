@@ -1,5 +1,6 @@
 //! Clavus sync client — connects to a relay server and syncs snapshots + cues.
 
+use crate::validate;
 use clavus_core::types::{Cue, ClavusError, Snapshot};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
@@ -79,6 +80,20 @@ impl SyncClient {
                 let msg = match recv_msg(&stream, &closed0) {
                     Ok(m) => m,
                     Err(_) => break,
+                };
+                // Everything the server sends is untrusted. A malformed
+                // hash or cue id would otherwise become a file name, or
+                // crash the display code that truncates it.
+                let msg = match msg {
+                    SyncMsg::Push { snapshots, cues } => SyncMsg::Push {
+                        snapshots: validate::filter_snapshots(snapshots),
+                        cues: validate::filter_cues(cues),
+                    },
+                    SyncMsg::PullResp { snapshots, cues } => SyncMsg::PullResp {
+                        snapshots: validate::filter_snapshots(snapshots),
+                        cues: validate::filter_cues(cues),
+                    },
+                    other => other,
                 };
                 if tx.send(msg).is_err() {
                     break; // main thread dropped the receiver

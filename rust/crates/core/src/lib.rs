@@ -20,3 +20,12 @@ pub use sample::{audit_project, collect_samples, CollectReport};
 
 pub mod error;
 pub use error::ClavusResult;
+
+/// Truncate `text` to at most `len` characters, for display.
+///
+/// Slicing a string with `[..8]` panics when the string is shorter, and
+/// ids and hashes arrive from remote peers — so a hostile peer could
+/// crash the client with a one-character id. This never panics.
+pub fn short(text: &str, len: usize) -> String {
+    text.chars().take(len).collect()
+}
