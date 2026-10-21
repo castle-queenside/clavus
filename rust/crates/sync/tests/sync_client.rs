@@ -1,5 +1,6 @@
 //! Tests for clavus-sync SyncClient.
 
+use clavus_sync::client::SyncClient;
 use clavus_sync::SyncMsg;
 
 #[test]
@@ -91,4 +92,45 @@ fn test_hello_with_heads_serialization() {
         }
         other => panic!("expected Hello, got {:?}", other),
     }
+}
+
+// ─── An unreachable relay fails quickly ───────────────────────────────────
+//
+// Regression: a push to a firewalled address sat for over a minute with
+// no output before failing, because `TcpStream::connect` waited for the
+// operating system to give up. A user is not willing to wait a minute
+// for a connection to fail.
+
+#[test]
+fn connecting_to_a_black_holed_address_gives_up_quickly() {
+    // 10.255.255.1 is not routable: the packets go nowhere.
+    let start = std::time::Instant::now();
+    let result = SyncClient::connect("10.255.255.1:4599");
+    let elapsed = start.elapsed();
+
+    assert!(result.is_err(), "the connection must fail");
+    assert!(
+        elapsed < std::time::Duration::from_secs(20),
+        "the connect must give up quickly, took {:?}",
+        elapsed
+    );
+}
+
+#[test]
+fn connecting_to_a_closed_port_fails_at_once() {
+    // Bind and drop a port so that nothing is listening on it.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr").to_string();
+    drop(listener);
+
+    let start = std::time::Instant::now();
+    let result = SyncClient::connect(&addr);
+    let elapsed = start.elapsed();
+
+    assert!(result.is_err(), "the connection must fail");
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "a refused connection must fail at once, took {:?}",
+        elapsed
+    );
 }

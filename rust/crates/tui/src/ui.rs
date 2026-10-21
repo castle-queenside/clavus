@@ -23,7 +23,39 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Screen::CueAdd       => render_cue_add(frame, app),
         Screen::SnapshotList  => render_snapshot_list(frame, app),
         Screen::Sync         => render_sync(frame, app),
+        Screen::RelayInput   => render_relay_input(frame, app),
     }
+}
+
+// ─── Relay address entry ────────────────────────────────────────────
+
+fn render_relay_input(frame: &mut Frame, app: &mut App) {
+    let [header, body, footer] = split_v(frame.size());
+
+    render_title_bar(frame, header, "relay address", app);
+    render_footer(frame, footer, app);
+
+    let addr = app.input_buf.trim();
+    let display = if addr.is_empty() { "…" } else { addr };
+
+    let form_lines = vec![
+        l("", MUTED),
+        l("  RELAY ADDRESS  (host:port)", MUTED),
+        l("", MUTED),
+        Line::raw(format!("  {}█", display)).style(Style::new().fg(ACCENT)),
+        l("", MUTED),
+        l("  e.g. 192.168.1.10:4477", MUTED),
+    ];
+
+    let form = Paragraph::new(form_lines)
+        .block(Block::default()
+            .title(" connect ")
+            .title_style(Style::new().fg(ACCENT).add_modifier(Modifier::BOLD))
+            .borders(Borders::ALL)
+            .border_style(Style::new().fg(LINE)))
+        .style(S_BG);
+
+    frame.render_widget(form, body);
 }
 
 // ─── Project List ────────────────────────────────────────────────────
@@ -284,18 +316,49 @@ fn render_cue_add(frame: &mut Frame, app: &mut App) {
     render_title_bar(frame, header, "new cue", app);
     render_footer(frame, footer, app);
 
-    let pos = app.input_buf.trim();
-    let pos_display = if pos.is_empty() { "…" } else { pos };
+    // The form asks for the message first and the position second, so
+    // the cue is stored the same way the CLI stores it: the message in
+    // the text, the position in the position.
+    let typed = app.input_buf.trim();
+    let typed_display = if typed.is_empty() { "…" } else { typed };
+
+    let (message, position) = match app.cue_step {
+        crate::app::CueStep::Message => (typed_display.to_string(), "1.1.1".to_string()),
+        crate::app::CueStep::Position => (
+            if app.cue_message.trim().is_empty() {
+                "…".to_string()
+            } else {
+                app.cue_message.trim().to_string()
+            },
+            if typed.is_empty() {
+                // The default is shown, but it is not typed into the
+                // field, so the user can type their own position
+                // without having to delete it first.
+                format!("{} (default)", crate::app::DEFAULT_CUE_POSITION)
+            } else {
+                typed_display.to_string()
+            },
+        ),
+    };
+
+    let message_style = match app.cue_step {
+        crate::app::CueStep::Message => Style::new().fg(ACCENT),
+        _ => Style::new().fg(TEXT),
+    };
+    let position_style = match app.cue_step {
+        crate::app::CueStep::Position => Style::new().fg(ACCENT),
+        _ => Style::new().fg(TEXT),
+    };
 
     let form_lines = vec![
         l("", MUTED),
-        l("  POSITION  (beats / bars.beats.sixteenths)", MUTED),
+        l("  MESSAGE  (what should be noted here?)", MUTED),
         l("", MUTED),
-        Line::raw(format!("  {}█", pos_display))
-            .style(Style::new().fg(ACCENT)),
+        Line::raw(format!("  {}█", message)).style(message_style),
         l("", MUTED),
-        l("  TEXT", MUTED),
-        l("  ", TEXT),
+        l("  POSITION  (bars.beats.sixteenths)", MUTED),
+        l("", MUTED),
+        Line::raw(format!("  {}█", position)).style(position_style),
         l("", MUTED),
         l("  TRACK", MUTED),
         l("  Arrangement", TEXT),
@@ -395,7 +458,7 @@ fn render_sync(frame: &mut Frame, app: &mut App) {
     let sync_lines = vec![
         l("", MUTED),
         l("  RELAY", MUTED),
-        l("  127.0.0.1:4477", TEXT),
+        Line::raw(format!("  {}", app.relay_address())).style(Style::new().fg(TEXT)),
         l("", MUTED),
         l("  STATUS", MUTED),
         Line::raw(format!("  {} {}", conn_icon, status_text)).style(Style::new().fg(conn_color)),
@@ -406,8 +469,9 @@ fn render_sync(frame: &mut Frame, app: &mut App) {
             Line::raw("  last sync  never").style(Style::new().fg(MUTED))
         },
         l("", MUTED),
-        l("  PUSH  pull from relay", MUTED),
-        l("  PULL  push to relay", MUTED),
+        l("  P  push to relay", MUTED),
+        l("  G  pull from relay", MUTED),
+        l("  r  change relay address", MUTED),
         l("", MUTED),
     ];
 
@@ -575,6 +639,21 @@ fn row(label: &str, lc: Color, value: impl AsRef<str>) -> Line<'_> {
 /// Split area vertically into 3 parts: header (1 row), body (flex), footer (1 row).
 fn split_v(area: Rect) -> [Rect; 3] {
     let h = area.height;
+    if h == 0 {
+        // A zero-height area used to compute `area.y + h - 1`, which
+        // underflowed and then tripped ratatui.
+        let empty = Rect::new(area.x, area.y, area.width, 0);
+        return [empty, empty, empty];
+    }
+    if h == 1 {
+        // One line fits the header; there is no room for the body or
+        // the footer.
+        return [
+            Rect::new(area.x, area.y, area.width, 1),
+            Rect::new(area.x, area.y, area.width, 0),
+            Rect::new(area.x, area.y, area.width, 0),
+        ];
+    }
     [
         Rect::new(area.x, area.y,           area.width, 1),
         Rect::new(area.x, area.y + 1,       area.width, h.saturating_sub(2)),
@@ -632,9 +711,10 @@ impl App {
             Screen::ProjectList  => "↑↓ select  ·  Enter open  ·  s sync  ·  q quit",
             Screen::ProjectDetail=> "c snap  ·  l cues  ·  n snapshots  ·  s sync  ·  Esc back",
             Screen::CueList      => "↑↓ navigate  ·  a add  ·  r resolve  ·  f filter  ·  Esc back",
-            Screen::CueAdd       => "Enter save  ·  Esc cancel",
+            Screen::CueAdd       => "Enter next/save  ·  Esc cancel",
             Screen::SnapshotList => "↑↓ navigate  ·  Esc back",
-            Screen::Sync         => "P push  ·  G pull  ·  Esc back",
+            Screen::Sync         => "P push  ·  G pull  ·  r relay  ·  Esc back",
+            Screen::RelayInput   => "Enter connect  ·  Esc cancel",
         }.to_string()
     }
 
@@ -643,9 +723,10 @@ impl App {
             Screen::ProjectList  => "↑↓ navigate  ·  Enter  open  ·  q quit",
             Screen::ProjectDetail=> "c snapshot  ·  l cues  ·  Esc",
             Screen::CueList      => "↑↓ navigate  ·  a add  ·  Esc",
-            Screen::CueAdd       => "Enter save  ·  Esc cancel",
+            Screen::CueAdd       => "Enter next/save  ·  Esc cancel",
             Screen::SnapshotList => "↑↓ navigate  ·  Esc",
-            Screen::Sync         => "P push  ·  G pull  ·  Esc",
+            Screen::Sync         => "P push  ·  G pull  ·  r relay  ·  Esc",
+            Screen::RelayInput   => "Enter connect  ·  Esc cancel",
         }.to_string()
     }
 }

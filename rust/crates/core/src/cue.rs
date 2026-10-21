@@ -1,8 +1,15 @@
 //! Cue store — timeline-anchored comments for DAW projects.
 //!
 //! Cues are stored as individual JSON files:
-//!   `~/.clavus/cues/{project_name}/{cue_id}.json`
+//!   `~/.clavus/cues/{project_key}/{cue_id}.json`
+//!
+//! The directory is the project's *storage key*, so two projects that
+//! share a file name keep their notes to themselves. The project name
+//! stamped on every cue is the project's *sync name*, so a collaborator
+//! on another machine recognises the notes as belonging to the same
+//! project.
 
+use crate::project::ProjectId;
 use crate::types::{ClavusError, Cue, CueReply, CueStatus};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -41,13 +48,23 @@ impl std::fmt::Display for ImportOutcome {
 
 impl CueStore {
     /// Create a CueStore for a project.
-    pub fn new(clavus_root: &Path, project_name: &str) -> std::io::Result<Self> {
-        let cues_dir = clavus_root.join("cues").join(project_name);
+    pub fn new(clavus_root: &Path, project: &ProjectId) -> std::io::Result<Self> {
+        let cues_dir = clavus_root.join("cues").join(&project.key);
         fs::create_dir_all(&cues_dir)?;
         Ok(Self {
             cues_dir,
-            project_name: project_name.to_string(),
+            project_name: project.sync_name().to_string(),
         })
+    }
+
+    /// Open a cue store for reading, without creating anything.
+    ///
+    /// A command that only reads must not leave a directory behind.
+    pub fn open(clavus_root: &Path, project: &ProjectId) -> Self {
+        Self {
+            cues_dir: clavus_root.join("cues").join(&project.key),
+            project_name: project.sync_name().to_string(),
+        }
     }
 
     fn cue_path(&self, id: &str) -> PathBuf {

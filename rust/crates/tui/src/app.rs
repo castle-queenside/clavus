@@ -16,7 +16,21 @@ pub enum Screen {
     CueAdd,
     SnapshotList,
     Sync,
+    /// Typing a relay address.
+    RelayInput,
 }
+
+/// Which field of the cue form has the focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CueStep {
+    /// The message the cue carries.
+    Message,
+    /// Where in the arrangement the cue sits.
+    Position,
+}
+
+/// The position a new cue gets when the user does not type one.
+pub const DEFAULT_CUE_POSITION: &str = "1.1.1";
 
 /// Main application state.
 #[derive(Debug)]
@@ -53,6 +67,12 @@ pub struct App {
     pub loading: bool,
     /// Idle phrase index — cycles through idle messages.
     pub idle_index: usize,
+    /// The message of the cue being typed.
+    pub cue_message: String,
+    /// Which field of the cue form has the focus.
+    pub cue_step: CueStep,
+    /// The relay the TUI talks to.
+    pub relay_addr: String,
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +86,17 @@ pub struct ProjectEntry {
     pub bpm: f64,
     pub track_count: usize,
     pub modified_secs: i64,
+}
+
+impl ProjectEntry {
+    /// The project's identity.
+    ///
+    /// Two projects that share a file name are two different projects, so
+    /// everything that is stored per project — the HEAD, the snapshot
+    /// records, the cues — is keyed by this identity and not by the name.
+    pub fn id(&self) -> clavus_core::project::ProjectId {
+        clavus_core::project::ProjectId::new(&self.path)
+    }
 }
 
 /// Commands sent from the TUI event loop to the background sync thread.
@@ -89,11 +120,11 @@ pub enum SyncCmd {
     },
     /// Pull snapshots the relay has that we don't, given our known heads.
     ///
-    /// The project name and data root are needed so the background thread
-    /// can store what it receives rather than only counting it.
+    /// The project's path and the data root are needed so the background
+    /// thread can store what it receives rather than only counting it.
     Pull {
         known_heads: Vec<String>,
-        project_name: String,
+        project_path: std::path::PathBuf,
         clavus_root: std::path::PathBuf,
     },
 }
@@ -145,51 +176,140 @@ impl App {
             input_buf: String::new(),
             loading: false,
             idle_index: 0,
+            cue_message: String::new(),
+            cue_step: CueStep::Message,
+            relay_addr: "127.0.0.1:4477".to_string(),
         }
     }
 
-    pub fn refresh_projects(&mut self) -> Result<(), String> {
-        let mut entries = Vec::new();
-
-        let dir = std::fs::read_dir(&self.projects_dir)
-            .map_err(|e| format!("Cannot read {}: {}", self.projects_dir.display(), e))?;
-
-        for entry in dir.flatten() {
-            let path = entry.path();
-            let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-
-            if ext == "als" || ext == "bwproject" {
-                let name = path.file_stem()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_default();
-
-                let modified_secs = entry.metadata()
-                    .and_then(|m| m.modified())
-                    .map(|t| t.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0))
-                    .unwrap_or(0);
-
-                let project_type = if ext == "als" { "Ableton" } else { "Bitwig" };
-
-                // Check for existing snapshots
-                let (head, snap_count) = Self::snap_info(&self.clavus_root, &name);
-
-                entries.push(ProjectEntry {
-                    path,
-                    name,
-                    project_type: project_type.to_string(),
-                    head,
-                    snap_count,
-                    bpm: 120.0,
-                    track_count: 0,
-                    modified_secs,
-                });
-            }
+    /// The screen to return to when the user backs out of this one.
+    ///
+    /// Esc used to jump straight to the project list from everywhere,
+    /// so a user in the cue list could not step back to the project
+    /// they were working on.
+    pub fn previous_screen(&self) -> Screen {
+        match self.screen {
+            Screen::CueAdd | Screen::RelayInput => match self.screen {
+                Screen::CueAdd => Screen::CueList,
+                _ => Screen::Sync,
+            },
+            Screen::CueList | Screen::SnapshotList | Screen::Sync => Screen::ProjectDetail,
+            Screen::ProjectDetail => Screen::ProjectList,
+            Screen::ProjectList => Screen::ProjectList,
         }
+    }
+
+    /// The relay address the TUI uses.
+    pub fn relay_address(&self) -> &str {
+        &self.relay_addr
+    }
+
+    /// Remember the relay address to talk to.
+    pub fn set_relay_address(&mut self, addr: String) {
+        self.relay_addr = addr;
+    }
+
+    /// Find every project under the projects directory.
+    ///
+    /// The scan is recursive, so the TUI shows the same projects the CLI
+    /// shows with `clavus projects --recursive`. It was not recursive
+    /// before, and a project in a sub-folder was invisible.
+    pub fn refresh_projects(&mut self) -> Result<(), String> {
+        // A projects directory that cannot be read is an error — the
+        // user needs to know that the TUI is looking in the wrong place.
+        std::fs::read_dir(&self.projects_dir).map_err(|e| {
+            format!("Cannot read {}: {}", self.projects_dir.display(), e)
+        })?;
+
+        let mut entries = Vec::new();
+        self.scan_dir(&self.projects_dir, 0, &mut entries);
 
         // Sort by modified time descending
         entries.sort_by_key(|a| std::cmp::Reverse(a.modified_secs));
         self.projects = entries;
         Ok(())
+    }
+
+    /// How deep the project scan goes.
+    const MAX_SCAN_DEPTH: usize = 12;
+
+    fn scan_dir(&self, dir: &std::path::Path, depth: usize, out: &mut Vec<ProjectEntry>) {
+        if depth > Self::MAX_SCAN_DEPTH {
+            return;
+        }
+        let Ok(read) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in read.flatten() {
+            let path = entry.path();
+            let ext = path
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+
+            if ext == "als" || ext == "bwproject" {
+                if let Some(project_entry) = self.project_entry(&path, &ext) {
+                    out.push(project_entry);
+                }
+            } else if path.is_dir() {
+                // A symlink loop must not make the scan run forever.
+                let real = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+                if real.is_dir() {
+                    self.scan_dir(&path, depth + 1, out);
+                }
+            }
+        }
+    }
+
+    /// Build a list entry for one project file.
+    fn project_entry(&self, path: &std::path::Path, ext: &str) -> Option<ProjectEntry> {
+        let name = path.file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        let modified_secs = std::fs::metadata(path)
+            .and_then(|m| m.modified())
+            .map(|t| {
+                t.duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0)
+            })
+            .unwrap_or(0);
+
+        let project_type = if ext == "als" { "Ableton" } else { "Bitwig" };
+
+        // Check for existing snapshots
+        let (head, snap_count) = Self::snap_info(&self.clavus_root, path);
+
+        // The list used to show 120 BPM and 0 tracks for every project —
+        // numbers that are known to be false. The project is parsed so
+        // the list agrees with `clavus status`.
+        let (bpm, track_count) = match Self::parse_summary(path, ext) {
+            Some((bpm, tracks)) => (bpm, tracks),
+            None => (0.0, 0),
+        };
+
+        Some(ProjectEntry {
+            path: path.to_path_buf(),
+            name,
+            project_type: project_type.to_string(),
+            head,
+            snap_count,
+            bpm,
+            track_count,
+            modified_secs,
+        })
+    }
+
+    /// The project's tempo and track count, read from the project file.
+    fn parse_summary(path: &std::path::Path, ext: &str) -> Option<(f64, usize)> {
+        let project = if ext == "als" {
+            clavus_parser_als::AlsParser::new(path).ok()?.project
+        } else {
+            clavus_parser_bw::BitwigParser::new(path).ok()?.project
+        };
+        Some((project.bpm, project.tracks.len()))
     }
 
     pub fn load_project(&mut self, idx: usize) -> Result<(), String> {
@@ -219,7 +339,7 @@ impl App {
 
         // Tell the relay which project we switched to, so it serves the
         // right history and stores our pushes under the right name.
-        let name = self.selected_project_name();
+        let name = self.selected_project_sync_name();
         if let (Some(name), Some(tx)) = (name, self.sync_state.cmd_tx.as_ref()) {
             let _ = tx.send(SyncCmd::SetProject(name));
         }
@@ -233,6 +353,16 @@ impl App {
     /// The name of the currently selected project, if any.
     pub fn selected_project_name(&self) -> Option<String> {
         self.selected_entry().map(|e| e.name.clone())
+    }
+
+    /// The name the relay knows this project by.
+    ///
+    /// It is the file name with its extension, so a collaborator on
+    /// another machine recognises the same project, while an Ableton set
+    /// and a Bitwig bundle with the same stem stay apart.
+    pub fn selected_project_sync_name(&self) -> Option<String> {
+        self.selected_entry()
+            .map(|e| e.id().sync_name().to_string())
     }
 
     pub fn set_error(&mut self, msg: String) {
@@ -253,7 +383,7 @@ impl App {
         let entry = self.selected_entry()
             .ok_or_else(|| "No project selected".to_string())?;
 
-        let store = clavus_core::CueStore::new(&self.clavus_root, &entry.name)
+        let store = clavus_core::CueStore::new(&self.clavus_root, &entry.id())
             .map_err(|e| format!("CueStore: {}", e))?;
 
         self.selected_cue = None;
@@ -272,7 +402,7 @@ impl App {
         let Some(entry) = self.selected_entry() else {
             return Vec::new();
         };
-        let Ok(store) = clavus_core::CueStore::new(&self.clavus_root, &entry.name) else {
+        let Ok(store) = clavus_core::CueStore::new(&self.clavus_root, &entry.id()) else {
             return Vec::new();
         };
         store.list(None).unwrap_or_default()
@@ -288,7 +418,7 @@ impl App {
 
         let store = BlobStore::new(self.clavus_root.join("blobs"))
             .map_err(|e| format!("BlobStore: {}", e))?;
-        let snap_store = SnapshotStore::new(store, &entry.name);
+        let snap_store = SnapshotStore::new(store, &entry.id());
 
         if let Some(head) = snap_store.head() {
             self.snapshots = snap_store.walk_chain(Some(&head.hash));
@@ -312,7 +442,7 @@ impl App {
             Ok(s) => s,
             Err(_) => return vec![],
         };
-        let snap_store = SnapshotStore::new(store, &entry.name);
+        let snap_store = SnapshotStore::new(store, &entry.id());
         match snap_store.head() {
             Some(head) => snap_store.walk_chain(Some(&head.hash)),
             None => vec![],
@@ -333,7 +463,7 @@ impl App {
             Ok(s) => s,
             Err(_) => return vec![],
         };
-        let snap_store = SnapshotStore::new(store, &entry.name);
+        let snap_store = SnapshotStore::new(store, &entry.id());
         snap_store
             .head()
             .map(|h| vec![h.hash])
@@ -360,7 +490,7 @@ impl App {
 
         // The project we are working on, so the relay serves us the
         // right history.
-        let initial_project = self.selected_project_name();
+        let initial_project = self.selected_project_sync_name();
 
         // Spawn the background sync thread.
         thread::spawn(move || {
@@ -444,14 +574,17 @@ impl App {
                     }
                     SyncCmd::Pull {
                         known_heads,
-                        project_name,
+                        project_path,
                         clavus_root,
                     } => {
                         if let Some(ref c) = client {
                             // The relay replies to Hello with a Push of
                             // everything we are missing.
+                            let pull_name = clavus_core::project::ProjectId::new(&project_path)
+                                .sync_name()
+                                .to_string();
                             if let Err(e) =
-                                c.hello(project.as_deref().unwrap_or("clavus-tui"), known_heads)
+                                c.hello(pull_name.as_str(), known_heads)
                             {
                                 let _ = result_tx.send(format!("pull failed: {}", e));
                                 continue;
@@ -460,8 +593,10 @@ impl App {
                                 Some(clavus_sync::client::SyncMsg::Push { snapshots, cues }) => {
                                     // Store what arrived, so a pull actually
                                     // brings the collaborator's work in.
+                                    let project_id =
+                                        clavus_core::project::ProjectId::new(&project_path);
                                     let (stored, imported) =
-                                        store_pulled(&snapshots, &cues, &clavus_root, &project_name);
+                                        store_pulled(&snapshots, &cues, &clavus_root, &project_id);
                                     let _ = result_tx.send(format!(
                                         "pulled {} snapshot(s), {} cue(s)",
                                         stored, imported
@@ -538,9 +673,31 @@ impl App {
                 self.sync_state.connected = false;
                 self.set_info("disconnected".into());
             } else {
+                // A push or a pull that worked is worth remembering: the
+                // sync panel said "last sync never" even after a
+                // successful sync.
+                if msg.starts_with("pushed ") || msg.starts_with("pulled ") {
+                    self.sync_state.last_sync = Some(msg.clone());
+                    // A pull changes what the project list shows (the
+                    // snapshot count and the head), so the list is
+                    // refreshed — otherwise the TUI and the CLI disagree
+                    // about the same project.
+                    if msg.starts_with("pulled ") {
+                        let _ = self.refresh_projects();
+                    }
+                }
                 self.set_info(msg);
             }
         }
+    }
+
+    /// Advance the interface's own clock.
+    ///
+    /// The idle phrases are meant to rotate, and the spectrum analyzer
+    /// is meant to move. Both are driven from here, so the screen is
+    /// alive even when the user is not pressing keys.
+    pub fn tick(&mut self) {
+        self.idle_index = self.idle_index.wrapping_add(1);
     }
 
     /// Disconnect from the relay.
@@ -555,12 +712,13 @@ impl App {
 
     /// Get the HEAD snapshot hash and chain count for a project.
     /// Returns `(head_hash, snap_count)`, both `None`/`0` if no snapshots exist.
-    fn snap_info(clavus_root: &std::path::Path, project_name: &str) -> (Option<String>, usize) {
+    fn snap_info(clavus_root: &std::path::Path, project_path: &std::path::Path) -> (Option<String>, usize) {
         let blobs = match BlobStore::new(clavus_root.join("blobs")) {
             Ok(b) => b,
             Err(_) => return (None, 0),
         };
-        let store = SnapshotStore::new(blobs, project_name);
+        let id = clavus_core::project::ProjectId::new(project_path);
+        let store = SnapshotStore::new(blobs, &id);
         let head = store.head().map(|s| s.hash);
         let count = store.chain_length(None);
         (head, count)
@@ -575,7 +733,7 @@ pub fn store_pulled(
     snapshots: &[clavus_core::types::Snapshot],
     cues: &[clavus_core::types::Cue],
     clavus_root: &std::path::Path,
-    project_name: &str,
+    project: &clavus_core::project::ProjectId,
 ) -> (usize, usize) {
     use clavus_core::blob::BlobStore;
     use clavus_core::cue::{CueStore, ImportOutcome};
@@ -586,7 +744,7 @@ pub fn store_pulled(
 
     if !snapshots.is_empty() {
         if let Ok(blobs) = BlobStore::new(clavus_root.join("blobs")) {
-            let snap_store = SnapshotStore::new(blobs, project_name);
+            let snap_store = SnapshotStore::new(blobs, project);
             for snap in snapshots {
                 if snap_store.has(&snap.hash) {
                     continue;
@@ -603,7 +761,7 @@ pub fn store_pulled(
     }
 
     if !cues.is_empty() {
-        if let Ok(store) = CueStore::new(clavus_root, project_name) {
+        if let Ok(store) = CueStore::new(clavus_root, project) {
             for cue in cues {
                 if matches!(store.import(cue.clone()), Ok(ImportOutcome::Imported)) {
                     imported += 1;

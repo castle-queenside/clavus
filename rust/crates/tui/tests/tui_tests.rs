@@ -62,6 +62,18 @@ impl Harness {
     }
 }
 
+/// A TCP port that nothing is listening on.
+///
+/// The port is taken from the operating system and released again, so it
+/// is very unlikely to be in use — unlike a hard-coded port, which a
+/// leftover relay can still be holding.
+fn unused_port() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    port
+}
+
 fn press(app: &mut App, code: KeyCode) -> bool {
     handle_key(&KeyEvent::new(code, KeyModifiers::NONE), app)
 }
@@ -86,9 +98,15 @@ fn esc_on_project_list_exits() {
 
 #[test]
 fn esc_on_sub_screen_returns_to_list() {
+    // Esc walks back one level, so the user can return to the project
+    // they were working on instead of always landing on the project
+    // list.
     let mut h = Harness::with_project();
     h.app.screen = Screen::CueList;
     assert!(!press(&mut h.app, KeyCode::Esc), "Esc should not exit from a sub-screen");
+    assert_eq!(h.app.screen, Screen::ProjectDetail);
+
+    press(&mut h.app, KeyCode::Esc);
     assert_eq!(h.app.screen, Screen::ProjectList);
 }
 
@@ -224,6 +242,10 @@ fn cue_filter_cycles_through_statuses() {
     press_char(&mut h.app, 'f');
     assert_eq!(h.app.cue_filter, Some(CueStatus::Skipped));
     press_char(&mut h.app, 'f');
+    assert_eq!(h.app.cue_filter, Some(CueStatus::Deferred));
+    press_char(&mut h.app, 'f');
+    assert_eq!(h.app.cue_filter, Some(CueStatus::Archived));
+    press_char(&mut h.app, 'f');
     assert!(h.app.cue_filter.is_none());
 }
 
@@ -281,6 +303,15 @@ fn enter_in_cue_add_saves_cue_and_returns_to_list() {
     press(&mut h.app, KeyCode::Enter);
     press_char(&mut h.app, 'l');
     press_char(&mut h.app, 'a');
+
+    // The message first...
+    for c in "bring the bass in".chars() {
+        press_char(&mut h.app, c);
+    }
+    press(&mut h.app, KeyCode::Enter);
+    assert_eq!(h.app.screen, Screen::CueAdd, "the position is asked for next");
+
+    // ...and then the position.
     for c in "5.1.1".chars() {
         press_char(&mut h.app, c);
     }
@@ -291,6 +322,10 @@ fn enter_in_cue_add_saves_cue_and_returns_to_list() {
     assert_eq!(h.app.info.as_deref(), Some("cue saved"));
     assert_eq!(h.app.cues.len(), 1);
     assert_eq!(h.app.cues[0].position, "5.1.1");
+    assert_eq!(
+        h.app.cues[0].text, "bring the bass in",
+        "the message must land in the text, not in the position"
+    );
 }
 
 #[test]
@@ -300,9 +335,10 @@ fn enter_with_empty_input_does_not_save() {
     press(&mut h.app, KeyCode::Enter);
     press_char(&mut h.app, 'l');
     press_char(&mut h.app, 'a');
+    // An empty message, then an empty position.
+    press(&mut h.app, KeyCode::Enter);
     press(&mut h.app, KeyCode::Enter);
 
-    assert_eq!(h.app.screen, Screen::CueList);
     assert!(h.app.cues.is_empty());
     assert_ne!(h.app.info.as_deref(), Some("cue saved"));
 }
@@ -316,11 +352,21 @@ fn cue_save_uses_app_data_root_not_home() {
     press(&mut h.app, KeyCode::Enter);
     press_char(&mut h.app, 'l');
     press_char(&mut h.app, 'a');
-    press_char(&mut h.app, '9');
+    // The message, then the position.
+    for c in "9".chars() {
+        press_char(&mut h.app, c);
+    }
+    press(&mut h.app, KeyCode::Enter);
+    for c in "1.1.1".chars() {
+        press_char(&mut h.app, c);
+    }
     press(&mut h.app, KeyCode::Enter);
 
-    // The cue must exist under the temp data root.
-    let cue_dir = h.app.clavus_root.join("cues").join("demo");
+    // The cue must exist under the temp data root, in the directory
+    // that belongs to this project.
+    let project_path = h.app.selected_entry().expect("a project").path.clone();
+    let key = clavus_core::project::ProjectId::new(&project_path).key;
+    let cue_dir = h.app.clavus_root.join("cues").join(key);
     assert!(cue_dir.exists(), "cue dir should be under the app data root");
     let mut found = false;
     for entry in std::fs::read_dir(&cue_dir).unwrap().flatten() {
@@ -359,9 +405,18 @@ fn connect_to_dead_relay_reports_failure() {
     let mut h = Harness::with_project();
     h.app.screen = Screen::Sync;
 
-    press_char(&mut h.app, 'c');
+    // A port that nothing listens on. A fixed port is not safe: another
+    // test, a leftover relay, or the developer's own relay may be using
+    // it, and then the connect would succeed and the test would prove
+    // nothing.
+    let port = unused_port();
+    let addr = format!("127.0.0.1:{}", port);
+    h.app.sync_connect(&addr);
     assert!(!h.app.sync_state.is_connected(), "must not claim to be connected");
-    assert_eq!(h.app.info.as_deref(), Some("connecting to 127.0.0.1:4477..."));
+    assert_eq!(
+        h.app.info.as_deref(),
+        Some(format!("connecting to {}...", addr).as_str())
+    );
 
     // Give the background thread a moment to report the failure.
     let mut failed = false;
@@ -537,18 +592,18 @@ fn store_pulled_saves_snapshots_and_imports_cues() {
         replies: vec![],
     };
 
-    let (stored, imported) = store_pulled(&[snap], &[cue], &data, "demo");
+    let (stored, imported) = store_pulled(&[snap], &[cue], &data, &clavus_core::project::ProjectId::new(std::path::Path::new("demo")));
     assert_eq!(stored, 1, "the snapshot should be stored");
     assert_eq!(imported, 1, "the cue should be imported");
 
     // The snapshot should now be in the local chain.
     let blobs = clavus_core::blob::BlobStore::new(data.join("blobs")).unwrap();
-    let store = clavus_core::snapshot::SnapshotStore::new(blobs, "demo");
+    let store = clavus_core::snapshot::SnapshotStore::new(blobs, &clavus_core::project::ProjectId::new(std::path::Path::new("demo")));
     assert!(store.has(&hash), "the snapshot should be in the local store");
     assert_eq!(store.chain_length(None), 1, "HEAD should have advanced");
 
     // And the cue should be in the local cue store.
-    let cues = clavus_core::CueStore::new(&data, "demo").unwrap();
+    let cues = clavus_core::CueStore::new(&data, &clavus_core::project::ProjectId::new(std::path::Path::new("demo"))).unwrap();
     let listed = cues.list(None).unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].text, "a note from a collaborator");
@@ -576,7 +631,7 @@ fn store_pulled_rejects_a_snapshot_with_a_crafted_hash() {
         project_path: "/tmp/evil.als".to_string(),
     };
 
-    let (stored, _) = store_pulled(&[snap], &[], &data, "demo");
+    let (stored, _) = store_pulled(&[snap], &[], &data, &clavus_core::project::ProjectId::new(std::path::Path::new("demo")));
     assert_eq!(stored, 0, "a crafted hash must not be stored");
     assert!(
         !tmp.path().join("escaped.meta").exists(),
@@ -607,7 +662,7 @@ fn store_pulled_rejects_a_cue_with_a_crafted_id() {
         replies: vec![],
     };
 
-    let (_, imported) = store_pulled(&[], &[cue], &data, "demo");
+    let (_, imported) = store_pulled(&[], &[cue], &data, &clavus_core::project::ProjectId::new(std::path::Path::new("demo")));
     assert_eq!(imported, 0, "a crafted cue id must not be imported");
     assert!(
         !tmp.path().join("escaped.json").exists(),
@@ -621,7 +676,12 @@ fn pushing_includes_the_projects_cues() {
     // Select the project.
     press(&mut h.app, KeyCode::Down);
     // Add a cue for the selected project.
-    let store = clavus_core::CueStore::new(&h.app.clavus_root, "demo").unwrap();
+    let project_path = h.app.selected_entry().expect("a project").path.clone();
+    let store = clavus_core::CueStore::new(
+        &h.app.clavus_root,
+        &clavus_core::project::ProjectId::new(&project_path),
+    )
+    .unwrap();
     store
         .add("a note worth sharing", "1.1.1", "chris", "", "Drums")
         .unwrap();
@@ -717,9 +777,12 @@ fn the_tui_introduces_itself_with_the_selected_project() {
     app.sync_connect(&addr);
 
     // The initial Hello names the selected project, not a fixed string.
+    //
+    // The name is the file name with its extension, so an Ableton set
+    // and a Bitwig bundle that share a stem stay apart on the wire.
     let hello = wait_for_hello(&rx);
     assert_eq!(
-        hello, "Alpha",
+        hello, "Alpha.als",
         "the TUI must introduce itself with the project it is working on"
     );
 }
@@ -744,9 +807,9 @@ fn the_tui_tells_the_relay_when_the_selection_changes() {
     let beta = app.projects.iter().position(|p| p.name == "Beta").unwrap();
     app.load_project(alpha).unwrap();
     app.sync_connect(&addr);
-    assert_eq!(wait_for_hello(&rx), "Alpha");
+    assert_eq!(wait_for_hello(&rx), "Alpha.als");
 
     // Switch to the other project: the relay must be told.
     app.load_project(beta).unwrap();
-    assert_eq!(wait_for_hello(&rx), "Beta");
+    assert_eq!(wait_for_hello(&rx), "Beta.als");
 }

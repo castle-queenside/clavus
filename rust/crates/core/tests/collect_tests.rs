@@ -617,14 +617,16 @@ fn test_collect_extracts_a_sample_from_the_archive() {
 
     assert_eq!(collect.copied.len(), 1, "{:?}", collect.failed);
     assert!(collect.failed.is_empty());
-    let extracted = tmp.path().join("Samples").join("kick.wav");
-    assert!(extracted.exists(), "the sample should be extracted");
-    assert_eq!(
-        std::fs::read(&extracted).unwrap(),
-        b"RIFF----WAVEfake"
+    // The sample keeps the place it has inside the archive, so the bundle
+    // stays self-contained and the reference still resolves. Nothing is
+    // written next to the project.
+    assert!(
+        !tmp.path().join("samples").join("kick.wav").exists(),
+        "nothing should be written next to the project"
     );
 
-    // The reference inside the archive now points at the extracted copy.
+    // The reference inside the archive now points at the sample's place
+    // inside the bundle.
     let entries = clavus_core::bitwig_archive::list_entries(&proj).unwrap();
     let xml_name = clavus_core::bitwig_archive::find_project_xml(&entries).unwrap();
     let xml = String::from_utf8(
@@ -632,8 +634,8 @@ fn test_collect_extracts_a_sample_from_the_archive() {
     )
     .unwrap();
     assert!(
-        xml.contains(r#"File="Samples/kick.wav""#),
-        "the reference should be rewritten: {}",
+        xml.contains(r#"File="samples/kick.wav""#),
+        "the reference should point at the sample inside the bundle: {}",
         xml
     );
     assert!(
@@ -649,9 +651,14 @@ fn test_collect_extracts_a_sample_from_the_archive() {
         b"RIFF----WAVEfake"
     );
 
-    // And the project now audits clean with nothing left in the archive.
+    // And the project now audits clean: the sample is present, inside the
+    // bundle, and the project points at it.
     let after = audit_project(&proj).unwrap();
     assert!(after.is_clean());
-    assert!(after.embedded.is_empty());
-    assert_eq!(after.collected.len(), 1);
+    assert_eq!(after.embedded.len(), 1);
+    assert!(after.collected.is_empty());
+    assert!(
+        !after.embedded[0].archive_needs_repair(),
+        "the project should point at the copy inside the bundle"
+    );
 }

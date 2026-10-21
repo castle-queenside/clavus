@@ -18,7 +18,7 @@ use tempfile::TempDir;
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
 fn make_snap(hash: &str, parent: Option<&str>) -> Snapshot {
-    make_snap_for(hash, parent, "test")
+    make_snap_for(hash, parent, "test.als")
 }
 
 /// A snapshot belonging to `project`.
@@ -34,12 +34,12 @@ fn make_snap_for(hash: &str, parent: Option<&str>, project: &str) -> Snapshot {
         notes: String::new(),
         sample_hashes: vec![],
         sample_paths: HashMap::new(),
-        project_path: format!("/tmp/{}.als", project),
+        project_path: format!("/tmp/{}", project),
     }
 }
 
 fn make_cue(id: &str) -> Cue {
-    make_cue_for(id, "demo")
+    make_cue_for(id, "demo.als")
 }
 
 /// A cue belonging to `project`.
@@ -70,8 +70,15 @@ fn start_real_relay(state_dir: &TempDir) -> String {
         let _ = clavus_relay::run_with_listener(listener, state_dir);
     });
 
-    // Give the relay a moment to start accepting.
-    thread::sleep(Duration::from_millis(50));
+    // Wait until the relay really accepts connections. A fixed sleep
+    // was not enough when the machine was busy, and the test then failed
+    // for a reason that had nothing to do with the code.
+    for _ in 0..200 {
+        if std::net::TcpStream::connect(&addr).is_ok() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
     addr
 }
 
@@ -128,19 +135,19 @@ fn real_relay_stores_and_returns_pushed_snapshots() {
 
     // Both clients work on the same project, so both name it in Hello.
     let client = SyncClient::connect(&addr).expect("connect");
-    client.hello("test", vec![]).expect("hello");
+    client.hello("test.als", vec![]).expect("hello");
     let _ = client.recv_timeout(Duration::from_secs(3));
 
     client
         .send(SyncMsg::Push {
             snapshots: vec![make_snap("a".repeat(64).as_str(), None)],
-            cues: vec![make_cue_for("cue-1", "test")],
+            cues: vec![make_cue_for("cue-1", "test.als")],
         })
         .expect("push");
 
     // A second client should be offered the stored snapshot.
     let client2 = SyncClient::connect(&addr).expect("connect");
-    client2.hello("test", vec![]).expect("hello");
+    client2.hello("test.als", vec![]).expect("hello");
     let msg = client2
         .recv_timeout(Duration::from_secs(3))
         .expect("relay should push stored snapshots");
@@ -219,7 +226,7 @@ fn real_relay_persists_across_restart() {
     {
         let addr = start_real_relay(&tmp);
         let client = SyncClient::connect(&addr).expect("connect");
-        client.hello("test", vec![]).expect("hello");
+        client.hello("test.als", vec![]).expect("hello");
         let _ = client.recv_timeout(Duration::from_secs(3));
         client
             .send(SyncMsg::Push {
@@ -236,7 +243,7 @@ fn real_relay_persists_across_restart() {
     {
         let addr = start_real_relay(&tmp);
         let client = SyncClient::connect(&addr).expect("connect");
-        client.hello("test", vec![]).expect("hello");
+        client.hello("test.als", vec![]).expect("hello");
         let msg = client
             .recv_timeout(Duration::from_secs(3))
             .expect("relay should offer the persisted snapshot");
@@ -298,7 +305,7 @@ fn real_relay_ignores_a_duplicate_push() {
     let addr = start_real_relay(&tmp);
 
     let client = SyncClient::connect(&addr).expect("connect");
-    client.hello("test", vec![]).expect("hello");
+    client.hello("test.als", vec![]).expect("hello");
     let _ = client.recv_timeout(Duration::from_secs(3));
 
     let snap = make_snap(&"e".repeat(64), None);
@@ -314,7 +321,7 @@ fn real_relay_ignores_a_duplicate_push() {
 
     // The relay should still hold exactly one copy.
     let client2 = SyncClient::connect(&addr).expect("connect");
-    client2.hello("test", vec![]).expect("hello");
+    client2.hello("test.als", vec![]).expect("hello");
     match client2.recv_timeout(Duration::from_secs(3)).expect("reply") {
         SyncMsg::Push { snapshots, .. } => {
             assert_eq!(snapshots.len(), 1, "duplicate pushes must not duplicate");
@@ -339,7 +346,12 @@ fn relay_state_survives_a_corrupt_state_file() {
     thread::spawn(move || {
         let _ = clavus_relay::run_with_listener(listener, sd);
     });
-    thread::sleep(Duration::from_millis(100));
+    for _ in 0..200 {
+        if std::net::TcpStream::connect(&addr).is_ok() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
 
     let client = SyncClient::connect(&addr).expect("relay should start despite corrupt state");
     client.hello("after-corrupt", vec![]).expect("hello");
@@ -357,14 +369,14 @@ fn relay_state_lists_stored_snapshots() {
     state.store(vec![snap.clone()], vec![]);
 
     // The snapshot's project path is "/tmp/test.als", so it belongs to
-    // the project "test".
-    let found = state.find_missing("test", &[]);
+    // the project "test.als" — the name a client uses on the wire.
+    let found = state.find_missing("test.als", &[]);
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].hash, "f".repeat(64));
 
     // A client that already knows the head gets nothing.
     let known = vec!["f".repeat(64)];
-    assert!(state.find_missing("test", &known).is_empty());
+    assert!(state.find_missing("test.als", &known).is_empty());
 
     // A client on a different project is offered nothing.
     assert!(
@@ -382,25 +394,25 @@ fn real_relay_keeps_each_projects_cues_to_itself() {
 
     // Project "alpha" pushes a cue.
     let alpha = SyncClient::connect(&addr).expect("connect");
-    alpha.hello("alpha", vec![]).expect("hello");
+    alpha.hello("alpha.als", vec![]).expect("hello");
     let _ = alpha.recv_timeout(Duration::from_secs(2));
     alpha
-        .push(vec![], vec![make_cue_for("alpha-cue", "alpha")])
+        .push(vec![], vec![make_cue_for("alpha-cue", "alpha.als")])
         .expect("push");
     let _ = alpha.recv_timeout(Duration::from_secs(2));
 
     // Project "beta" pushes a cue with the same track name.
     let beta = SyncClient::connect(&addr).expect("connect");
-    beta.hello("beta", vec![]).expect("hello");
+    beta.hello("beta.als", vec![]).expect("hello");
     let _ = beta.recv_timeout(Duration::from_secs(2));
     beta
-        .push(vec![], vec![make_cue_for("beta-cue", "beta")])
+        .push(vec![], vec![make_cue_for("beta-cue", "beta.als")])
         .expect("push");
     let _ = beta.recv_timeout(Duration::from_secs(2));
 
     // A client on "alpha" sees only alpha's cue.
     let alpha2 = SyncClient::connect(&addr).expect("connect");
-    alpha2.hello("alpha", vec![]).expect("hello");
+    alpha2.hello("alpha.als", vec![]).expect("hello");
     let msg = alpha2.recv_timeout(Duration::from_secs(3));
     match msg {
         Some(SyncMsg::Push { cues, .. }) => {
@@ -430,18 +442,18 @@ fn real_relay_does_not_duplicate_a_repeatedly_pushed_cue() {
     let addr = start_real_relay(&tmp);
 
     let client = SyncClient::connect(&addr).expect("connect");
-    client.hello("test", vec![]).expect("hello");
+    client.hello("test.als", vec![]).expect("hello");
     let _ = client.recv_timeout(Duration::from_secs(2));
 
     for _ in 0..3 {
         client
-            .push(vec![], vec![make_cue_for("cue-1", "test")])
+            .push(vec![], vec![make_cue_for("cue-1", "test.als")])
             .expect("push");
         let _ = client.recv_timeout(Duration::from_secs(2));
     }
 
     let client2 = SyncClient::connect(&addr).expect("connect");
-    client2.hello("test", vec![]).expect("hello");
+    client2.hello("test.als", vec![]).expect("hello");
     let msg = client2.recv_timeout(Duration::from_secs(3));
     match msg {
         Some(SyncMsg::Push { cues, .. }) => {
@@ -464,11 +476,11 @@ fn real_relay_does_not_offer_one_projects_snapshots_to_another() {
 
     // Project "alpha" pushes a snapshot.
     let alpha = SyncClient::connect(&addr).expect("connect");
-    alpha.hello("alpha", vec![]).expect("hello");
+    alpha.hello("alpha.als", vec![]).expect("hello");
     let _ = alpha.recv_timeout(Duration::from_secs(2));
     alpha
         .push(
-            vec![make_snap_for(&"a".repeat(64), None, "alpha")],
+            vec![make_snap_for(&"a".repeat(64), None, "alpha.als")],
             vec![],
         )
         .expect("push");
@@ -476,7 +488,7 @@ fn real_relay_does_not_offer_one_projects_snapshots_to_another() {
 
     // A client on "beta" is offered nothing.
     let beta = SyncClient::connect(&addr).expect("connect");
-    beta.hello("beta", vec![]).expect("hello");
+    beta.hello("beta.als", vec![]).expect("hello");
     let msg = beta.recv_timeout(Duration::from_secs(3));
     match msg {
         Some(SyncMsg::Push { snapshots, cues }) => {
@@ -492,7 +504,7 @@ fn real_relay_does_not_offer_one_projects_snapshots_to_another() {
 
     // A client on "alpha" is offered alpha's snapshot.
     let alpha2 = SyncClient::connect(&addr).expect("connect");
-    alpha2.hello("alpha", vec![]).expect("hello");
+    alpha2.hello("alpha.als", vec![]).expect("hello");
     let msg = alpha2.recv_timeout(Duration::from_secs(3));
     match msg {
         Some(SyncMsg::Push { snapshots, .. }) => {
@@ -541,7 +553,7 @@ fn the_relay_survives_a_client_that_sends_garbage() {
 
     // The relay is still alive and serving.
     let client = SyncClient::connect(&addr).expect("connect");
-    client.hello("test", vec![]).expect("hello");
+    client.hello("test.als", vec![]).expect("hello");
     let _ = client.recv_timeout(Duration::from_secs(3));
     client
         .push(vec![make_snap(&"a".repeat(64), None)], vec![])
@@ -549,7 +561,7 @@ fn the_relay_survives_a_client_that_sends_garbage() {
     let _ = client.recv_timeout(Duration::from_secs(3));
 
     let client2 = SyncClient::connect(&addr).expect("connect");
-    client2.hello("test", vec![]).expect("hello");
+    client2.hello("test.als", vec![]).expect("hello");
     match client2.recv_timeout(Duration::from_secs(3)) {
         Some(SyncMsg::Push { snapshots, .. }) => {
             assert_eq!(snapshots.len(), 1, "the relay should still serve");
@@ -580,9 +592,108 @@ fn the_relay_ignores_a_cue_with_a_bad_id() {
     let mut state = RelayState::new(tmp.path().to_path_buf()).unwrap();
     state.store(
         vec![],
-        vec![make_cue_for("../../escaped", "test"), make_cue_for("good", "test")],
+        vec![make_cue_for("../../escaped", "test.als"), make_cue_for("good", "test.als")],
     );
-    let cues = state.cues.get("test").cloned().unwrap_or_default();
+    let cues = state.cues.get("test.als").cloned().unwrap_or_default();
     assert_eq!(cues.len(), 1, "only the well-formed cue is kept: {:?}", cues);
     assert_eq!(cues[0].id, "good");
+}
+
+// ─── The chain order survives a restart ───────────────────────────────────
+//
+// Regression: the relay rebuilt its per-project index by iterating a
+// hash map, whose order is random for every process. After a restart
+// the same project came back in a different order each time, and a
+// pull installed an arbitrary snapshot as the head.
+
+#[test]
+fn the_chain_order_survives_a_relay_restart() {
+    let tmp = TempDir::new().unwrap();
+
+    // Three snapshots in a chain: a → b → c.
+    let a = "a".repeat(64);
+    let b = "b".repeat(64);
+    let c = "c".repeat(64);
+
+    {
+        let addr = start_real_relay(&tmp);
+        let client = SyncClient::connect(&addr).expect("connect");
+        client.hello("chain.als", vec![]).expect("hello");
+        let _ = client.recv_timeout(Duration::from_secs(3));
+        for (hash, parent) in [
+            (a.as_str(), None),
+            (b.as_str(), Some(a.as_str())),
+            (c.as_str(), Some(b.as_str())),
+        ] {
+            client
+                .send(SyncMsg::Push {
+                    snapshots: vec![make_snap_for(hash, parent, "chain.als")],
+                    cues: vec![],
+                })
+                .expect("push");
+        }
+        thread::sleep(Duration::from_millis(200));
+        client.close();
+    }
+
+    // After a restart the order must be the chain order, every time.
+    for _ in 0..5 {
+        let addr = start_real_relay(&tmp);
+        let client = SyncClient::connect(&addr).expect("connect");
+        client.hello("chain.als", vec![]).expect("hello");
+        let msg = client
+            .recv_timeout(Duration::from_secs(3))
+            .expect("the relay should offer the chain");
+        match msg {
+            SyncMsg::Push { snapshots, .. } => {
+                let hashes: Vec<String> = snapshots.iter().map(|s| s.hash.clone()).collect();
+                assert_eq!(
+                    hashes,
+                    vec![a.clone(), b.clone(), c.clone()],
+                    "the chain must come back oldest first"
+                );
+            }
+            other => panic!("unexpected reply: {:?}", other),
+        }
+        client.close();
+    }
+}
+
+// ─── A cue-only push reaches the relay ───────────────────────────────────
+//
+// Regression: a push returned early when the project had no snapshots,
+// so a collaborator who only left notes never sent them. The note
+// silently never left the machine.
+
+#[test]
+fn a_cue_only_push_reaches_the_relay() {
+    let tmp = TempDir::new().unwrap();
+    let addr = start_real_relay(&tmp);
+
+    let client = SyncClient::connect(&addr).expect("connect");
+    client.hello("notes.als", vec![]).expect("hello");
+    let _ = client.recv_timeout(Duration::from_secs(3));
+    client
+        .send(SyncMsg::Push {
+            snapshots: vec![],
+            cues: vec![make_cue_for("note-1", "notes.als")],
+        })
+        .expect("push");
+    thread::sleep(Duration::from_millis(150));
+
+    // A second client must see the cue.
+    let client2 = SyncClient::connect(&addr).expect("connect");
+    client2.hello("notes.als", vec![]).expect("hello");
+    let msg = client2
+        .recv_timeout(Duration::from_secs(3))
+        .expect("the relay should offer the cue");
+    match msg {
+        SyncMsg::Push { cues, .. } => {
+            assert_eq!(cues.len(), 1, "the cue must have been stored");
+            assert_eq!(cues[0].id, "note-1");
+        }
+        other => panic!("unexpected reply: {:?}", other),
+    }
+    client.close();
+    client2.close();
 }

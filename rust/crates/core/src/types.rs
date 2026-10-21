@@ -285,6 +285,30 @@ pub struct SampleRef {
     /// SHA256 of file content. None if file not found or inaccessible.
     pub hash: Option<String>,
     pub size_bytes: u64,
+    /// For a Bitwig bundle: the path this sample has *inside* the archive.
+    ///
+    /// The bundle is a self-contained project folder, so a sample that
+    /// lives in it is addressed by its internal path, not by a path on
+    /// this machine.
+    pub archive_entry: Option<String>,
+}
+
+impl SampleRef {
+    /// Whether the project still points somewhere other than the copy the
+    /// bundle carries.
+    ///
+    /// A bundle that references a sample by its internal path is
+    /// complete. A bundle that references it by an old absolute path
+    /// still has the audio, but the reference does not resolve — the
+    /// project can be repaired by pointing it at its own copy.
+    pub fn archive_needs_repair(&self) -> bool {
+        let Some(entry) = self.archive_entry.as_ref() else {
+            return false;
+        };
+        let reference = self.path.to_string_lossy().replace('\\', "/");
+        let entry = entry.replace('\\', "/");
+        reference != entry
+    }
 }
 
 /// Result of auditing a project's sample references before snapshotting.
@@ -366,11 +390,11 @@ pub enum SampleError {
     #[error("{0} sample(s) not found on disk — run `clavus collect` first")]
     MissingSamples(usize, Vec<PathBuf>),
 
-    #[error(
-        "{0} sample(s) are outside the project folder — run `clavus collect --copy-missing`"
-    )]
+    // The hint names a command that exists. It used to name a
+    // `--copy-missing` flag that does not exist, so following the
+    // advice failed with "unexpected argument".
+    #[error("{0} sample(s) are outside the project folder — run `clavus collect` to copy them in")]
     OutsideProjectDir(usize, Vec<PathBuf>),
-
     #[error("IO error while accessing sample: {0}")]
     IoError(#[from] std::io::Error),
 }

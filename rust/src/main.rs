@@ -41,8 +41,8 @@ fn main() -> anyhow::Result<()> {
     let mut stdout = std::io::stdout();
     let mut stderr = std::io::stderr();
 
-    match cli.command.unwrap_or(Commands::Tui) {
-        Commands::Tui => run_tui(projects_dir, clavus_root),
+    match cli.command.unwrap_or(Commands::Tui { relay: None }) {
+        Commands::Tui { relay } => run_tui(projects_dir, clavus_root, relay),
         Commands::Snapshot {
             project,
             message,
@@ -54,11 +54,13 @@ fn main() -> anyhow::Result<()> {
             text,
             position,
             track,
+            author,
         } => cmd_cue(
             &project,
             &text,
             &position,
             track.as_deref(),
+            author.as_deref(),
             &clavus_root,
             &mut stdout,
             &mut stderr,
@@ -100,10 +102,17 @@ fn main() -> anyhow::Result<()> {
 
 // ─── TUI ─────────────────────────────────────────────────────────
 
-fn run_tui(projects_dir: PathBuf, clavus_root: PathBuf) -> anyhow::Result<()> {
+fn run_tui(
+    projects_dir: PathBuf,
+    clavus_root: PathBuf,
+    relay: Option<String>,
+) -> anyhow::Result<()> {
     let mut app = App::new(projects_dir);
     // Honour `--data` / `CLAVUS_DATA` for every read and write the TUI makes.
     app.clavus_root = clavus_root;
+    if let Some(relay) = relay {
+        app.set_relay_address(relay);
+    }
     app.refresh_projects()
         .map_err(|e| anyhow::anyhow!("Failed to scan projects: {}", e))?;
 
@@ -116,6 +125,24 @@ fn run_tui(projects_dir: PathBuf, clavus_root: PathBuf) -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(std::io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
+    // A terminal with no size — a pipe, a closed pty, a window that was
+    // never given a size — used to abort with an unexplained exit
+    // code 101 and no message at all. The tool now says why it cannot
+    // start.
+    match terminal.size() {
+        Ok(size) if size.width == 0 || size.height == 0 => {
+            anyhow::bail!(
+                "the terminal has no size ({}x{}) — Clavus needs a real terminal to draw in",
+                size.width,
+                size.height
+            );
+        }
+        Ok(_) => {}
+        Err(e) => {
+            anyhow::bail!("cannot read the terminal size: {}", e);
+        }
+    }
+
     crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
     crossterm::terminal::enable_raw_mode()?;
     terminal.clear()?;
@@ -123,7 +150,39 @@ fn run_tui(projects_dir: PathBuf, clavus_root: PathBuf) -> anyhow::Result<()> {
     loop {
         terminal.draw(|f| ui::render(f, &mut app))?;
 
-        if let Ok(crossterm::event::Event::Key(key)) = crossterm::event::read() {
+        // The screen has to keep up with the background sync thread even
+        // when the user is not pressing keys, so the event read has a
+        // timeout instead of blocking forever.
+        //
+        // A read error means the terminal is gone (the input was closed,
+        // for instance). The old loop ignored the error and spun
+        // forever, so `clavus tui` hung with no way out.
+        let key = match crossterm::event::poll(std::time::Duration::from_millis(150)) {
+            Ok(true) => match crossterm::event::read() {
+                Ok(crossterm::event::Event::Key(key)) => Some(key),
+                Ok(_) => None,
+                Err(e) => {
+                    // Restore the terminal before leaving.
+                    let _ = crossterm::execute!(
+                        std::io::stdout(),
+                        crossterm::terminal::LeaveAlternateScreen
+                    );
+                    let _ = crossterm::terminal::disable_raw_mode();
+                    anyhow::bail!("the terminal is gone: {}", e);
+                }
+            },
+            Ok(false) => None,
+            Err(e) => {
+                let _ = crossterm::execute!(
+                    std::io::stdout(),
+                    crossterm::terminal::LeaveAlternateScreen
+                );
+                let _ = crossterm::terminal::disable_raw_mode();
+                anyhow::bail!("cannot read from the terminal: {}", e);
+            }
+        };
+
+        if let Some(key) = key {
             if clavus_tui::handle_key(&key, &mut app) {
                 break;
             }
@@ -131,6 +190,9 @@ fn run_tui(projects_dir: PathBuf, clavus_root: PathBuf) -> anyhow::Result<()> {
 
         // Pick up connection status changes from the background sync thread.
         app.poll_sync();
+
+        // Keep the idle phrases and the spectrum moving.
+        app.tick();
     }
 
     crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen)?;

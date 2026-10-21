@@ -10,7 +10,11 @@ use std::path::Path;
 use tempfile::TempDir;
 
 fn store(dir: &TempDir, project: &str) -> CueStore {
-    CueStore::new(dir.path(), project).expect("cue store")
+    CueStore::new(
+        dir.path(),
+        &clavus_core::project::ProjectId::new(std::path::Path::new(project)),
+    )
+    .expect("cue store")
 }
 
 #[test]
@@ -230,7 +234,11 @@ fn project_names_with_odd_characters_work() {
         "про_ject_123",
         "про-ject-🎵",
     ] {
-        let s = CueStore::new(dir.path(), name).expect("store should be creatable");
+        let s = CueStore::new(
+            dir.path(),
+            &clavus_core::project::ProjectId::new(std::path::Path::new(name)),
+        )
+        .expect("store should be creatable");
         let id = s.add("cue", "1.1.1", "chris", "", "T").unwrap().id;
         let loaded = s.load(&id).unwrap().expect("cue should load");
         assert_eq!(loaded.text, "cue");
@@ -282,7 +290,11 @@ fn listing_a_project_with_no_cues_returns_empty() {
 fn cue_store_creates_its_own_directory() {
     let dir = TempDir::new().unwrap();
     let nested = dir.path().join("a").join("b").join("c");
-    let s = CueStore::new(&nested, "demo").expect("store should create dirs");
+    let s = CueStore::new(
+        &nested,
+        &clavus_core::project::ProjectId::new(std::path::Path::new("demo")),
+    )
+    .expect("store should create dirs");
     s.add("cue", "1.1.1", "chris", "", "T").unwrap();
     assert!(nested.exists(), "cue root should have been created");
 }

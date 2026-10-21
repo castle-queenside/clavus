@@ -38,6 +38,29 @@ pub enum SyncEvent {
 /// Maximum payload size: 10 MB.
 const MAX_PAYLOAD: usize = 10 * 1024 * 1024;
 
+/// How long to wait for a relay to answer a connection attempt.
+///
+/// The operating system's own timeout is over a minute, which left the
+/// terminal frozen with no output.
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Connect to a relay, giving up after `timeout`.
+///
+/// A plain `TcpStream::connect` waits for the operating system to give
+/// up, which on a firewalled address took over a minute.
+fn connect_with_timeout(addr: &str, timeout: Duration) -> std::io::Result<TcpStream> {
+    use std::net::ToSocketAddrs;
+
+    let mut last_error = std::io::Error::other("no address to connect to");
+    for socket_addr in addr.to_socket_addrs()? {
+        match TcpStream::connect_timeout(&socket_addr, timeout) {
+            Ok(stream) => return Ok(stream),
+            Err(e) => last_error = e,
+        }
+    }
+    Err(last_error)
+}
+
 /// Result type alias for this module.
 pub type Result<T> = std::result::Result<T, ClavusError>;
 
@@ -56,7 +79,10 @@ pub struct SyncClient {
 impl SyncClient {
     /// Connect to a relay at `addr` (e.g. `"127.0.0.1:4477"`).
     pub fn connect(addr: &str) -> Result<Self> {
-        let stream = TcpStream::connect(addr)
+        // A connect that never answers must not freeze the terminal for
+        // a minute. The operating system's own timeout is far longer
+        // than a user is willing to wait.
+        let stream = connect_with_timeout(addr, CONNECT_TIMEOUT)
             .map_err(ClavusError::from)?;
         stream
             .set_read_timeout(Some(Duration::from_secs(60)))

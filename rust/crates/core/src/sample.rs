@@ -57,83 +57,12 @@ pub struct ResolvedSample {
 
 /// Extract audio sample paths from a raw `.als` XML string (already decompressed).
 /// Handles the `<RelativePathElement Dir="..."/>` + `<Name Value="..."/>` chain format.
+/// Extract audio sample paths from a raw `.als` XML string (already decompressed).
+///
+/// The extraction itself lives in [`crate::als_refs`] so that the audit and
+/// the Ableton parser can never drift apart.
 pub fn extract_als_sample_paths_from_xml(xml: &str) -> Vec<PathBuf> {
-    let mut refs = Vec::new();
-    let mut reader = quick_xml::Reader::from_str(xml);
-    reader.trim_text(true);
-    let mut buf = Vec::new();
-    let mut in_sample_ref = false;
-    let mut path_value: Option<String> = None;
-    let mut relpath_parts: Vec<String> = Vec::new();
-    let mut name_value: Option<String> = None;
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(quick_xml::events::Event::Start(e)) | Ok(quick_xml::events::Event::Empty(e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                match tag.as_str() {
-                    "SampleRef" => {
-                        in_sample_ref = true;
-                        path_value = None;
-                        relpath_parts.clear();
-                        name_value = None;
-                    }
-                    "Path" if in_sample_ref => {
-                        for attr in e.attributes().flatten() {
-                            let k = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                            if k == "Value" {
-                                path_value = Some(String::from_utf8_lossy(attr.value.as_ref()).to_string());
-                            }
-                        }
-                    }
-                    "RelativePathElement" if in_sample_ref => {
-                        for attr in e.attributes().flatten() {
-                            let k = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                            if k == "Dir" {
-                                relpath_parts.push(String::from_utf8_lossy(attr.value.as_ref()).to_string());
-                            }
-                        }
-                    }
-                    "Name" if in_sample_ref => {
-                        for attr in e.attributes().flatten() {
-                            let k = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                            if k == "Value" {
-                                name_value = Some(String::from_utf8_lossy(attr.value.as_ref()).to_string());
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            Ok(quick_xml::events::Event::End(e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                if tag == "SampleRef" && in_sample_ref {
-                    in_sample_ref = false;
-                    // Format 1: direct <Path Value="..."/>
-                    if let Some(p) = path_value.take() {
-                        if !p.trim().is_empty() {
-                            refs.push(PathBuf::from(p));
-                        }
-                    }
-                    // Format 2: <RelativePathElement> chain + <Name>
-                    else if !relpath_parts.is_empty() || name_value.is_some() {
-                        let mut p = relpath_parts.join("/");
-                        if let Some(n) = name_value.take() {
-                            if !p.is_empty() { p.push('/'); }
-                            p.push_str(&n);
-                        }
-                        if !p.is_empty() {
-                            refs.push(PathBuf::from(p));
-                        }
-                    }
-                }
-            }
-            Ok(quick_xml::events::Event::Eof) => break,
-            _ => {}
-        }
-        buf.clear();
-    }
-    refs
+    crate::als_refs::extract_sample_refs_from_xml(xml)
 }
 
 // ─── Audit ───────────────────────────────────────────────────────────────────
@@ -199,12 +128,7 @@ pub fn audit_project(project_path: &Path) -> Result<SampleAuditReport, ClavusErr
         entries
             .iter()
             .filter(|n| !n.ends_with('/') && !n.ends_with('\\'))
-            .map(|n| {
-                n.rsplit(['/', '\\'])
-                    .next()
-                    .unwrap_or(n)
-                    .to_string()
-            })
+            .cloned()
             .collect::<Vec<String>>()
     } else {
         Vec::new()
@@ -269,6 +193,15 @@ pub fn validate_als_xml(xml: &str) -> Result<(), ClavusError> {
         ));
     }
 
+    // The XML reader accepts a closing tag whose `>` is missing, so a set
+    // truncated by a single byte used to look complete. A well-formed
+    // document always ends with `>`.
+    if !crate::als_refs::is_complete_document(xml) {
+        return Err(ClavusError::ParseError(
+            "malformed XML: the document is truncated".into(),
+        ));
+    }
+
     if !saw_liveset {
         return Err(ClavusError::ParseError(
             "not an Ableton Live project: no <Ableton> or <LiveSet> element".into(),
@@ -305,11 +238,17 @@ fn extract_bitwig_sample_paths(project_path: &Path) -> Result<Vec<PathBuf>, Clav
     }
 
     if !found || xml_bytes.is_empty() {
-        return Ok(Vec::new()); // No project.xml — no samples
+        return Err(ClavusError::ParseError(
+            "not a Bitwig project archive: no project.xml found in the .bwproject".into(),
+        ));
     }
 
     let xml = String::from_utf8(xml_bytes)
         .map_err(ClavusError::from)?;
+
+    // A bundle whose project.xml is broken is a broken bundle. Auditing it
+    // as "0 samples present" hid real corruption.
+    validate_bitwig_xml(&xml)?;
 
     // Parse the XML and extract attribute values that look like audio paths
     let mut refs = Vec::new();
@@ -337,9 +276,27 @@ fn extract_bitwig_sample_paths(project_path: &Path) -> Result<Vec<PathBuf>, Clav
     Ok(refs)
 }
 
+/// The file extensions Clavus treats as audio.
+pub const AUDIO_EXTENSIONS: &[&str] = &[
+    "wav", "aiff", "aif", "aifc", "mp3", "flac", "ogg", "oga", "m4a", "wma", "opus", "aac",
+];
+
+/// Whether `path` ends in a known audio extension.
+///
+/// The extension is the only reliable signal. Treating *every* absolute
+/// path in a project as a sample made Bitwig preset references
+/// (`/Users/me/Library/Presets/EQ.preset`) look like missing audio, which
+/// blocked snapshots of perfectly healthy projects.
+pub fn has_audio_extension(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    AUDIO_EXTENSIONS
+        .iter()
+        .any(|ext| lower.ends_with(&format!(".{}", ext)))
+}
+
 /// Returns true if `val` looks like a path to an audio file.
-/// Checks for absolute paths, relative paths with audio extensions, or paths
-/// that are clearly file system references (not just IDs or UUIDs).
+///
+/// A path must name an audio file: an ID or a preset path is not a sample.
 fn looks_like_audio_path(val: &str) -> bool {
     if val.is_empty() || val.len() < 4 {
         return false;
@@ -348,17 +305,65 @@ fn looks_like_audio_path(val: &str) -> bool {
     if !val.contains('/') && !val.contains('\\') && !val.contains('.') {
         return false;
     }
-    // Must have an audio extension or be an absolute path
-    let lower = val.to_lowercase();
-    lower.ends_with(".wav")
-        || lower.ends_with(".aiff")
-        || lower.ends_with(".aif")
-        || lower.ends_with(".mp3")
-        || lower.ends_with(".flac")
-        || lower.ends_with(".ogg")
-        || lower.ends_with(".m4a")
-        || lower.ends_with(".wma")
-        || (val.starts_with('/') || val.len() > 10 && val.contains(':'))
+    has_audio_extension(val)
+}
+
+/// Validate that `xml` is a Bitwig project document.
+///
+/// A `.bwproject` archive without a readable `project.xml` is not a
+/// project. Auditing it as "0 samples present" made a broken bundle look
+/// perfectly healthy.
+pub fn validate_bitwig_xml(xml: &str) -> Result<(), ClavusError> {
+    let mut reader = quick_xml::Reader::from_str(xml);
+    reader.trim_text(true);
+    let mut buf = Vec::new();
+    let mut saw_project = false;
+    // quick-xml does not report an element that is never closed, so the
+    // nesting depth is tracked here to catch a truncated document.
+    let mut depth: i64 = 0;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(quick_xml::events::Event::Start(e)) => {
+                depth += 1;
+                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                if tag == "Project" {
+                    saw_project = true;
+                }
+            }
+            Ok(quick_xml::events::Event::Empty(e)) => {
+                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                if tag == "Project" {
+                    saw_project = true;
+                }
+            }
+            Ok(quick_xml::events::Event::End(_)) => {
+                depth -= 1;
+            }
+            Ok(quick_xml::events::Event::Eof) => break,
+            Err(e) => {
+                return Err(ClavusError::ParseError(format!(
+                    "malformed Bitwig project.xml: {}",
+                    e
+                )));
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    if depth != 0 {
+        return Err(ClavusError::ParseError(
+            "malformed Bitwig project.xml: the document ends with an unclosed element".into(),
+        ));
+    }
+
+    if !saw_project {
+        return Err(ClavusError::ParseError(
+            "not a Bitwig project: project.xml has no <Project> element".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// The directory that contains a project file.
@@ -430,23 +435,24 @@ fn audit_sample_refs(
         // Try multiple resolution strategies:
         // 1. As-is from the .als (may be relative or absolute)
         // 2. Relative to project root (most common)
-        // 3. Filename search (handles Live 10 path corruption bug, case-insensitive on macOS)
+        // 3. Relative to project root, matching each path component
+        //    case-insensitively — Live has been known to change the case
+        //    of a folder in a saved set.
+        //
+        // A search for *any* file with a matching name under the project
+        // used to be the third strategy. It accepted a file the set never
+        // referenced, so a set pointing at a sample that is not there
+        // audited as clean and the snapshot recorded a path that does not
+        // exist.
         let mut candidates: Vec<PathBuf> = vec![
             abs_root.join(path),
             path.clone(),
         ];
 
-        // Filename-only search: on macOS this is case-insensitive thanks to APFS,
-        // on Linux it finds exact matches
-        let fname = path.file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-        if !fname.is_empty() {
-            if let Ok(entries) = find_files_by_name(&abs_root, &fname) {
-                for f in entries {
-                    if !candidates.contains(&f) {
-                        candidates.push(f);
-                    }
+        if path.is_relative() {
+            if let Some(found) = resolve_case_insensitive(&abs_root, path) {
+                if !candidates.contains(&found) {
+                    candidates.push(found);
                 }
             }
         }
@@ -483,14 +489,37 @@ fn audit_sample_refs(
             relpath_from_project: relpath.clone(),
             hash: hash.clone(),
             size_bytes: size,
+            archive_entry: None,
         };
 
         // A sample that is not on disk may still be inside the project
         // archive. That is a present sample, not a missing one.
-        let in_archive = ref_.resolved_path.is_none()
-            && archive_files
+        //
+        // Two cases are possible. The reference may already point at the
+        // sample's place inside the bundle — then the bundle is complete
+        // and nothing has to be done. Or the reference points somewhere
+        // else (an old absolute path, say) while the bundle carries a
+        // copy under the same file name — then the bundle can still be
+        // repaired by pointing the reference at its own copy.
+        let archive_entry = if ref_.resolved_path.is_none() {
+            archive_files
                 .iter()
-                .any(|e: &String| e.eq_ignore_ascii_case(&ref_.filename));
+                .find(|e: &&String| {
+                    e.rsplit(['/', '\\'])
+                        .next()
+                        .unwrap_or(e)
+                        .eq_ignore_ascii_case(&ref_.filename)
+                })
+                .cloned()
+        } else {
+            None
+        };
+        let in_archive = archive_entry.is_some();
+
+        let ref_ = SampleRef {
+            archive_entry,
+            ..ref_
+        };
 
         match (ref_.resolved_path.is_some(), relpath.is_some()) {
             (true, true) => {
@@ -528,7 +557,7 @@ fn audit_sample_refs(
         }
         if !report.outside_project.is_empty() {
             warn!(
-                "⚠ {} sample(s) outside project folder — run `clavus collect --copy-missing`",
+                "⚠ {} sample(s) outside project folder — run `clavus collect` to copy them in",
                 report.outside_project.len()
             );
         }
@@ -540,6 +569,61 @@ fn audit_sample_refs(
 }
 
 // ─── Collection ───────────────────────────────────────────────────────────────
+
+/// Claim a unique destination file name for a sample.
+///
+/// Two samples can share a file name — `a/loop.wav` and `b/loop.wav` are
+/// different audio. Copying both to `Samples/loop.wav` merged them and one
+/// track played the other's audio, so a clash is given a name of its own:
+/// `a_loop.wav`, then `b_loop.wav`, and finally a name carrying a short
+/// digest of the source path.
+fn unique_destination(
+    claimed: &mut HashMap<String, PathBuf>,
+    filename: &str,
+    source: &Path,
+) -> String {
+    // The same source claimed twice keeps the same name.
+    if let Some(existing) = claimed.get(filename) {
+        if existing == source {
+            return filename.to_string();
+        }
+    }
+
+    let mut candidate = filename.to_string();
+    if !claimed.contains_key(&candidate) {
+        claimed.insert(candidate.clone(), source.to_path_buf());
+        return candidate;
+    }
+
+    // Disambiguate with the source's parent folder name.
+    let parent = source
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let stem = Path::new(filename)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| filename.to_string());
+    let ext = Path::new(filename)
+        .extension()
+        .map(|s| format!(".{}", s.to_string_lossy()))
+        .unwrap_or_default();
+
+    if !parent.is_empty() {
+        candidate = format!("{}_{}{}", parent, stem, ext);
+        if !claimed.contains_key(&candidate) {
+            claimed.insert(candidate.clone(), source.to_path_buf());
+            return candidate;
+        }
+    }
+
+    // Last resort: a short digest of the full source path.
+    let digest = BlobStore::sha256(source.to_string_lossy().as_bytes());
+    candidate = format!("{}_{}{}", stem, &digest[..8], ext);
+    claimed.insert(candidate.clone(), source.to_path_buf());
+    candidate
+}
 
 /// Collect missing/outside-project samples into the project folder.
 ///
@@ -556,8 +640,8 @@ pub fn collect_samples(
         .ok_or_else(|| ClavusError::ParseError("no parent directory".into()))?;
 
     let samples_dir = project_root.join("Samples");
-    fs::create_dir_all(&samples_dir)
-        .map_err(|e| ClavusError::ParseError(format!("create Samples dir: {}", e)))?;
+    // The directory is only created once there is something to put in it,
+    // so a failed collect does not leave an empty `Samples/` behind.
 
     let mut copied = Vec::new();
     let mut failed = Vec::new();
@@ -583,15 +667,28 @@ pub fn collect_samples(
         .iter()
         .chain(report.missing.iter())
         .chain(report.embedded.iter());
+
+    // Two different samples can share a file name. Copying both to
+    // `Samples/loop.wav` merged them, and the set then played one track's
+    // audio for another. Every destination is therefore claimed by exactly
+    // one source, and a clash gets a distinct name.
+    let mut claimed: HashMap<String, PathBuf> = HashMap::new();
+
     for ref_ in candidates {
         if let Some(ref resolved) = ref_.resolved_path {
-            let dest = samples_dir.join(&ref_.filename);
+            let filename = unique_destination(&mut claimed, &ref_.filename, resolved);
+            let dest = samples_dir.join(&filename);
+            if let Err(e) = fs::create_dir_all(&samples_dir) {
+                error!("Failed to create {}: {}", samples_dir.display(), e);
+                failed.push((ref_.path.clone(), e.to_string()));
+                continue;
+            }
             match fs::copy(resolved, &dest) {
                 Ok(bytes) => {
-                    info!("Collected: {} ({} bytes)", ref_.filename, bytes);
+                    info!("Collected: {} ({} bytes)", filename, bytes);
                     copied.push(dest.clone());
                     // Build replacement: original path in XML → new relative path
-                    let new_rel = format!("Samples/{}", ref_.filename);
+                    let new_rel = format!("Samples/{}", filename);
                     let orig = ref_.path.to_string_lossy().replace('\\', "/");
                     path_replacements.insert(orig, new_rel);
                 }
@@ -600,28 +697,49 @@ pub fn collect_samples(
                     failed.push((ref_.path.clone(), e.to_string()));
                 }
             }
-        } else if let Some(entry) =
+        } else if let Some(entry) = ref_.archive_entry.clone().or_else(|| {
             crate::bitwig_archive::find_entry_by_filename(&archive_entries, &ref_.filename)
-        {
-            // The sample is inside the project archive — extract it.
-            let dest = samples_dir.join(&ref_.filename);
-            match crate::bitwig_archive::read_entry(project_path, &entry)
-                .and_then(|data| {
-                    fs::write(&dest, &data).map_err(|e| {
-                        ClavusError::ParseError(format!("write {}: {}", dest.display(), e))
-                    })?;
-                    Ok::<(), ClavusError>(())
-                }) {
-                Ok(()) => {
-                    info!("Extracted {} from the project archive", ref_.filename);
-                    copied.push(dest);
-                    let new_rel = format!("Samples/{}", ref_.filename);
-                    let orig = ref_.path.to_string_lossy().replace('\\', "/");
-                    path_replacements.insert(orig, new_rel);
-                }
-                Err(e) => {
-                    error!("Failed to extract {}: {}", ref_.filename, e);
-                    failed.push((ref_.path.clone(), e.to_string()));
+        }) {
+            // The sample is inside the project bundle.
+            //
+            // A bundle is a self-contained project folder: a reference
+            // inside it is resolved *within* the bundle. So the repair is
+            // to point the reference at the sample's place inside the
+            // bundle — the file is already there — and not to write a
+            // copy next to the project, which would leave the bundle
+            // pointing at something it does not carry.
+            let internal = entry.replace('\\', "/");
+            let orig = ref_.path.to_string_lossy().replace('\\', "/");
+            if orig == internal {
+                // The bundle already points at its own copy.
+                info!("{} is already inside the project bundle", ref_.filename);
+                copied.push(project_path.to_path_buf());
+            } else {
+                match crate::bitwig_archive::rewrite_sample_path(project_path, &orig, &internal) {
+                    Ok(true) => {
+                        info!(
+                            "Pointed {} at the copy inside the project bundle ({})",
+                            ref_.filename, internal
+                        );
+                        copied.push(project_path.to_path_buf());
+                    }
+                    Ok(false) => {
+                        // The reference was not found in the project
+                        // description, so nothing was changed. Say so
+                        // rather than claim the project was repaired.
+                        error!(
+                            "The reference to {} was not found in the project description",
+                            ref_.filename
+                        );
+                        failed.push((
+                            ref_.path.clone(),
+                            "the reference was not found in the project description".to_string(),
+                        ));
+                    }
+                    Err(e) => {
+                        error!("Failed to repair the reference to {}: {}", ref_.filename, e);
+                        failed.push((ref_.path.clone(), e.to_string()));
+                    }
                 }
             }
         } else {
@@ -737,39 +855,36 @@ fn rewrite_project_sample_paths(
     Ok(())
 }
 
-// ─── Filename search ─────────────────────────────────────────────────────────
+// ─── Case-insensitive path resolution ───────────────────────────────────────
 
-/// Find files matching `name` anywhere under `root` (shallow recursive scan).
-fn find_files_by_name(root: &Path, name: &str) -> std::io::Result<Vec<PathBuf>> {
-    let mut results = Vec::new();
-    _find_files_by_name(root, name, &mut results, 0);
-    Ok(results)
-}
-
-fn matches_name(name: &str, entry_name: &str) -> bool {
-    // On macOS (APFS/HFS+), filename comparison is case-insensitive
-    #[cfg(target_os = "macos")]
-    {
-        entry_name.eq_ignore_ascii_case(name)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        entry_name == name
-    }
-}
-
-fn _find_files_by_name(dir: &Path, name: &str, results: &mut Vec<PathBuf>, depth: usize) {
-    if depth > 4 {
-        return; // Limit recursion depth
-    }
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() && !path.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(false) {
-                _find_files_by_name(&path, name, results, depth + 1);
-            } else if path.is_file() && path.file_name().map(|n| matches_name(name, &n.to_string_lossy())).unwrap_or(false) {
-                results.push(path);
+/// Resolve a relative path under `root`, matching each component
+/// case-insensitively.
+///
+/// Live has been known to change the case of a folder in a saved set, and
+/// on a case-sensitive filesystem the exact path then does not exist. This
+/// walks the *same* path, only relaxing the case of each component — it
+/// never accepts a different file that merely shares a name.
+fn resolve_case_insensitive(root: &Path, rel: &Path) -> Option<PathBuf> {
+    let mut current = root.to_path_buf();
+    for component in rel.components() {
+        let name = component.as_os_str().to_str()?;
+        let exact = current.join(name);
+        if exact.exists() {
+            current = exact;
+            continue;
+        }
+        let mut matched = None;
+        for entry in fs::read_dir(&current).ok()?.flatten() {
+            if entry.file_name().to_string_lossy().eq_ignore_ascii_case(name) {
+                matched = Some(entry.path());
+                break;
             }
         }
+        current = matched?;
+    }
+    if current.is_file() {
+        Some(current)
+    } else {
+        None
     }
 }

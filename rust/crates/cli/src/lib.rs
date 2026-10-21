@@ -39,11 +39,11 @@ macro_rules! errln {
 )]
 pub struct Cli {
     /// Projects directory
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     pub dir: Option<PathBuf>,
 
     /// Clavus data directory (default: ~/.clavus)
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub data: Option<PathBuf>,
 
     #[command(subcommand)]
@@ -53,7 +53,11 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Launch the terminal UI
-    Tui,
+    Tui {
+        /// Relay to sync with (e.g. 192.168.1.10:4477)
+        #[arg(short = 'r', long)]
+        relay: Option<String>,
+    },
     /// Audit audio samples and create a snapshot
     Snapshot {
         project: PathBuf,
@@ -75,6 +79,9 @@ pub enum Commands {
         position: String,
         #[arg(long)]
         track: Option<String>,
+        /// Who wrote the note (default: your user name)
+        #[arg(short, long)]
+        author: Option<String>,
     },
     /// List cues
     Cues {
@@ -124,7 +131,7 @@ pub enum Commands {
         #[arg(short, long)]
         recursive: bool,
     },
-    /// Show project health at a glance: snapshots, samples, cues, relay sync
+    /// Show project health at a glance: snapshots, samples and cues
     Status {
         project: PathBuf,
     },
@@ -148,10 +155,7 @@ pub fn cmd_snapshot(
     use clavus_core::blob::BlobStore;
     use clavus_core::snapshot::SnapshotStore;
 
-    let name = project
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_default();
+    let id = clavus_core::project::ProjectId::new(project);
 
     let parser = if project.extension().and_then(|s| s.to_str()) == Some("bwproject") {
         clavus_parser_bw::BitwigParser::new(project)?.project
@@ -187,13 +191,10 @@ pub fn cmd_snapshot(
 
     let store = BlobStore::new(clavus_root.join("blobs"))
         .map_err(|e| anyhow::anyhow!("BlobStore: {}", e))?;
-    let snap_store = SnapshotStore::new(store, &name);
+    let snap_store = SnapshotStore::new(store, &id);
 
     // Parent: current HEAD
     let parent = snap_store.head().map(|s| s.hash);
-    // Remember where HEAD points now, so an unchanged file can be reported
-    // honestly rather than claiming a new snapshot was created.
-    let previous_head = parent.clone();
 
     // Build sample info from audit (collected + outside_project, all with hashes)
     let all_present: Vec<_> = report
@@ -209,7 +210,7 @@ pub fn cmd_snapshot(
         .as_deref()
         .unwrap_or("auto snapshot");
 
-    let snapshot = snap_store.save(
+    let outcome = snap_store.save(
         project,
         msg,
         parent.as_deref(),
@@ -219,16 +220,21 @@ pub fn cmd_snapshot(
         sample_paths,
     )?;
 
-    if previous_head.as_deref() == Some(snapshot.hash.as_str()) {
-        // The project file is byte-identical to the current snapshot, so
-        // nothing new was stored and the message was not recorded.
-        outln!(out,
-            "= snapshot {}  ·  unchanged — no new snapshot was created",
-            clavus_core::short(&snapshot.hash, 8),
-        );
-        outln!(out, "  (the message \"{}\" was not recorded — change the project first)", msg);
-        return Ok(());
-    }
+    let snapshot = match outcome {
+        clavus_core::snapshot::SaveOutcome::Created(s) => s,
+        clavus_core::snapshot::SaveOutcome::Unchanged(s) => {
+            // The project's bytes are identical to a snapshot this project
+            // already has. Nothing was stored and the message was not
+            // recorded — say so rather than claim a new snapshot.
+            outln!(out,
+                "= snapshot {}  ·  unchanged — no new snapshot was created",
+                clavus_core::short(&s.hash, 8),
+            );
+            outln!(out, "  (already in this project's history as \"{}\")", s.message);
+            outln!(out, "  (the message \"{}\" was not recorded — change the project first)", msg);
+            return Ok(());
+        }
+    };
 
     outln!(out, 
         "✓ snapshot {}  ·  {}  ·  {} tracks  ·  {:.0} BPM",
@@ -240,6 +246,58 @@ pub fn cmd_snapshot(
     Ok(())
 }
 
+/// Make sure the project the user named actually exists.
+///
+/// A path that does not exist used to be treated as an empty project:
+/// `log` said "No snapshots yet", `cues` said "No cues" and `cue`
+/// cheerfully created a cue for it. The same binary reported the
+/// missing file as an error for `audit`, `status` and `snapshot`, so
+/// the behaviour was inconsistent.
+fn ensure_project_exists(project: &Path) -> anyhow::Result<()> {
+    if project.exists() {
+        return Ok(());
+    }
+    if project.is_dir() {
+        anyhow::bail!("{} is a directory, not a project file", project.display());
+    }
+    anyhow::bail!("the project {} does not exist", project.display());
+}
+
+/// The name to record as the author of a note.
+///
+/// The user's own name, so a collaborator can tell who wrote a note
+/// after a sync. Falls back to "cli" when the name cannot be found.
+pub fn default_author() -> String {
+    for key in ["CLAVUS_AUTHOR", "USER", "LOGNAME"] {
+        if let Ok(name) = std::env::var(key) {
+            let name = name.trim().to_string();
+            if !name.is_empty() {
+                return name;
+            }
+        }
+    }
+    "cli".to_string()
+}
+
+/// Check that a cue position is a `bars.beats.sixteenths` position.
+///
+/// A position that cannot be parsed is a cue that can never be found
+/// in the DAW, so it is refused rather than stored.
+fn validate_position(position: &str) -> anyhow::Result<()> {
+    let parts: Vec<&str> = position.split('.').collect();
+    let ok = parts.len() == 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()));
+    if !ok {
+        anyhow::bail!(
+            "'{}' is not a valid position — expected bars.beats.sixteenths, e.g. 1.1.1",
+            position
+        );
+    }
+    Ok(())
+}
+
 pub fn cmd_log(project: &Path, clavus_root: &Path,
     out: &mut dyn Write,
     _err: &mut dyn Write,
@@ -247,14 +305,11 @@ pub fn cmd_log(project: &Path, clavus_root: &Path,
     use clavus_core::blob::BlobStore;
     use clavus_core::snapshot::SnapshotStore;
 
-    let name = project
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_default();
+    ensure_project_exists(project)?;
+    let id = clavus_core::project::ProjectId::new(project);
 
-    let store = BlobStore::new(clavus_root.join("blobs"))
-        .map_err(|e| anyhow::anyhow!("BlobStore: {}", e))?;
-    let snap_store = SnapshotStore::new(store, &name);
+    let store = BlobStore::open(clavus_root.join("blobs"));
+    let snap_store = SnapshotStore::new(store, &id);
 
     let head = match snap_store.head() {
         Some(h) => h,
@@ -265,7 +320,13 @@ pub fn cmd_log(project: &Path, clavus_root: &Path,
     };
 
     let chain = snap_store.walk_chain(Some(&head.hash));
-    outln!(out, "{} snapshot(s) in chain\n", chain.len());
+    // The clock is named, so a reader knows whose clock the times are on.
+    outln!(
+        out,
+        "{} snapshot(s) in chain — times are local ({})\n",
+        chain.len(),
+        clavus_core::time::local_offset_label()
+    );
 
     for s in &chain {
         let parent = s
@@ -287,22 +348,27 @@ pub fn cmd_log(project: &Path, clavus_root: &Path,
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_cue(
     project: &Path,
     text: &str,
     position: &str,
     track: Option<&str>,
+    author: Option<&str>,
     clavus_root: &Path,
     out: &mut dyn Write,
     _err: &mut dyn Write,
 ) -> anyhow::Result<()> {
+    ensure_project_exists(project)?;
+    validate_position(position)?;
     let root = clavus_root;
-    let name = project
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let store = clavus_core::CueStore::new(root, &name)?;
-    let cue = store.add(text, position, "cli", "", track.unwrap_or("Arrangement"))?;
+    let id = clavus_core::project::ProjectId::new(project);
+    let store = clavus_core::CueStore::new(root, &id)?;
+    // The author says who wrote the note. It used to be the constant
+    // "cli", so after a sync a collaborator could not tell whose notes
+    // were whose — which is the whole point of sharing notes.
+    let author = author.map(|a| a.to_string()).unwrap_or_else(default_author);
+    let cue = store.add(text, position, &author, "", track.unwrap_or("Arrangement"))?;
     outln!(out, "✓ cue {}  @ {}  ({})",
         &cue.id[..8.min(cue.id.len())],
         cue.position,
@@ -315,13 +381,18 @@ pub fn cmd_cues(project: &Path, status: Option<&str>, clavus_root: &Path,
     out: &mut dyn Write,
     _err: &mut dyn Write,
 ) -> anyhow::Result<()> {
+    ensure_project_exists(project)?;
     let root = clavus_root;
-    let name = project
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let store = clavus_core::CueStore::new(root, &name)?;
-    let cues = store.list(status)?;
+    let id = clavus_core::project::ProjectId::new(project);
+    let store = clavus_core::CueStore::open(root, &id);
+    let cues = store.list(status).map_err(|e| match e {
+        // The status filter is what the user just typed, so the message
+        // must not blame the project file.
+        clavus_core::ClavusError::ParseError(msg) if msg.starts_with("unknown cue status") => {
+            anyhow::anyhow!("{}", msg)
+        }
+        other => anyhow::anyhow!("Failed to read the cues: {}", other),
+    })?;
 
     if cues.is_empty() {
         outln!(out, "No cues.");
@@ -348,9 +419,18 @@ pub fn cmd_relay(bind: &str, state_dir: Option<PathBuf>, clavus_root: &Path,
 ) -> anyhow::Result<()> {
     let dir = state_dir
         .unwrap_or_else(|| clavus_root.join("relay-state"));
-    outln!(out, "Listening on {}…", bind);
+    // The socket is bound *before* the tool claims to be listening.
+    // Printing first meant a relay that could not start still said
+    // "Listening on …" and then failed.
+    let listener = std::net::TcpListener::bind(bind)
+        .map_err(|e| anyhow::anyhow!("Cannot listen on {}: {}", bind, e))?;
+    let bound = listener
+        .local_addr()
+        .map(|a| a.to_string())
+        .unwrap_or_else(|_| bind.to_string());
+    outln!(out, "Listening on {}…", bound);
     outln!(out, "State: {}", dir.display());
-    clavus_relay::run(bind, dir)?;
+    clavus_relay::run_with_listener(listener, dir)?;
     Ok(())
 }
 
@@ -378,6 +458,56 @@ fn plural(count: usize, singular: &str, plural: &str) -> String {
     }
 }
 
+/// Print the sample summary.
+///
+/// `audit` and `status` used to print different numbers for the same
+/// project: the audit counted the samples inside a `.bwproject` archive
+/// as "present" while the status counted only the ones on disk. One
+/// summary, used by both, keeps them honest and in agreement.
+fn print_sample_summary(report: &clavus_core::SampleAuditReport, out: &mut dyn Write) {
+    let needs_repair: Vec<_> = report
+        .embedded
+        .iter()
+        .filter(|s| s.archive_needs_repair())
+        .collect();
+    let settled = report.embedded.len() - needs_repair.len();
+
+    outln!(
+        out,
+        "✓ {} accounted for",
+        plural(report.total(), "sample", "samples")
+    );
+    if !report.collected.is_empty() {
+        outln!(
+            out,
+            "  {} on disk in the project folder",
+            plural(report.collected.len(), "sample", "samples")
+        );
+    }
+    if settled > 0 {
+        outln!(
+            out,
+            "  {} inside the project archive",
+            plural(settled, "sample", "samples")
+        );
+    }
+    if !needs_repair.is_empty() {
+        outln!(
+            out,
+            "  {} inside the project archive, but the project does not point at them — run `clavus collect`",
+            plural(needs_repair.len(), "sample", "samples")
+        );
+        for s in &needs_repair {
+            outln!(
+                out,
+                "    {} → {}",
+                s.path.display(),
+                s.archive_entry.as_deref().unwrap_or("?")
+            );
+        }
+    }
+}
+
 pub fn cmd_audit(project: &Path, strict: bool,
     out: &mut dyn Write,
     err: &mut dyn Write,
@@ -385,12 +515,7 @@ pub fn cmd_audit(project: &Path, strict: bool,
     let report = sample::audit_project(project)?;
 
     if report.is_clean() {
-        outln!(out, "✓ {} present", plural(report.total(), "sample", "samples"));
-        if !report.embedded.is_empty() {
-            outln!(out,
-                "  {} inside the project archive — run `clavus collect` to extract",
-                plural(report.embedded.len(), "sample", "samples"));
-        }
+        print_sample_summary(&report, out);
     } else {
         if !report.missing.is_empty() {
             errln!(err, "✗ {} missing:", report.missing.len());
@@ -473,15 +598,13 @@ pub fn cmd_push(relay: &str, project: &Path, clavus_root: &Path,
     use clavus_core::snapshot::SnapshotStore;
     use clavus_sync::SyncMsg;
 
-    let name = project
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_default();
+    let id = clavus_core::project::ProjectId::new(project);
+    let name = id.name.clone();
 
     // Load local snapshot store
     let store = BlobStore::new(clavus_root.join("blobs"))
         .map_err(|e| anyhow::anyhow!("BlobStore: {}", e))?;
-    let snap_store = SnapshotStore::new(store, &name);
+    let snap_store = SnapshotStore::new(store, &id);
 
     // Collect all local snapshots in the chain
     let mut snapshots = Vec::new();
@@ -497,9 +620,21 @@ pub fn cmd_push(relay: &str, project: &Path, clavus_root: &Path,
     }
     snapshots.reverse(); // root → latest
 
-    if snapshots.is_empty() {
-        outln!(out, "No local snapshots to push for '{}'", name);
+    // The cues travel with the snapshots — a collaborator's notes are
+    // the point of the cue system. They are collected *before* the
+    // early return below, because a collaborator who only leaves notes
+    // and takes no snapshot still wants those notes to leave the
+    // machine.
+    let push_cues = clavus_core::CueStore::open(clavus_root, &id)
+        .list(None)
+        .unwrap_or_default();
+
+    if snapshots.is_empty() && push_cues.is_empty() {
+        outln!(out, "Nothing to push for '{}' — no snapshots and no cues", name);
         return Ok(());
+    }
+    if snapshots.is_empty() {
+        outln!(out, "No local snapshots for '{}' — pushing the cues only", name);
     }
 
     outln!(out, "Connecting to {}...", relay);
@@ -507,7 +642,7 @@ pub fn cmd_push(relay: &str, project: &Path, clavus_root: &Path,
         .map_err(|e| anyhow::anyhow!("Failed to connect to {}: {}", relay, e))?;
 
     // Say hello with empty known_heads so relay sends us everything
-    client.hello(&name, vec![])
+    client.hello(id.sync_name(), vec![])
         .map_err(|e| anyhow::anyhow!("Hello: {}", e))?;
 
     // Receive relay's state
@@ -539,19 +674,17 @@ pub fn cmd_push(relay: &str, project: &Path, clavus_root: &Path,
         }
     }).collect();
 
-    // The project's cues travel with the snapshots — a collaborator's
-    // notes are the point of the cue system.
-    let push_cues = match clavus_core::CueStore::new(clavus_root, &name) {
-        Ok(store) => store.list(None).unwrap_or_default(),
-        Err(e) => {
-            errln!(err, "  ⚠ Could not open the cue store: {}", e);
-            Vec::new()
-        }
-    };
-
     let push_count = push_snaps.len();
     let push_cue_count = push_cues.len();
-    outln!(out, "Pushing {} snapshot(s), {} cue(s)...", push_count, push_cue_count);
+    // The count is the whole local chain, not the number of snapshots
+    // that are new to the relay — the relay keeps what it already has.
+    // The wording says so, so the number is not read as "new".
+    outln!(
+        out,
+        "Pushing the local chain — {} snapshot(s), {} cue(s)...",
+        push_count,
+        push_cue_count
+    );
     client
         .push(push_snaps, push_cues)
         .map_err(|e| anyhow::anyhow!("Push: {}", e))?;
@@ -561,24 +694,29 @@ pub fn cmd_push(relay: &str, project: &Path, clavus_root: &Path,
     loop {
         match client.recv_timeout(timeout) {
             Some(SyncMsg::Synced) => {
-                outln!(out, "✓ Pushed {} snapshot(s) and {} cue(s)",
-                    push_count, push_cue_count);
+                outln!(
+                    out,
+                    "✓ Pushed the local chain — {} snapshot(s) and {} cue(s) sent",
+                    push_count, push_cue_count
+                );
                 break;
             }
             Some(SyncMsg::Conflict { project, relay_head, push_head }) => {
-                outln!(out, "⚠ Conflict detected on '{}': relay head {} vs our latest {}",
+                errln!(err, "✗ Conflict detected on '{}': relay head {} vs our latest {}",
                     project,
             clavus_core::short(&relay_head, 8),
             clavus_core::short(&push_head, 8));
-                outln!(out, "  Run `clavus pull --relay {}` first to merge.", relay);
-                break;
+                errln!(err, "  Run `clavus pull --relay {}` first to merge.", relay);
+                // Nothing was pushed. A script that runs `clavus push`
+                // must be able to tell that.
+                anyhow::bail!("the relay has a different history for '{}'", project);
             }
             Some(msg) => {
                 outln!(out, "  relay: {:?}", msg);
             }
             None => {
-                outln!(out, "⚠ Relay timed out waiting for acknowledgement");
-                break;
+                errln!(err, "✗ The relay did not acknowledge the push");
+                anyhow::bail!("the relay did not acknowledge the push");
             }
         }
     }
@@ -594,39 +732,41 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
     use clavus_core::snapshot::SnapshotStore;
     use clavus_sync::SyncMsg;
 
-    let name = project
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_default();
+    let id = clavus_core::project::ProjectId::new(project);
 
     // Load local snapshot store
     let store = BlobStore::new(clavus_root.join("blobs"))
         .map_err(|e| anyhow::anyhow!("BlobStore: {}", e))?;
-    let snap_store = SnapshotStore::new(store, &name);
+    let snap_store = SnapshotStore::new(store, &id);
 
-    // Get local HEAD(s) so we tell relay what we already have
+    // Tell the relay everything we already have, not just our HEAD.
+    // Sending only the HEAD made the relay offer the whole history back,
+    // and the pull then moved HEAD to the oldest snapshot it received.
     let known_heads: Vec<String> = snap_store
-        .head()
-        .map(|h| h.hash)
-        .into_iter()
+        .walk_chain(None)
+        .iter()
+        .map(|s| s.hash.clone())
         .collect();
+    let local_head = snap_store.head().map(|s| s.hash);
 
     outln!(out, "Connecting to {}...", relay);
     let client = SyncClient::connect(relay)
         .map_err(|e| anyhow::anyhow!("Failed to connect to {}: {}", relay, e))?;
 
     // Announce what we know
-    client.hello(&name, known_heads)
+    client.hello(id.sync_name(), known_heads)
         .map_err(|e| anyhow::anyhow!("Hello: {}", e))?;
 
     // Receive relay's response (Push with missing snapshots)
     let timeout = std::time::Duration::from_secs(10);
     let mut pulled_count = 0;
     let mut pulled_cues = 0;
+    // A pull that never got an answer is a failure, not a success.
+    let mut got_response = false;
     loop {
         match client.recv_timeout(timeout) {
             Some(SyncMsg::Push { snapshots, cues }) => {
-                let mut newest: Option<String> = None;
+                got_response = true;
                 for snap in &snapshots {
                     if !snap_store.has(&snap.hash) {
                         snap_store.save_raw(snap.clone())?;
@@ -638,30 +778,51 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
                     );
                         pulled_count += 1;
                     }
-                    // Track the newest pulled snapshot (relay sends root → head)
-                    newest = Some(snap.hash.clone());
                 }
                 if snapshots.is_empty() {
                     outln!(out, "  Relay has no new snapshots");
-                } else if let Some(hash) = newest {
-                    // Advance HEAD to the pulled head so the chain is usable.
-                    // A shrink is refused (that would be a divergent history),
-                    // so report it instead of silently rewinding.
-                    match snap_store.set_head(&hash, "pull") {
-                        Ok(()) => outln!(out, "  HEAD → {}", clavus_core::short(&hash, 8)),
-                        Err(e) => outln!(out, 
-                            "  ⚠ Could not advance HEAD to {}: {}",
-                            clavus_core::short(&hash, 8),
-                            e
-                        ),
+                } else {
+                    // Advance HEAD only when the pulled history *extends*
+                    // ours. Moving HEAD to a snapshot that is not a
+                    // descendant of the current HEAD would drop the
+                    // snapshots the user already had out of the history.
+                    let candidates: Vec<String> = snapshots
+                        .iter()
+                        .map(|s| s.hash.clone())
+                        .filter(|h| snap_store.has(h))
+                        .collect();
+                    let new_head = candidates
+                        .iter()
+                        .find(|h| extends_chain(&snap_store, local_head.as_deref(), h));
+                    match new_head {
+                        Some(hash) => match snap_store.set_head(hash, "pull") {
+                            Ok(()) => {
+                                outln!(out, "  HEAD → {}", clavus_core::short(hash, 8))
+                            }
+                            Err(e) => outln!(out,
+                                "  ⚠ Could not advance HEAD to {}: {}",
+                                clavus_core::short(hash, 8),
+                                e
+                            ),
+                        },
+                        None => {
+                            outln!(out,
+                                "  ⚠ The relay's history does not extend yours — HEAD was left at {}",
+                                local_head
+                                    .as_deref()
+                                    .map(|h| clavus_core::short(h, 8))
+                                    .unwrap_or_else(|| "nothing".to_string())
+                            );
+                        }
                     }
                 }
                 // Import the collaborator's cues into the local cue store.
-                pulled_cues += import_cues(&cues, clavus_root, &name, out, err);
+                pulled_cues += import_cues(&cues, clavus_root, &id, out, err);
                 client.synced().ok();
                 break;
             }
             Some(SyncMsg::Conflict { project, relay_head, push_head }) => {
+                got_response = true;
                 outln!(out, "⚠ Conflict detected on '{}'", project);
                 outln!(out, "  relay HEAD: {}  your HEAD: {}",
                     clavus_core::short(&relay_head, 8),
@@ -669,13 +830,20 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
                 break;
             }
             Some(msg) => {
+                got_response = true;
                 outln!(out, "  relay: {:?}", msg);
             }
             None => {
-                outln!(out, "⚠ Relay timed out — no response");
+                outln!(out, "✗ No response from the relay — nothing was checked");
                 break;
             }
         }
+    }
+
+    if !got_response {
+        // The user is not up to date — nothing was even checked. Saying
+        // otherwise is a lie that hides a broken connection.
+        anyhow::bail!("the relay did not answer");
     }
 
     if pulled_count > 0 {
@@ -683,7 +851,10 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
         outln!(out, "  Note: sync transfers snapshot metadata, not project file contents.");
         outln!(out, "        Restoring a pulled snapshot isn't possible on this machine.");
     } else {
-        outln!(out, "✓ Already up to date");
+        // "Already up to date" was also printed when the relay had never
+        // heard of this project, which reads as if the relay had checked
+        // and found nothing to give. The honest wording covers both.
+        outln!(out, "✓ Up to date — the relay had nothing new for this project");
     }
 
     if pulled_cues > 0 {
@@ -691,6 +862,39 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
     }
 
     Ok(())
+}
+
+/// Whether `candidate` extends the chain that ends at `head`.
+///
+/// A snapshot extends the chain when the chain's head is one of its
+/// ancestors — that is, when the candidate was made *after* the head.
+/// Anything else is a different history, and moving HEAD to it would
+/// drop the snapshots the user already had.
+fn extends_chain(
+    snap_store: &clavus_core::snapshot::SnapshotStore,
+    head: Option<&str>,
+    candidate: &str,
+) -> bool {
+    let Some(head) = head else {
+        // No local history yet — anything is an extension.
+        return true;
+    };
+    if head == candidate {
+        return false;
+    }
+    // Walk the candidate's ancestry and look for our head.
+    let mut current = Some(candidate.to_string());
+    let mut seen = std::collections::HashSet::new();
+    while let Some(hash) = current {
+        if !seen.insert(hash.clone()) {
+            return false;
+        }
+        if hash == head {
+            return true;
+        }
+        current = snap_store.load(&hash).and_then(|s| s.parent);
+    }
+    false
 }
 
 /// Import remote cues into the local cue store.
@@ -701,14 +905,14 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
 fn import_cues(
     cues: &[clavus_core::types::Cue],
     clavus_root: &Path,
-    project_name: &str,
+    project: &clavus_core::project::ProjectId,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> usize {
     if cues.is_empty() {
         return 0;
     }
-    let store = match clavus_core::CueStore::new(clavus_root, project_name) {
+    let store = match clavus_core::CueStore::new(clavus_root, project) {
         Ok(s) => s,
         Err(e) => {
             errln!(err, "  ⚠ Could not open the cue store: {}", e);
@@ -741,14 +945,12 @@ pub fn cmd_restore(project: &Path, hash_arg: &str, clavus_root: &Path,
     use clavus_core::blob::BlobStore;
     use clavus_core::snapshot::SnapshotStore;
 
-    let name = project
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_default();
+    let id = clavus_core::project::ProjectId::new(project);
+    let name = id.name.clone();
 
     let store = BlobStore::new(clavus_root.join("blobs"))
         .map_err(|e| anyhow::anyhow!("BlobStore: {}", e))?;
-    let snap_store = SnapshotStore::new(store, &name);
+    let snap_store = SnapshotStore::new(store, &id);
 
     // Find the snapshot: HEAD keyword, or full hash / unique prefix.
     let target_hash = if hash_arg == "HEAD" {
@@ -779,6 +981,20 @@ pub fn cmd_restore(project: &Path, hash_arg: &str, clavus_root: &Path,
     outln!(out, "  {}", restored.message);
     outln!(out, "  Restart Ableton/Bitwig to load the restored file.");
 
+    // Restoring an older version leaves the working file behind the
+    // history. The newer snapshots are not lost — but the user has to
+    // be told, because the file on disk and the head of the chain no
+    // longer agree.
+    if let Some(head) = snap_store.head() {
+        if head.hash != target_hash {
+            outln!(
+                out,
+                "  The chain still holds the newer snapshot {} — run `clavus snapshot` to record the restored state.",
+                clavus_core::short(&head.hash, 8)
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -790,10 +1006,8 @@ pub fn cmd_status(project: &Path, clavus_root: &Path,
     use clavus_core::cue::CueStore;
     use clavus_core::snapshot::SnapshotStore;
 
-    let name = project
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_default();
+    let id = clavus_core::project::ProjectId::new(project);
+    let name = id.name.clone();
 
     let project_type = if project.extension().and_then(|s| s.to_str()) == Some("bwproject") {
         "Bitwig"
@@ -807,7 +1021,7 @@ pub fn cmd_status(project: &Path, clavus_root: &Path,
     // ── Sample audit ──────────────────────────────────────────────
     let report = sample::audit_project(project)?;
     if report.is_clean() {
-        outln!(out, "✓  {} samples present, all inside project folder", report.collected.len());
+        print_sample_summary(&report, out);
     } else {
         if !report.missing.is_empty() {
             outln!(out, "✗  {} sample(s) missing — run `clavus collect`", report.missing.len());
@@ -818,9 +1032,8 @@ pub fn cmd_status(project: &Path, clavus_root: &Path,
     }
 
     // ── Snapshots ───────────────────────────────────────────────
-    let store = BlobStore::new(clavus_root.join("blobs"))
-        .map_err(|e| anyhow::anyhow!("BlobStore: {}", e))?;
-    let snap_store = SnapshotStore::new(store, &name);
+    let store = BlobStore::open(clavus_root.join("blobs"));
+    let snap_store = SnapshotStore::new(store, &id);
 
     let head = snap_store.head();
     let count = snap_store.chain_length(None);
@@ -833,7 +1046,7 @@ pub fn cmd_status(project: &Path, clavus_root: &Path,
     }
 
     // ── Cues ────────────────────────────────────────────────────
-    let cue_store = CueStore::new(clavus_root, &name)?;
+    let cue_store = CueStore::open(clavus_root, &id);
     let all_cues = cue_store.list(None)?;
     let pending = all_cues.iter().filter(|c| matches!(c.status, clavus_core::types::CueStatus::Pending)).count();
     let resolved = all_cues.len() - pending;
@@ -911,57 +1124,10 @@ fn format_modified_time(t: std::time::SystemTime) -> String {
     let Ok(dur) = t.duration_since(std::time::UNIX_EPOCH) else {
         return "????-??-?? ??:??".to_string();
     };
-    // Simple UTC format: YYYY-MM-DD HH:MM
-    let secs = dur.as_secs();
-    let days = secs / 86400;
-    let rem = secs % 86400;
-    let hours = rem / 3600;
-    let mins = (rem % 3600) / 60;
-    // Use a base date for Unix epoch and add days
-    // 1970-01-01 + days days
-    let year_base = 1970;
-    let mut year = year_base;
-    let mut days_left = days as i64;
-    while days_left > 0 {
-        let days_in_year = if is_leap(year) { 366 } else { 365 };
-        if days_left >= days_in_year {
-            days_left -= days_in_year;
-            year += 1;
-        } else {
-            break;
-        }
-    }
-    let yday = days_left.max(0) as usize;
-    let month_day = month_and_day(year, yday);
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}",
-        year, month_day.0, month_day.1, hours, mins
-    )
+    // The local clock, like every other time the tool shows.
+    clavus_core::time::format_local(dur.as_secs_f64())
 }
 
-fn is_leap(year: i64) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
-}
-
-fn month_and_day(year: i64, yday: usize) -> (u8, u8) {
-    // Days per month (non-leap)
-    let days_in_month: [u16; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let days_in_month = if is_leap(year) {
-        let mut d = days_in_month;
-        d[1] = 29;
-        d
-    } else {
-        days_in_month
-    };
-    let mut remaining = yday as u16;
-    for (i, &dm) in days_in_month.iter().enumerate() {
-        if remaining < dm {
-            return ((i + 1) as u8, (remaining + 1) as u8);
-        }
-        remaining -= dm;
-    }
-    (12, 31)
-}
 
 /// How deep a recursive project scan will go.
 const MAX_SCAN_DEPTH: usize = 12;
@@ -1025,61 +1191,11 @@ pub fn clavus_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".clavus"))
 }
 
+/// A snapshot's time, in the user's own time zone.
+///
+/// The times used to be printed in UTC with no label, so they did not
+/// match the user's clock and there was no way to tell what they were.
 fn format_timestamp(secs: f64) -> String {
-    let secs = secs as i64;
-    let days = secs / 86400;
-    let rem = secs % 86400;
-    let hour = rem / 3600;
-    let min = rem % 3600 / 60;
-
-    // Zeller-like month calculation from days since Unix epoch
-    // 1970-01-01 was a Thursday (weekday=4)
-    let mut year = 1970;
-    let mut ydays = days;
-    loop {
-        let ylen = if (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0) {
-            366
-        } else {
-            365
-        };
-        if ydays < ylen {
-            break;
-        }
-        ydays -= ylen;
-        year += 1;
-    }
-
-    // Days per month (non-leap), we'll adjust below
-    static MPD: [i64; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    #[allow(unused_mut)]
-    let mut month = 11;
-    let mut mday = ydays;
-    if (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0) {
-        // leap year — Feb has 29 days
-        let days = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-        for (i, &d) in days.iter().enumerate() {
-            if mday < d {
-                month = i;
-                break;
-            }
-            mday -= d;
-        }
-    } else {
-        for (i, &d) in MPD.iter().enumerate() {
-            if mday < d {
-                month = i;
-                break;
-            }
-            mday -= d;
-        }
-    }
-
-    format!(
-        "{}-{:02}-{:02} {:02}:{:02}",
-        year,
-        month + 1,
-        mday + 1,
-        hour,
-        min
-    )
+    clavus_core::time::format_local(secs)
 }
+

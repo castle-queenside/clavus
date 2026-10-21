@@ -16,6 +16,8 @@ use tracing::{debug, warn};
 pub const DEFAULT_CLAVUS_DIR: &str = ".clavus";
 const OBJECTS_DIR: &str = "objects";
 const REFS_DIR: &str = "refs";
+const PROJECTS_DIR: &str = "projects";
+const SNAPSHOTS_DIR: &str = "snapshots";
 const INDEX_FILE: &str = "index.json";
 #[allow(dead_code)]
 const CONFIG_FILE: &str = "config.json"; // TODO: use in config management
@@ -84,6 +86,19 @@ impl BlobStore {
         Ok(store)
     }
 
+    /// Open a store for reading, without creating anything.
+    ///
+    /// A command that only reads must not leave a directory tree behind.
+    /// `new` creates the store's directories; this does not.
+    pub fn open(root: PathBuf) -> Self {
+        Self {
+            objects_dir: root.join(OBJECTS_DIR),
+            refs_dir: root.join(REFS_DIR),
+            index_path: root.join(INDEX_FILE),
+            root,
+        }
+    }
+
     /// Initialize the store directories. Safe to call repeatedly.
     pub fn init(&self) -> io::Result<()> {
         fs::create_dir_all(&self.root)?;
@@ -145,7 +160,8 @@ impl BlobStore {
     /// List the hashes of every stored snapshot metadata file.
     ///
     /// Used to resolve a short hash prefix to a full snapshot hash.
-    pub fn list_meta_hashes(&self) -> Vec<String> {
+    #[allow(dead_code)]
+    pub fn list_legacy_meta_hashes(&self) -> Vec<String> {
         let mut out = Vec::new();
         if let Ok(dirs) = fs::read_dir(&self.objects_dir) {
             for dir in dirs.flatten() {
@@ -213,15 +229,36 @@ impl BlobStore {
 
     // ─── Snapshot metadata ──────────────────────────────────────────
 
-    /// Write snapshot metadata atomically (rename over .tmp).
-    pub fn write_meta(&self, snapshot: &Snapshot) -> io::Result<()> {
-        let path = self
-            .meta_path(&snapshot.hash)
-            .ok_or_else(|| invalid_hash(&snapshot.hash))?;
-        // Create prefix directory if it doesn't exist (e.g. objects/ab/)
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+    /// The directory holding one project's snapshot records.
+    ///
+    /// Snapshot records are per project, not per content. Two projects
+    /// that contain the same bytes are two different projects with two
+    /// different histories, and sharing one record lost the second
+    /// project's message, timestamp and parent link.
+    pub fn project_meta_dir(&self, project_key: &str) -> Option<PathBuf> {
+        if project_key.is_empty() || project_key.contains('/') || project_key.contains('\\') {
+            return None;
         }
+        Some(
+            self.root
+                .join(PROJECTS_DIR)
+                .join(project_key)
+                .join(SNAPSHOTS_DIR),
+        )
+    }
+
+    /// Write snapshot metadata for one project atomically (rename over .tmp).
+    pub fn write_meta(&self, project_key: &str, snapshot: &Snapshot) -> io::Result<()> {
+        // The hash becomes a file name, and a hash can come from a remote
+        // peer — so it is checked before it is used as a path.
+        if !Self::is_valid_hash(&snapshot.hash) || snapshot.hash.len() != 64 {
+            return Err(invalid_hash(&snapshot.hash));
+        }
+        let dir = self
+            .project_meta_dir(project_key)
+            .ok_or_else(|| invalid_hash(&snapshot.hash))?;
+        fs::create_dir_all(&dir)?;
+        let path = dir.join(format!("{}.json", snapshot.hash));
         let tmp = PathBuf::from(path.to_string_lossy().to_string() + ".tmp");
         let json = serde_json::to_string_pretty(snapshot)?;
         fs::write(&tmp, json)?;
@@ -230,14 +267,40 @@ impl BlobStore {
         Ok(())
     }
 
-    /// Load snapshot metadata. Returns `None` if not found or corrupt.
-    pub fn load_meta(&self, hash: &str) -> Option<Snapshot> {
-        let path = self.meta_path(hash)?;
+    /// Load one project's snapshot metadata. Returns `None` if not found or corrupt.
+    pub fn load_meta(&self, project_key: &str, hash: &str) -> Option<Snapshot> {
+        let dir = self.project_meta_dir(project_key)?;
+        if !Self::is_valid_hash(hash) || hash.len() != 64 {
+            return None;
+        }
+        let path = dir.join(format!("{}.json", hash));
         if !path.exists() {
             return None;
         }
         let data = fs::read_to_string(&path).ok()?;
         serde_json::from_str(&data).ok()
+    }
+
+    /// List the hashes of every snapshot record one project has.
+    ///
+    /// Used to resolve a short hash prefix to a full snapshot hash.
+    pub fn list_meta_hashes(&self, project_key: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let Some(dir) = self.project_meta_dir(project_key) else {
+            return out;
+        };
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if let Some(stripped) = name.strip_suffix(".json") {
+                    if stripped.len() == 64 {
+                        out.push(stripped.to_string());
+                    }
+                }
+            }
+        }
+        out.sort();
+        out
     }
 
     // ─── Sample blob + metadata ──────────────────────────────────────

@@ -341,6 +341,7 @@ fn cue_is_added_and_listed() {
             "kick needs trimming",
             "1.1.1",
             Some("Test"),
+            None,
             &ws.root,
             o,
             e,
@@ -361,7 +362,7 @@ fn cue_is_added_and_listed() {
 #[test]
 fn cues_can_be_filtered_by_status() {
     let (ws, als) = healthy_workspace();
-    run(|o, e| cmd_cue(&als, "a cue", "1.1.1", None, &ws.root, o, e));
+    run(|o, e| cmd_cue(&als, "a cue", "1.1.1", None, None, &ws.root, o, e));
 
     let (out, _) = run(|o, e| cmd_cues(&als, Some("pending"), &ws.root, o, e));
     assert!(out.all().contains("a cue"), "pending filter: {}", out.all());
@@ -392,7 +393,7 @@ fn cues_with_multibyte_text_do_not_panic() {
         "日本語のキュー文言 trikken",
         "é",
     ] {
-        let (out, result) = run(|o, e| cmd_cue(&als, text, "1.1.1", None, &ws.root, o, e));
+        let (out, result) = run(|o, e| cmd_cue(&als, text, "1.1.1", None, None, &ws.root, o, e));
         assert!(result.is_ok(), "cue {:?} should be added: {:?}", text, result);
         let (list, list_result) = run(|o, e| cmd_cues(&als, None, &ws.root, o, e));
         assert!(list_result.is_ok(), "listing cues should work: {:?}", list_result);
@@ -404,7 +405,7 @@ fn cues_with_multibyte_text_do_not_panic() {
 fn cues_with_multibyte_text_are_listed_and_readable() {
     let (ws, als) = healthy_workspace();
     let text = "🎵 mix the kick in";
-    let (_, result) = run(|o, e| cmd_cue(&als, text, "1.1.1", None, &ws.root, o, e));
+    let (_, result) = run(|o, e| cmd_cue(&als, text, "1.1.1", None, None, &ws.root, o, e));
     assert!(result.is_ok(), "adding the cue should work: {:?}", result);
     let (list, _) = run(|o, e| cmd_cues(&als, None, &ws.root, o, e));
     assert!(
@@ -417,7 +418,7 @@ fn cues_with_multibyte_text_are_listed_and_readable() {
 #[test]
 fn cue_on_a_project_with_no_snapshots_errors_cleanly() {
     let (ws, als) = healthy_workspace();
-    let (_, result) = run(|o, e| cmd_cue(&als, "text", "1.1.1", None, &ws.root, o, e));
+    let (_, result) = run(|o, e| cmd_cue(&als, "text", "1.1.1", None, None, &ws.root, o, e));
     // A cue needs a snapshot to attach to; either it errors or it succeeds,
     // but it must never panic.
     if let Err(e) = result {
@@ -846,7 +847,7 @@ fn pull_reports_a_conflicting_cue_instead_of_overwriting_the_local_one() {
     let ws = Workspace::new();
     let als = ws.write_als(&als_xml(&[]));
     // A local cue that is newer than the remote one.
-    let (out, result) = run(|o, e| cmd_cue(&als, "local note", "1.1.1", None, &ws.root, o, e));
+    let (out, result) = run(|o, e| cmd_cue(&als, "local note", "1.1.1", None, None, &ws.root, o, e));
     assert!(result.is_ok());
     let local_id = out
         .all()
@@ -1088,26 +1089,29 @@ fn audit_does_not_call_an_archived_sample_missing() {
 }
 
 #[test]
-fn collect_extracts_an_archived_sample() {
+fn collect_points_a_project_at_the_copy_inside_its_own_bundle() {
     let tmp = TempDir::new().unwrap();
     let proj = tmp.path().join("Test.bwproject");
     bwproject_with_embedded_sample(&proj, "kick.wav", "/Users/other/Library/kick.wav");
 
     let (out, result) = run(|o, e| cmd_collect(&proj, &tmp.path().join(".clavus"), o, e));
     assert!(result.is_ok(), "{:?} — {}", result, out.all());
-    assert!(
-        tmp.path().join("Samples").join("kick.wav").exists(),
-        "the sample should be extracted: {}",
-        out.all()
-    );
 
-    // The reference inside the archive now points at the extracted copy.
+    // The reference now points at the copy the bundle already carries, so
+    // the bundle stays self-contained and Bitwig still finds the audio.
     let entries = clavus_core::bitwig_archive::list_entries(&proj).unwrap();
     let xml_name = clavus_core::bitwig_archive::find_project_xml(&entries).unwrap();
     let xml =
         String::from_utf8(clavus_core::bitwig_archive::read_entry(&proj, &xml_name).unwrap())
             .unwrap();
-    assert!(xml.contains(r#"File="Samples/kick.wav""#), "{}", xml);
+    assert!(xml.contains(r#"File="samples/kick.wav""#), "{}", xml);
+
+    // The bundle still carries the sample itself.
+    assert!(
+        entries.iter().any(|e| e == "samples/kick.wav"),
+        "the sample must stay inside the bundle: {:?}",
+        entries
+    );
 }
 
 // ─── Chaos: corrupt input must never panic ─────────────────────────────────
@@ -1149,7 +1153,7 @@ fn chaos_run(path: &Path, root: &Path) {
     let _ = run(|o, e| cmd_log(path, root, o, e));
     let _ = run(|o, e| cmd_status(path, root, o, e));
     let _ = run(|o, e| cmd_cues(path, None, root, o, e));
-    let _ = run(|o, e| cmd_cue(path, "a note", "1.1.1", None, root, o, e));
+    let _ = run(|o, e| cmd_cue(path, "a note", "1.1.1", None, None, root, o, e));
     let _ = run(|o, e| cmd_snapshot(path, &None, false, root, o, e));
     let _ = run(|o, e| cmd_restore(path, "HEAD", root, o, e));
 }

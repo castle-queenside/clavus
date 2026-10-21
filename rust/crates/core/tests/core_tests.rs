@@ -101,6 +101,7 @@ fn test_audit_report_missing_not_clean() {
             relpath_from_project: None,
             hash: None,
             size_bytes: 0,
+            archive_entry: None,
         }],
         outside_project: vec![],
     
@@ -121,6 +122,7 @@ fn test_audit_report_outside_project_not_clean() {
             relpath_from_project: None,
             hash: Some("deadbeef".to_string()),
             size_bytes: 1024,
+            archive_entry: None,
         }],
     
         embedded: vec![],};
@@ -139,6 +141,7 @@ fn test_audit_report_all_present() {
                 relpath_from_project: Some("Samples/kick.wav".to_string()),
                 hash: Some("abc123".to_string()),
                 size_bytes: 4096,
+                archive_entry: None,
             },
         ],
         missing: vec![],
@@ -223,8 +226,8 @@ fn test_meta_write_load() {
     let store = BlobStore::new(tmp.path().to_path_buf()).unwrap();
     let hash = "a".repeat(64);
     let snap = make_snap(&hash, None);
-    store.write_meta(&snap).unwrap();
-    let loaded = store.load_meta(&hash);
+    store.write_meta("test", &snap).unwrap();
+    let loaded = store.load_meta("test", &hash);
     assert!(loaded.is_some());
     let loaded = loaded.unwrap();
     assert_eq!(loaded.hash, hash);
@@ -234,7 +237,7 @@ fn test_meta_write_load() {
 #[test]
 fn test_meta_load_not_found() {
     let (store, _tmp) = temp_store();
-    assert!(store.load_meta("nonexistent").is_none());
+    assert!(store.load_meta("test", "nonexistent").is_none());
 }
 
 #[test]
@@ -320,14 +323,14 @@ fn test_marker_default() {
 #[test]
 fn test_snapshot_store_has_false_for_unknown() {
     let (store, _tmp) = temp_store();
-    let snap_store = SnapshotStore::new(store, "test");
+    let snap_store = SnapshotStore::new(store, &clavus_core::project::ProjectId::new(std::path::Path::new("test")));
     assert!(!snap_store.has("nonexistent"));
 }
 
 #[test]
 fn test_snapshot_store_save_raw_and_has() {
     let (store, _tmp) = temp_store();
-    let snap_store = SnapshotStore::new(store, "test");
+    let snap_store = SnapshotStore::new(store, &clavus_core::project::ProjectId::new(std::path::Path::new("test")));
 
     let mut snap = clavus_core::types::Snapshot {
         hash: "abc123def456".to_string(),
@@ -410,7 +413,7 @@ fn test_write_meta_rejects_a_traversing_hash() {
     let mut snap = make_snap(&"a".repeat(64), None);
     snap.hash = "../../escaped".to_string();
     let err = store
-        .write_meta(&snap)
+        .write_meta("test", &snap)
         .expect_err("a traversing hash must be rejected");
     assert!(err.to_string().contains("invalid blob hash"), "{}", err);
     assert!(
@@ -452,7 +455,7 @@ fn test_a_short_hash_does_not_panic() {
     // A one-character hash used to panic while slicing the prefix.
     assert!(!store.has("a"));
     assert!(store.get("a").is_none());
-    assert!(store.load_meta("a").is_none());
+    assert!(store.load_meta("test", "a").is_none());
     assert!(store.sample_filename("a").is_none());
     assert!(store.sample_relpath("a").is_none());
 }
@@ -465,13 +468,16 @@ fn test_restore_refuses_a_non_project_destination_from_a_remote_snapshot() {
     let store = BlobStore::new(tmp.path().join("blobs")).unwrap();
     // The store's project matches the snapshot's file name, so the
     // snapshot is found and the destination rule is what refuses it.
-    let snap_store = SnapshotStore::new(store.clone(), "definitely-not-a-project");
+    let project = clavus_core::project::ProjectId::new(std::path::Path::new(
+        "/tmp/definitely-not-a-project.txt",
+    ));
+    let snap_store = SnapshotStore::new(store.clone(), &project);
 
     let bytes = b"<LiveSet/>".to_vec();
     let hash = store.put(&bytes);
     let mut snap = make_snap(&hash, None);
     snap.project_path = "/tmp/definitely-not-a-project.txt".to_string();
-    store.write_meta(&snap).unwrap();
+    store.write_meta(&project.key, &snap).unwrap();
 
     let err = snap_store
         .restore(&hash, None)
@@ -491,13 +497,15 @@ fn test_restore_refuses_a_non_project_destination_from_a_remote_snapshot() {
 fn test_restore_to_an_explicit_target_still_works() {
     let tmp = TempDir::new().unwrap();
     let store = BlobStore::new(tmp.path().join("blobs")).unwrap();
-    let snap_store = SnapshotStore::new(store.clone(), "whatever");
+    let project =
+        clavus_core::project::ProjectId::new(std::path::Path::new("/tmp/whatever.als"));
+    let snap_store = SnapshotStore::new(store.clone(), &project);
 
     let bytes = b"<LiveSet/>".to_vec();
     let hash = store.put(&bytes);
     let mut snap = make_snap(&hash, None);
-    snap.project_path = "/tmp/whatever.txt".to_string();
-    store.write_meta(&snap).unwrap();
+    snap.project_path = "/tmp/whatever.als".to_string();
+    store.write_meta(&project.key, &snap).unwrap();
 
     let target = tmp.path().join("Restored.als");
     snap_store.restore(&hash, Some(&target)).expect("restore");
@@ -515,8 +523,8 @@ fn test_restore_to_an_explicit_target_still_works() {
 fn test_each_project_has_its_own_head() {
     let tmp = TempDir::new().unwrap();
     let store = BlobStore::new(tmp.path().join("blobs")).unwrap();
-    let alpha = SnapshotStore::new(store.clone(), "Alpha");
-    let beta = SnapshotStore::new(store.clone(), "Beta");
+    let alpha = SnapshotStore::new(store.clone(), &clavus_core::project::ProjectId::new(std::path::Path::new("Alpha")));
+    let beta = SnapshotStore::new(store.clone(), &clavus_core::project::ProjectId::new(std::path::Path::new("Beta")));
 
     let a = tmp.path().join("Alpha.als");
     let b = tmp.path().join("Beta.als");
@@ -554,8 +562,8 @@ fn test_each_project_has_its_own_head() {
 fn test_a_second_project_does_not_become_a_child_of_the_first() {
     let tmp = TempDir::new().unwrap();
     let store = BlobStore::new(tmp.path().join("blobs")).unwrap();
-    let alpha = SnapshotStore::new(store.clone(), "Alpha");
-    let beta = SnapshotStore::new(store.clone(), "Beta");
+    let alpha = SnapshotStore::new(store.clone(), &clavus_core::project::ProjectId::new(std::path::Path::new("Alpha")));
+    let beta = SnapshotStore::new(store.clone(), &clavus_core::project::ProjectId::new(std::path::Path::new("Beta")));
 
     let a = tmp.path().join("Alpha.als");
     let b = tmp.path().join("Beta.als");
@@ -592,8 +600,8 @@ fn test_a_second_project_does_not_become_a_child_of_the_first() {
 fn test_the_legacy_shared_head_is_only_used_by_its_own_project() {
     let tmp = TempDir::new().unwrap();
     let store = BlobStore::new(tmp.path().join("blobs")).unwrap();
-    let alpha = SnapshotStore::new(store.clone(), "Alpha");
-    let beta = SnapshotStore::new(store.clone(), "Beta");
+    let alpha = SnapshotStore::new(store.clone(), &clavus_core::project::ProjectId::new(std::path::Path::new("Alpha")));
+    let beta = SnapshotStore::new(store.clone(), &clavus_core::project::ProjectId::new(std::path::Path::new("Beta")));
 
     let a = tmp.path().join("Alpha.als");
     std::fs::write(&a, b"<LiveSet/>").unwrap();
@@ -622,8 +630,8 @@ fn test_the_legacy_shared_head_is_only_used_by_its_own_project() {
 fn a_snapshot_of_another_project_cannot_be_resolved() {
     let tmp = TempDir::new().unwrap();
     let store = BlobStore::new(tmp.path().join("blobs")).unwrap();
-    let alpha = SnapshotStore::new(store.clone(), "Alpha");
-    let beta = SnapshotStore::new(store.clone(), "Beta");
+    let alpha = SnapshotStore::new(store.clone(), &clavus_core::project::ProjectId::new(std::path::Path::new("Alpha")));
+    let beta = SnapshotStore::new(store.clone(), &clavus_core::project::ProjectId::new(std::path::Path::new("Beta")));
 
     let a = tmp.path().join("Alpha.als");
     std::fs::write(&a, b"<LiveSet id='alpha'/>").unwrap();
@@ -649,8 +657,8 @@ fn a_snapshot_of_another_project_cannot_be_resolved() {
 fn a_prefix_of_another_project_cannot_be_resolved() {
     let tmp = TempDir::new().unwrap();
     let store = BlobStore::new(tmp.path().join("blobs")).unwrap();
-    let alpha = SnapshotStore::new(store.clone(), "Alpha");
-    let beta = SnapshotStore::new(store.clone(), "Beta");
+    let alpha = SnapshotStore::new(store.clone(), &clavus_core::project::ProjectId::new(std::path::Path::new("Alpha")));
+    let beta = SnapshotStore::new(store.clone(), &clavus_core::project::ProjectId::new(std::path::Path::new("Beta")));
 
     let a = tmp.path().join("Alpha.als");
     std::fs::write(&a, b"<LiveSet id='alpha'/>").unwrap();

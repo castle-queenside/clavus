@@ -30,7 +30,13 @@ impl Scratch {
 
     fn store(&self) -> SnapshotStore {
         let blobs = BlobStore::new(self.dir.path().join("blobs")).unwrap();
-        SnapshotStore::new(blobs, "proj")
+        // The store's project identity is taken from the project file
+        // itself, so a snapshot always belongs to the project it was
+        // taken from.
+        SnapshotStore::new(
+            blobs,
+            &clavus_core::project::ProjectId::new(&self.project),
+        )
     }
 }
 
@@ -122,7 +128,7 @@ proptest! {
                 )
                 .unwrap();
             parent = Some(snap.hash.clone());
-            hashes.push(snap.hash);
+            hashes.push(snap.hash.clone());
         }
 
         for (i, hash) in hashes.iter().enumerate() {

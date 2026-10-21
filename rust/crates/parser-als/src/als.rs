@@ -233,6 +233,17 @@ impl AlsParser {
             )));
         }
 
+        // The XML reader accepts a closing tag whose `>` is missing, so a
+        // set truncated by a single byte used to parse as a complete set
+        // with every track still in it — and was then snapshotted as if
+        // it were healthy. A well-formed document always ends with `>`.
+        if !clavus_core::als_refs::is_complete_document(&xml) {
+            return Err(clavus_core::ClavusError::ParseError(format!(
+                "malformed XML in {}: the document is truncated",
+                self.path.display()
+            )));
+        }
+
         self.project.track_count = self.project.tracks.len();
 
         // Deduplicate markers: some projects carry the same arrangement

@@ -46,8 +46,12 @@ impl Client {
 
 /// Relay state, persisted to disk as JSON.
 pub struct RelayState {
-    /// All snapshots known to the relay, keyed by hash.
-    pub snapshots: HashMap<String, Snapshot>,
+    /// All snapshots known to the relay, keyed by project and then hash.
+    ///
+    /// A hash alone is not enough: two projects can hold the same bytes,
+    /// and storing one record per hash made the second project overwrite
+    /// the first one's message, timestamp and path.
+    pub snapshots: HashMap<String, HashMap<String, Snapshot>>,
     /// All cues known to the relay, keyed by project.
     pub cues: HashMap<String, Vec<Cue>>,
     /// Current HEAD hash per project (derived from project_path filename).
@@ -74,10 +78,14 @@ impl RelayState {
         let heads = Self::load_heads(&state_dir).unwrap_or_default();
         // The per-project index is rebuilt from the snapshots themselves,
         // so an older state file still works.
+        //
+        // The order is the *chain* order — oldest first — and not the
+        // order of a hash map. A random order meant that after a relay
+        // restart the same project came back in a different order every
+        // time, and a pull installed an arbitrary snapshot as the head.
         let mut by_project: HashMap<String, Vec<String>> = HashMap::new();
-        for (hash, snap) in &snapshots {
-            let project = project_name_from_path(&snap.project_path);
-            by_project.entry(project).or_default().push(hash.clone());
+        for (project, by_hash) in &snapshots {
+            by_project.insert(project.clone(), chain_order(by_hash));
         }
         info!(
             "Relay state loaded: {} snapshots, {} cue lists, {} project heads",
@@ -117,7 +125,7 @@ impl RelayState {
             .map_err(|e| std::io::Error::other(format!("heads parse: {}", e)))
     }
 
-    fn load_snaps(dir: &std::path::Path) -> std::io::Result<HashMap<String, Snapshot>> {
+    fn load_snaps(dir: &std::path::Path) -> std::io::Result<HashMap<String, HashMap<String, Snapshot>>> {
         let path = Self::snaps_path(dir);
         if !path.exists() {
             return Ok(HashMap::new());
@@ -125,7 +133,14 @@ impl RelayState {
         let data = std::fs::read_to_string(&path)?;
         let snaps: Vec<Snapshot> = serde_json::from_str(&data)
             .map_err(|e| std::io::Error::other(format!("snapshots parse: {}", e)))?;
-        Ok(snaps.into_iter().map(|s| (s.hash.clone(), s)).collect())
+        let mut out: HashMap<String, HashMap<String, Snapshot>> = HashMap::new();
+        for snap in snaps {
+            let project = project_name_from_path(&snap.project_path);
+            out.entry(project)
+                .or_default()
+                .insert(snap.hash.clone(), snap);
+        }
+        Ok(out)
     }
 
     fn load_cues(dir: &std::path::Path) -> std::io::Result<HashMap<String, Vec<Cue>>> {
@@ -140,10 +155,12 @@ impl RelayState {
 
     /// Persist snapshots, cues, and heads to disk (atomic: temp file + rename).
     fn persist(&self) -> std::io::Result<()> {
-        Self::atomic_json_write(
-            &Self::snaps_path(&self.state_dir),
-            &self.snapshots.values().cloned().collect::<Vec<_>>(),
-        )?;
+        let all_snaps: Vec<Snapshot> = self
+            .snapshots
+            .values()
+            .flat_map(|by_hash| by_hash.values().cloned())
+            .collect();
+        Self::atomic_json_write(&Self::snaps_path(&self.state_dir), &all_snaps)?;
         Self::atomic_json_write(
             &Self::cues_path(&self.state_dir),
             &self.cues,
@@ -176,6 +193,19 @@ impl RelayState {
         self.clients.retain(|c| &c.addr != addr);
     }
 
+    /// Every snapshot the relay holds, across all projects.
+    pub fn all_snapshots(&self) -> Vec<Snapshot> {
+        self.snapshots
+            .values()
+            .flat_map(|by_hash| by_hash.values().cloned())
+            .collect()
+    }
+
+    /// One snapshot, by project and hash.
+    pub fn snapshot(&self, project: &str, hash: &str) -> Option<&Snapshot> {
+        self.snapshots.get(project)?.get(hash)
+    }
+
     /// Find snapshots the client is missing, for one project only.
     ///
     /// `project` is the client's project name; snapshots belonging to
@@ -184,10 +214,13 @@ impl RelayState {
         let Some(hashes) = self.by_project.get(project) else {
             return Vec::new();
         };
+        let Some(by_hash) = self.snapshots.get(project) else {
+            return Vec::new();
+        };
         hashes
             .iter()
             .filter(|h| !known.contains(h))
-            .filter_map(|h| self.snapshots.get(h).cloned())
+            .filter_map(|h| by_hash.get(h).cloned())
             .collect()
     }
 
@@ -229,9 +262,17 @@ impl RelayState {
                 if incoming_parent != Some(existing_head.as_str())
                     && snap_hash.as_str() != existing_head.as_str()
                 {
-                    // Check if existing_head is an ancestor of incoming snapshot
-                    // (i.e., this is a fast-forward, not a conflict)
-                    if !self.is_ancestor(existing_head, &snap_hash) {
+                    // Not a conflict when the relay's head is already part
+                    // of the incoming snapshot's history — that is a client
+                    // pushing history the relay already has. It was also
+                    // not a conflict when the incoming snapshot is an
+                    // *ancestor* of the relay's head, which is a client
+                    // that simply has older history.
+                    let relay_head_is_ancestor =
+                        self.is_ancestor(existing_head, &snap_hash, &project_name);
+                    let incoming_is_ancestor =
+                        self.is_ancestor(&snap_hash, existing_head, &project_name);
+                    if !relay_head_is_ancestor && !incoming_is_ancestor {
                         conflicts.push((project_name.clone(), existing_head.clone(), snap_hash.clone()));
                         debug!(
                             "Conflict: {} relay_head={} incoming_parent={} hash={}",
@@ -242,8 +283,12 @@ impl RelayState {
                 }
             }
 
-            // Store the snapshot
-            self.snapshots.insert(snap_hash.clone(), snap);
+            // Store the snapshot under its own project, so one project's
+            // record can never overwrite another's.
+            self.snapshots
+                .entry(project_name.clone())
+                .or_default()
+                .insert(snap_hash.clone(), snap);
 
             // Remember which project it belongs to, so it is only ever
             // offered to a client working on that project.
@@ -290,13 +335,16 @@ impl RelayState {
     }
 
     /// Returns true if `ancestor` is an ancestor of `descendant` in the snapshot chain.
-    fn is_ancestor(&self, ancestor: &str, descendant: &str) -> bool {
+    fn is_ancestor(&self, ancestor: &str, descendant: &str, project: &str) -> bool {
         if ancestor == descendant {
             return true;
         }
+        let Some(by_hash) = self.snapshots.get(project) else {
+            return false;
+        };
         let mut current = descendant.to_string();
         for _ in 0..100 {
-            let snap = match self.snapshots.get(&current) {
+            let snap = match by_hash.get(&current) {
                 Some(s) => s,
                 None => return false,
             };
@@ -421,9 +469,15 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
                 debug!("Client {} requesting {} missing objects", addr, missing.len());
                 let (snapshots, cues) = {
                     let s = state.lock().unwrap();
+                    // Only the client's own project's snapshots are served.
                     let snapshots: Vec<Snapshot> = missing
                         .iter()
-                        .filter_map(|h| s.snapshots.get(h).cloned())
+                        .filter_map(|h| {
+                            s.snapshots
+                                .get(&client.name)
+                                .and_then(|by_hash| by_hash.get(h))
+                                .cloned()
+                        })
                         .collect();
                     let cues: Vec<Cue> = s.cues.get(&client.name).cloned().unwrap_or_default();
                     (snapshots, cues)
@@ -475,11 +529,66 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
     Ok(())
 }
 
-/// Extract a short project name from a full path.
-/// E.g. "/Users/chris/Documents/Ableton/User Library/Project.als" → "Project"
+/// Order a project's snapshots oldest first, following the parent links.
+///
+/// The chain is rebuilt from the snapshots' own parent pointers, so the
+/// order is the same after a restart as it was when the snapshots were
+/// pushed. A hash map's order is random, and a random order made a
+/// pull install an arbitrary snapshot as the head.
+fn chain_order(by_hash: &HashMap<String, Snapshot>) -> Vec<String> {
+    // The children of each snapshot.
+    let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut roots: Vec<&str> = Vec::new();
+    for (hash, snap) in by_hash {
+        match snap.parent.as_deref() {
+            Some(parent) if by_hash.contains_key(parent) => {
+                children.entry(parent).or_default().push(hash.as_str());
+            }
+            _ => roots.push(hash.as_str()),
+        }
+    }
+    for kids in children.values_mut() {
+        kids.sort();
+    }
+    roots.sort();
+
+    let mut ordered = Vec::with_capacity(by_hash.len());
+    let mut stack: Vec<&str> = roots;
+    while let Some(hash) = stack.pop() {
+        ordered.push(hash.to_string());
+        if let Some(kids) = children.get(hash) {
+            // Push in reverse so the sorted order is kept.
+            for kid in kids.iter().rev() {
+                stack.push(kid);
+            }
+        }
+    }
+
+    // A snapshot that is part of a cycle would be left out; add anything
+    // that is missing so no snapshot is ever silently dropped.
+    if ordered.len() != by_hash.len() {
+        for hash in by_hash.keys() {
+            if !ordered.iter().any(|h| h == hash) {
+                ordered.push(hash.clone());
+            }
+        }
+    }
+    ordered
+}
+
+/// Extract the sync name of a project from a full path.
+///
+/// E.g. "/Users/chris/Documents/Ableton/User Library/Project.als" → "Project.als"
+///
+/// The *file name with its extension* is the name a project is known by
+/// on the wire, because two machines holding the same project keep it at
+/// different paths but must still agree on it. The extension is part of
+/// the name so that an Ableton set and a Bitwig bundle that happen to
+/// share a stem stay apart.
 fn project_name_from_path(path: &str) -> String {
     std::path::Path::new(path)
-        .file_stem()
+        .file_name()
         .map(|s| s.to_string_lossy().to_string())
+        .filter(|s| !s.is_empty())
         .unwrap_or_else(|| path.to_string())
 }

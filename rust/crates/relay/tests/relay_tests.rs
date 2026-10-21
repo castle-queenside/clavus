@@ -31,7 +31,7 @@ fn make_snap(hash: &str, parent: Option<&str>) -> Snapshot {
 }
 
 fn make_cue(id: &str) -> Cue {
-    make_cue_for(id, "demo")
+    make_cue_for(id, "demo.als")
 }
 
 /// A cue belonging to `project`.
@@ -60,7 +60,15 @@ fn start_real_relay(state_dir: &TempDir) -> String {
     thread::spawn(move || {
         let _ = clavus_relay::run_with_listener(listener, state_dir);
     });
-    thread::sleep(Duration::from_millis(50));
+    // Wait until the relay really accepts connections. A fixed sleep
+    // was not enough when the machine was busy, and the test then failed
+    // for a reason that had nothing to do with the code.
+    for _ in 0..200 {
+        if std::net::TcpStream::connect(&addr).is_ok() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
     addr
 }
 
@@ -83,7 +91,7 @@ fn test_relay_state_persistence() {
     {
         let addr = start_real_relay(&tmp);
         let client = SyncClient::connect(&addr).unwrap();
-        client.hello("test", vec![]).unwrap();
+        client.hello("test.als", vec![]).unwrap();
         let _ = client.recv_timeout(Duration::from_secs(2));
         client.push(vec![make_snap(&hash, None)], vec![]).unwrap();
         let _ = client.recv_timeout(Duration::from_secs(2));
@@ -94,7 +102,7 @@ fn test_relay_state_persistence() {
     {
         let addr = start_real_relay(&tmp);
         let client = SyncClient::connect(&addr).unwrap();
-        client.hello("test", vec![]).unwrap();
+        client.hello("test.als", vec![]).unwrap();
         let msg = client.recv_timeout(Duration::from_secs(2));
         match msg {
             Some(SyncMsg::Push { snapshots, cues: _ }) => {
@@ -117,7 +125,7 @@ fn test_relay_cues_persisted() {
     {
         let addr = start_real_relay(&tmp);
         let client = SyncClient::connect(&addr).unwrap();
-        client.hello("demo", vec![]).unwrap();
+        client.hello("demo.als", vec![]).unwrap();
         let _ = client.recv_timeout(Duration::from_secs(2));
         client.push(vec![], vec![make_cue("cue1")]).unwrap();
         let _ = client.recv_timeout(Duration::from_secs(2));
@@ -128,7 +136,7 @@ fn test_relay_cues_persisted() {
     {
         let addr = start_real_relay(&tmp);
         let client = SyncClient::connect(&addr).unwrap();
-        client.hello("demo", vec![]).unwrap();
+        client.hello("demo.als", vec![]).unwrap();
         let msg = client.recv_timeout(Duration::from_secs(2));
         match msg {
             Some(SyncMsg::Push { snapshots: _, cues }) => {
@@ -229,7 +237,7 @@ fn test_relaystate_new_loads_persisted_state() {
     // New state should load from disk
     let state2 = RelayState::new(tmp.path().to_path_buf()).unwrap();
     assert!(
-        state2.snapshots.contains_key(&hash),
+        state2.all_snapshots().iter().any(|s| s.hash == hash),
         "state should load previously stored snapshot from disk"
     );
 }
@@ -250,9 +258,9 @@ fn test_relaystate_chain_storage() {
         vec![],
     );
     assert!(conflicts.is_empty());
-    assert!(state.snapshots.contains_key(&a));
-    assert!(state.snapshots.contains_key(&b));
-    assert!(state.snapshots.contains_key(&c));
+    assert!(state.snapshot("test.als", &a).is_some());
+    assert!(state.snapshot("test.als", &b).is_some());
+    assert!(state.snapshot("test.als", &c).is_some());
 }
 
 #[test]
