@@ -158,9 +158,14 @@ pub fn handle_key(key: &KeyEvent, app: &mut App) -> bool {
                     // The relay keys its storage by project, so the push
                     // has to say which project these belong to.
                     let project = app.selected_project_sync_name();
+                    // The project bytes travel with the snapshots, so
+                    // the collaborator can restore them on their own
+                    // machine and not only read the history.
+                    let blobs = app.selected_snapshot_bytes();
                     app.sync_state.send_cmd(SyncCmd::Push {
                         snapshots,
                         cues,
+                        blobs,
                         project,
                     });
                     app.set_info(format!("pushing {} snapshot(s), {} cue(s)...", n, c));

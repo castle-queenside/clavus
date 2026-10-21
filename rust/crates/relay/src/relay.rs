@@ -16,6 +16,8 @@ use tracing::{debug, error, info, warn};
 pub struct Client {
     addr: SocketAddr,
     name: String,
+    /// The name of the folder the project lives in.
+    folder: String,
     known_heads: Vec<String>,
     stream: Arc<Mutex<TcpStream>>,
     subscribed: Vec<String>,
@@ -27,6 +29,7 @@ impl Client {
         Self {
             addr,
             name: String::new(),
+            folder: String::new(),
             known_heads: vec![],
             stream: Arc::new(Mutex::new(stream)),
             subscribed: vec![],
@@ -67,6 +70,11 @@ pub struct RelayState {
     clients: Vec<Client>,
     /// Directory for persisted state.
     state_dir: std::path::PathBuf,
+    /// The project bytes, in the middle of being received.
+    ///
+    /// A blob arrives in chunks, so the pieces are collected here until
+    /// the last one turns up.
+    incoming: HashMap<String, clavus_sync::blob_transfer::BlobAssembler>,
 }
 
 impl RelayState {
@@ -76,6 +84,17 @@ impl RelayState {
         let snapshots = Self::load_snaps(&state_dir).unwrap_or_default();
         let cues = Self::load_cues(&state_dir).unwrap_or_default();
         let heads = Self::load_heads(&state_dir).unwrap_or_default();
+
+        // A relay that was written before projects were told apart by
+        // their folder files its heads and notes under the bare file
+        // name. They are moved to the project's own key, so an
+        // existing relay keeps its history after the upgrade.
+        //
+        // When two projects share the file name, the old record cannot
+        // be placed safely: it might belong to either. It is left
+        // where it is rather than handed to the wrong project.
+        let heads = Self::migrate_heads(heads, &snapshots);
+        let cues = Self::migrate_cues(cues, &snapshots);
         // The per-project index is rebuilt from the snapshots themselves,
         // so an older state file still works.
         //
@@ -100,7 +119,60 @@ impl RelayState {
             by_project,
             clients: Vec::new(),
             state_dir,
+            incoming: HashMap::new(),
         })
+    }
+
+
+    /// Move the heads of an older relay under the project's own key.
+    fn migrate_heads(
+        heads: HashMap<String, String>,
+        snapshots: &HashMap<String, HashMap<String, Snapshot>>,
+    ) -> HashMap<String, String> {
+        let mut out = HashMap::new();
+        for (project, hash) in heads {
+            // The snapshot with this hash knows which project it
+            // belongs to.
+            let key = snapshots
+                .iter()
+                .find(|(_, by_hash)| by_hash.contains_key(&hash))
+                .map(|(key, _)| key.clone())
+                .unwrap_or(project);
+            out.insert(key, hash);
+        }
+        out
+    }
+
+    /// Move the notes of an older relay under the project's own key.
+    fn migrate_cues(
+        cues: HashMap<String, Vec<Cue>>,
+        snapshots: &HashMap<String, HashMap<String, Snapshot>>,
+    ) -> HashMap<String, Vec<Cue>> {
+        let mut out: HashMap<String, Vec<Cue>> = HashMap::new();
+        for (project, list) in cues {
+            let matching: Vec<&String> = snapshots
+                .keys()
+                .filter(|k| wire_name_of(k) == project)
+                .collect();
+            match matching.as_slice() {
+                // One project with that name — the notes belong to it.
+                [only] => {
+                    out.entry((*only).clone()).or_default().extend(list);
+                }
+                // Several projects share the name. The notes cannot be
+                // placed safely, so they are left under the bare name
+                // and are not served to either project.
+                _ => {
+                    warn!(
+                        "The relay holds {} projects named '{}' — their notes cannot be told apart and are not served",
+                        matching.len(),
+                        project
+                    );
+                    out.entry(project).or_default().extend(list);
+                }
+            }
+        }
+        out
     }
 
     fn snaps_path(dir: &std::path::Path) -> std::path::PathBuf {
@@ -135,7 +207,7 @@ impl RelayState {
             .map_err(|e| std::io::Error::other(format!("snapshots parse: {}", e)))?;
         let mut out: HashMap<String, HashMap<String, Snapshot>> = HashMap::new();
         for snap in snaps {
-            let project = project_name_from_path(&snap.project_path);
+            let project = relay_key_from_path(&snap.project_path);
             out.entry(project)
                 .or_default()
                 .insert(snap.hash.clone(), snap);
@@ -206,9 +278,74 @@ impl RelayState {
         self.snapshots.get(project)?.get(hash)
     }
 
+    /// The projects the relay knows under a wire name.
+    ///
+    /// A wire name is a file name. Two projects can share one, and
+    /// they are kept apart by their folder.
+    pub fn lineages_of(&self, wire_name: &str) -> Vec<String> {
+        let mut keys: Vec<String> = self
+            .snapshots
+            .keys()
+            .chain(self.cues.keys())
+            .filter(|k| wire_name_of(k) == wire_name)
+            .cloned()
+            .collect();
+        keys.sort();
+        keys.dedup();
+        keys
+    }
+
+    /// The project the client means.
+    ///
+    /// The client says which file it is working on and which folder it
+    /// lives in. The relay prefers the project in that folder, then a
+    /// project the client already has history from, and then the only
+    /// project with that file name. When the relay holds several
+    /// projects with that name and none of them can be identified, it
+    /// serves none of them — handing over the wrong project's history
+    /// is worse than handing over nothing.
+    pub fn resolve_lineage(
+        &self,
+        wire_name: &str,
+        folder: &str,
+        known: &[String],
+    ) -> Option<String> {
+        let lineages = self.lineages_of(wire_name);
+        if lineages.is_empty() {
+            return None;
+        }
+
+        // The project in the client's own folder.
+        let wanted = format!("{}::{}", wire_name, folder);
+        if lineages.contains(&wanted) {
+            return Some(wanted);
+        }
+
+        // A project the client already has history from.
+        for lineage in &lineages {
+            let has_history = self
+                .snapshots
+                .get(lineage)
+                .map(|by_hash| by_hash.keys().any(|h| known.contains(h)))
+                .unwrap_or(false);
+            if has_history {
+                return Some(lineage.clone());
+            }
+        }
+
+        // The only project with that name.
+        if lineages.len() == 1 {
+            return Some(lineages[0].clone());
+        }
+
+        // Several projects share the name and none of them can be
+        // told apart. Serving nothing is the safe answer.
+        None
+    }
+
     /// Find snapshots the client is missing, for one project only.
     ///
-    /// `project` is the client's project name; snapshots belonging to
+    /// `project` is the client's project key; snapshots belonging to
     /// other projects are never offered.
     pub fn find_missing(&self, project: &str, known: &[String]) -> Vec<Snapshot> {
         let Some(hashes) = self.by_project.get(project) else {
@@ -224,10 +361,89 @@ impl RelayState {
             .collect()
     }
 
+    /// The directory the project bytes live in.
+    fn blob_dir(&self) -> std::path::PathBuf {
+        self.state_dir.join("blobs")
+    }
+
+    /// Take one chunk of a project's bytes.
+    ///
+    /// The bytes are only written once every chunk has arrived *and*
+    /// the whole blob hashes to the name it was sent under. A peer
+    /// therefore cannot make the relay file a blob under someone else's
+    /// name.
+    pub fn store_blob_chunk(
+        &mut self,
+        chunk: &clavus_sync::blob_transfer::BlobChunk,
+    ) -> Result<bool, String> {
+        if !clavus_core::blob::BlobStore::is_valid_hash(&chunk.hash) {
+            return Err(format!("'{}' is not a valid hash", chunk.hash));
+        }
+        let key = format!("{}::{}", chunk.project, chunk.hash);
+        let assembler = self.incoming.entry(key.clone()).or_default();
+        match assembler.add(chunk) {
+            Ok(Some(whole)) => {
+                clavus_sync::blob_transfer::verify_blob(&chunk.hash, &whole)?;
+                self.write_blob(&chunk.hash, &whole)?;
+                self.incoming.remove(&key);
+                Ok(true)
+            }
+            Ok(None) => Ok(false),
+            Err(e) => {
+                self.incoming.remove(&key);
+                Err(e)
+            }
+        }
+    }
+
+    /// Write a blob to the relay's store.
+    fn write_blob(&self, hash: &str, data: &[u8]) -> Result<(), String> {
+        let dir = self.blob_dir();
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = dir.join(hash);
+        // The hash is checked before it is used as a file name, so it
+        // cannot escape the blob directory.
+        let tmp = dir.join(format!("{}.tmp", hash));
+        std::fs::write(&tmp, data).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Read a blob from the relay's store.
+    pub fn read_blob(&self, hash: &str) -> Option<Vec<u8>> {
+        if !clavus_core::blob::BlobStore::is_valid_hash(hash) {
+            return None;
+        }
+        std::fs::read(self.blob_dir().join(hash)).ok()
+    }
+
+    /// Whether the relay has the bytes of a snapshot.
+    pub fn has_blob(&self, hash: &str) -> bool {
+        self.blob_dir().join(hash).exists()
+    }
+
     /// Store incoming snapshots and cues. Detects divergent HEADs.
     /// Returns a list of conflicts: (project, relay_head, new_head).
     pub fn store(&mut self, snapshots: Vec<Snapshot>, cues: Vec<Cue>) -> Vec<(String, String, String)> {
+        self.store_for_client(snapshots, cues, None)
+    }
+
+    /// Store incoming snapshots and cues, filing the cues under the
+    /// client's project.
+    ///
+    /// `client` is the project the client introduced itself with: the
+    /// wire name and the folder it lives in. The notes of a project
+    /// have to sit beside its snapshots, or a client would pull one
+    /// project's notes and another's history.
+    pub fn store_for_client(
+        &mut self,
+        snapshots: Vec<Snapshot>,
+        cues: Vec<Cue>,
+        client: Option<(String, String)>,
+    ) -> Vec<(String, String, String)> {
         let mut conflicts = Vec::new();
+        // The keys of the projects this push carried snapshots for.
+        let mut pushed_keys: Vec<String> = Vec::new();
 
         for snap in snapshots {
             // A snapshot hash becomes a file name on every client that
@@ -254,7 +470,7 @@ impl RelayState {
             // Extract fields before moving the snapshot
             let snap_hash = snap.hash.clone();
             let snap_parent = snap.parent.clone();
-            let project_name = project_name_from_path(&snap.project_path);
+            let project_name = relay_key_from_path(&snap.project_path);
 
             // Detect HEAD divergence per project
             if let Some(existing_head) = self.heads.get(&project_name) {
@@ -279,12 +495,21 @@ impl RelayState {
                             project_name, existing_head,
                             incoming_parent.unwrap_or("(none)"), snap_hash
                         );
+                        // A push that is refused must not be stored, and
+                        // it must not move the project's head. The client
+                        // is told to pull and merge first, and it does
+                        // that — a stored snapshot would have been a
+                        // silent overwrite of the relay's history.
+                        continue;
                     }
                 }
             }
 
             // Store the snapshot under its own project, so one project's
             // record can never overwrite another's.
+            if !pushed_keys.contains(&project_name) {
+                pushed_keys.push(project_name.clone());
+            }
             self.snapshots
                 .entry(project_name.clone())
                 .or_default()
@@ -301,6 +526,20 @@ impl RelayState {
             self.heads.insert(project_name, snap_hash);
         }
 
+        // The key the client's notes belong under.
+        //
+        // The snapshots in this push say which project it is. If the
+        // push carried no snapshots, the relay's own record of the
+        // project says so.
+        let cue_key: Option<String> = client.as_ref().and_then(|(name, folder)| {
+            pushed_keys
+                .iter()
+                .find(|k| wire_name_of(k) == name.as_str())
+                .cloned()
+                .or_else(|| self.resolve_lineage(name, folder, &[]))
+                .or_else(|| Some(name.clone()))
+        });
+
         for cue in cues {
             // A cue id becomes a file name on every client that pulls it,
             // so a malformed one is rejected here rather than served to
@@ -314,6 +553,15 @@ impl RelayState {
             let project = if cue.project.is_empty() {
                 // An older client that does not send the project name.
                 cue.track_name.clone()
+            } else if client
+                .as_ref()
+                .map(|(name, _)| cue.project == *name)
+                .unwrap_or(false)
+            {
+                // The cue belongs to the project the client is working
+                // on. It is filed under that project's key, beside its
+                // snapshots.
+                cue_key.clone().unwrap_or_else(|| cue.project.clone())
             } else {
                 cue.project.clone()
             };
@@ -323,6 +571,24 @@ impl RelayState {
             match entry.iter_mut().find(|c| c.id == cue.id) {
                 Some(existing) => *existing = cue,
                 None => entry.push(cue),
+            }
+        }
+
+        // Notes that were filed under the bare wire name — by a push
+        // that carried no snapshots — belong to the project the
+        // snapshots name. They move there, so the notes of a project
+        // are never split in two.
+        if let (Some(key), Some((name, _))) = (cue_key.clone(), client.as_ref()) {
+            if key != *name {
+                if let Some(moved) = self.cues.remove(name) {
+                    let entry = self.cues.entry(key.clone()).or_default();
+                    for cue in moved {
+                        match entry.iter_mut().find(|c| c.id == cue.id) {
+                            Some(existing) => *existing = cue,
+                            None => entry.push(cue),
+                        }
+                    }
+                }
             }
         }
 
@@ -448,45 +714,154 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
         };
 
         match msg {
-            SyncMsg::Hello { client_name, known_heads } => {
+            SyncMsg::Hello {
+                client_name,
+                known_heads,
+                folder,
+            } => {
                 info!("Client {} (name={}) hello, {} known heads", addr, client_name, known_heads.len());
                 client.name = client_name.clone();
                 client.known_heads = known_heads.clone();
+                client.folder = folder.clone();
 
                 let resp = {
                     let s = state.lock().unwrap();
-                    let snaps = s.find_missing(&client_name, &known_heads);
-                    // Only the client's own project's cues — sending every
-                    // project's notes would mix them up.
-                    let cues: Vec<Cue> = s.cues.get(&client_name).cloned().unwrap_or_default();
+                    // Which project does the client mean? Two projects
+                    // can share a file name, and they must not be mixed
+                    // up.
+                    let lineage = s.resolve_lineage(&client_name, &folder, &known_heads);
+                    let (snaps, cues) = match &lineage {
+                        Some(key) => (
+                            s.find_missing(key, &known_heads),
+                            s.cues.get(key).cloned().unwrap_or_default(),
+                        ),
+                        None => {
+                            // The relay holds several projects with this
+                            // name and cannot tell which one the client
+                            // means. It serves none of them: handing over
+                            // the wrong project's history is worse than
+                            // handing over nothing.
+                            let lineages = s.lineages_of(&client_name);
+                            if lineages.len() > 1 {
+                                warn!(
+                                    "Client {} asked for '{}' but the relay holds {} projects with that name — serving none of them",
+                                    addr, client_name, lineages.len()
+                                );
+                            }
+                            (Vec::new(), Vec::new())
+                        }
+                    };
                     SyncMsg::Push { snapshots: snaps, cues }
                 };
 
                 state.lock().unwrap().upsert_client(client.clone());
                 let _ = client.send(&resp);
             }
+            SyncMsg::BlobPush { chunk } => {
+                debug!(
+                    "Client {} pushing blob chunk {}/{} for {}",
+                    addr,
+                    chunk.index + 1,
+                    chunk.total,
+                    chunk.hash
+                );
+                match state.lock().unwrap().store_blob_chunk(&chunk) {
+                    Ok(true) => {
+                        let _ = client.send(&SyncMsg::BlobStored {
+                            hash: chunk.hash.clone(),
+                        });
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        warn!("Rejected blob chunk from {}: {}", addr, e);
+                    }
+                }
+            }
+            SyncMsg::BlobEnd { project, hash } => {
+                // The chunks are written as they complete, so the end of
+                // a blob is only a confirmation that nothing is missing.
+                let has = state.lock().unwrap().has_blob(&hash);
+                if has {
+                    let _ = client.send(&SyncMsg::BlobStored { hash });
+                } else {
+                    warn!(
+                        "Client {} said blob {} for {} was finished, but it never arrived",
+                        addr, hash, project
+                    );
+                }
+            }
+            SyncMsg::BlobRequest { project, hash } => {
+                let data = state.lock().unwrap().read_blob(&hash);
+                match data {
+                    Some(bytes) => {
+                        let chunks =
+                            clavus_sync::blob_transfer::chunk_blob(&project, &hash, &bytes);
+                        for chunk in chunks {
+                            let _ = client.send(&SyncMsg::BlobChunk { chunk });
+                        }
+                        let _ = client.send(&SyncMsg::BlobDone { project, hash });
+                    }
+                    None => {
+                        let _ = client.send(&SyncMsg::BlobMissing { project, hash });
+                    }
+                }
+            }
+            SyncMsg::BlobChunk { chunk } => {
+                // A chunk is how the relay *sends* bytes. A client that
+                // sends one back is not following the protocol.
+                warn!(
+                    "Client {} sent a blob chunk where none belongs ({} for {})",
+                    addr, chunk.hash, chunk.project
+                );
+            }
+            SyncMsg::BlobStored { hash } => {
+                debug!("Client {} stored blob {}", addr, hash);
+            }
+            SyncMsg::BlobDone { project, hash } => {
+                debug!("Client {} finished blob {} for {}", addr, hash, project);
+            }
+            SyncMsg::BlobMissing { project, hash } => {
+                warn!("Relay has no bytes for {} ({})", project, hash);
+            }
             SyncMsg::Pull { missing } => {
                 debug!("Client {} requesting {} missing objects", addr, missing.len());
                 let (snapshots, cues) = {
                     let s = state.lock().unwrap();
-                    // Only the client's own project's snapshots are served.
-                    let snapshots: Vec<Snapshot> = missing
-                        .iter()
-                        .filter_map(|h| {
-                            s.snapshots
-                                .get(&client.name)
-                                .and_then(|by_hash| by_hash.get(h))
-                                .cloned()
-                        })
-                        .collect();
-                    let cues: Vec<Cue> = s.cues.get(&client.name).cloned().unwrap_or_default();
-                    (snapshots, cues)
+                    // Which project does the client mean? The client's
+                    // name is the wire name; the folder tells two
+                    // projects that share a file name apart.
+                    let lineage = s
+                        .resolve_lineage(&client.name, &client.folder, &client.known_heads);
+                    match lineage {
+                        Some(key) => {
+                            // Only the client's own project's snapshots
+                            // are served.
+                            let snapshots: Vec<Snapshot> = missing
+                                .iter()
+                                .filter_map(|h| {
+                                    s.snapshots
+                                        .get(&key)
+                                        .and_then(|by_hash| by_hash.get(h))
+                                        .cloned()
+                                })
+                                .collect();
+                            let cues: Vec<Cue> = s.cues.get(&key).cloned().unwrap_or_default();
+                            (snapshots, cues)
+                        }
+                        // The relay cannot tell which project the client
+                        // means, so it serves none of them.
+                        None => (Vec::new(), Vec::new()),
+                    }
                 };
                 let _ = client.send(&SyncMsg::PullResp { snapshots, cues });
             }
             SyncMsg::Push { snapshots, cues } => {
                 debug!("Client {} pushing {} snapshots, {} cues", addr, snapshots.len(), cues.len());
-                let conflicts = state.lock().unwrap().store(snapshots, cues);
+                // The cues go beside the snapshots of the project the
+                // client introduced itself with.
+                let identity = (client.name.clone(), client.folder.clone());
+                let conflicts =
+                    state.lock().unwrap().store_for_client(snapshots, cues, Some(identity));
                 // Send conflict notifications first (client can handle them before Synced)
                 for (project, relay_head, push_head) in &conflicts {
                     warn!(
@@ -591,4 +966,28 @@ fn project_name_from_path(path: &str) -> String {
         .map(|s| s.to_string_lossy().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| path.to_string())
+}
+
+/// The relay's key for a project: its file name and the folder it lives
+/// in.
+///
+/// The file name alone is not enough. Two projects that share a file
+/// name — `Album1/Track.als` and `Album2/Track.als` — are two
+/// different sets, and a relay that filed them together handed one
+/// project's history and notes to the other.
+fn relay_key_from_path(path: &str) -> String {
+    let p = std::path::Path::new(path);
+    let file_name = project_name_from_path(path);
+    let folder = p
+        .parent()
+        .and_then(|d| d.file_name())
+        .map(|s| s.to_string_lossy().to_string())
+        .filter(|s| !s.is_empty() && s != "." && s != "..")
+        .unwrap_or_default();
+    format!("{}::{}", file_name, folder)
+}
+
+/// The wire name of a relay key: the file name on its own.
+fn wire_name_of(key: &str) -> &str {
+    key.split("::").next().unwrap_or(key)
 }

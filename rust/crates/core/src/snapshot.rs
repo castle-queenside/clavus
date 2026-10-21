@@ -485,3 +485,26 @@ impl SnapshotStore {
         &self.project.path
     }
 }
+
+/// The newest snapshot of a set.
+///
+/// The newest one is the snapshot that is nobody's parent. Picking the
+/// first or the last of a list puts the head on the wrong snapshot when
+/// the list is not in chain order — and a relay's list is only in chain
+/// order by luck.
+pub fn newest_in(snapshots: &[Snapshot]) -> Option<String> {
+    if snapshots.is_empty() {
+        return None;
+    }
+    for candidate in snapshots {
+        let is_parent_of_another = snapshots.iter().any(|other| {
+            other.hash != candidate.hash && other.parent.as_deref() == Some(candidate.hash.as_str())
+        });
+        if !is_parent_of_another {
+            return Some(candidate.hash.clone());
+        }
+    }
+    // Every snapshot is somebody's parent, which is a cycle. It cannot
+    // happen, but the list still has to yield something.
+    snapshots.last().map(|s| s.hash.clone())
+}

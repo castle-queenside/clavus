@@ -106,14 +106,19 @@ pub enum SyncCmd {
     Connect {
         addr: String,
         project: Option<String>,
+        /// The name of the folder the project lives in.
+        folder: Option<String>,
     },
     Disconnect,
     /// Tell the relay which project we are working on.
-    SetProject(String),
+    SetProject(String, String),
     /// Push the given local snapshots and cues to the relay.
     Push {
         snapshots: Vec<clavus_core::types::Snapshot>,
         cues: Vec<clavus_core::types::Cue>,
+        /// The project bytes, as (hash, bytes). Without them a
+        /// collaborator could see the snapshot but not restore it.
+        blobs: Vec<(String, Vec<u8>)>,
         /// The project these belong to — the relay keys its storage by
         /// project name, so this has to be right.
         project: Option<String>,
@@ -340,8 +345,9 @@ impl App {
         // Tell the relay which project we switched to, so it serves the
         // right history and stores our pushes under the right name.
         let name = self.selected_project_sync_name();
+        let folder = self.selected_project_folder().unwrap_or_default();
         if let (Some(name), Some(tx)) = (name, self.sync_state.cmd_tx.as_ref()) {
-            let _ = tx.send(SyncCmd::SetProject(name));
+            let _ = tx.send(SyncCmd::SetProject(name, folder));
         }
         Ok(())
     }
@@ -363,6 +369,15 @@ impl App {
     pub fn selected_project_sync_name(&self) -> Option<String> {
         self.selected_entry()
             .map(|e| e.id().sync_name().to_string())
+    }
+
+    /// The name of the folder the selected project lives in.
+    ///
+    /// It is the second half of the project's identity on the wire: two
+    /// projects can share a file name, and the folder tells them apart.
+    pub fn selected_project_folder(&self) -> Option<String> {
+        self.selected_entry()
+            .map(|e| e.id().folder().to_string())
     }
 
     pub fn set_error(&mut self, msg: String) {
@@ -449,6 +464,22 @@ impl App {
         }
     }
 
+    /// The project bytes of the selected project's snapshots.
+    ///
+    /// A snapshot without its bytes cannot be restored on the other
+    /// machine, so the bytes travel with the metadata.
+    pub fn selected_snapshot_bytes(&self) -> Vec<(String, Vec<u8>)> {
+        use clavus_core::blob::BlobStore;
+
+        let store = BlobStore::open(self.clavus_root.join("blobs"));
+        self.selected_snapshots()
+            .into_iter()
+            .filter_map(|snap| {
+                store.get(&snap.hash).map(|bytes| (snap.hash.clone(), bytes))
+            })
+            .collect()
+    }
+
     /// The snapshot heads we already have, used to ask the relay only for
     /// what we are missing.
     pub fn known_heads(&self) -> Vec<String> {
@@ -491,6 +522,7 @@ impl App {
         // The project we are working on, so the relay serves us the
         // right history.
         let initial_project = self.selected_project_sync_name();
+        let initial_folder = self.selected_project_folder();
 
         // Spawn the background sync thread.
         thread::spawn(move || {
@@ -499,6 +531,10 @@ impl App {
             // A placeholder is used until a project is chosen, so the
             // connection is not rejected before then.
             let mut project: Option<String> = initial_project.clone();
+            // The folder tells two projects that share a file name
+            // apart, so the relay never serves one project's history to
+            // the other.
+            let mut folder: Option<String> = initial_folder.clone();
 
             // Use Option to allow re-binding client on reconnect.
             let mut client: Option<SyncClient> = match SyncClient::connect(&addr_owned) {
@@ -510,7 +546,11 @@ impl App {
             };
 
             if let Some(ref c) = client {
-                if let Err(e) = c.hello(project.as_deref().unwrap_or("clavus-tui"), vec![]) {
+                if let Err(e) = c.hello_in(
+                    project.as_deref().unwrap_or("clavus-tui"),
+                    vec![],
+                    folder.as_deref().unwrap_or(""),
+                ) {
                     let _ = result_tx.send(format!("hello failed: {}", e));
                     return;
                 }
@@ -527,17 +567,23 @@ impl App {
                         let _ = result_tx.send("disconnected".to_string());
                         break;
                     }
-                    SyncCmd::SetProject(name) => {
+                    SyncCmd::SetProject(name, new_folder) => {
                         project = Some(name.clone());
+                        folder = Some(new_folder.clone());
                         // Re-introduce ourselves so the relay serves the
                         // new project's history from now on.
                         if let Some(ref c) = client {
-                            let _ = c.hello(project.as_deref().unwrap_or("clavus-tui"), vec![]);
+                            let _ = c.hello_in(
+                                project.as_deref().unwrap_or("clavus-tui"),
+                                vec![],
+                                folder.as_deref().unwrap_or(""),
+                            );
                         }
                     }
                     SyncCmd::Push {
                         snapshots,
                         cues,
+                        blobs,
                         project: push_project,
                     } => {
                         if let Some(ref c) = client {
@@ -546,6 +592,16 @@ impl App {
                             }
                             let count = snapshots.len();
                             let cue_count = cues.len();
+                            // The project bytes travel first, so the
+                            // relay has them by the time it learns
+                            // about the snapshot.
+                            let push_name = project.clone().unwrap_or_default();
+                            for (hash, bytes) in &blobs {
+                                if let Err(e) = c.push_blob(&push_name, hash, bytes) {
+                                    let _ = result_tx.send(format!("could not send the project bytes: {}", e));
+                                    break;
+                                }
+                            }
                             match c.push(snapshots, cues) {
                                 Ok(()) => {
                                     // Wait for the relay's acknowledgement.
@@ -580,12 +636,14 @@ impl App {
                         if let Some(ref c) = client {
                             // The relay replies to Hello with a Push of
                             // everything we are missing.
-                            let pull_name = clavus_core::project::ProjectId::new(&project_path)
-                                .sync_name()
-                                .to_string();
-                            if let Err(e) =
-                                c.hello(pull_name.as_str(), known_heads)
-                            {
+                            let project_id =
+                                clavus_core::project::ProjectId::new(&project_path);
+                            let pull_name = project_id.sync_name().to_string();
+                            if let Err(e) = c.hello_in(
+                                pull_name.as_str(),
+                                known_heads,
+                                project_id.folder(),
+                            ) {
                                 let _ = result_tx.send(format!("pull failed: {}", e));
                                 continue;
                             }
@@ -593,8 +651,25 @@ impl App {
                                 Some(clavus_sync::client::SyncMsg::Push { snapshots, cues }) => {
                                     // Store what arrived, so a pull actually
                                     // brings the collaborator's work in.
-                                    let project_id =
-                                        clavus_core::project::ProjectId::new(&project_path);
+                                    // The project bytes come too, so the
+                                    // snapshot can be restored here and
+                                    // not only seen.
+                                    for snap in &snapshots {
+                                        if store_has_blob(&clavus_root, &snap.hash) {
+                                            continue;
+                                        }
+                                        let _ = c.request_blob(
+                                            project_id.sync_name(),
+                                            &snap.hash,
+                                        );
+                                        if let Ok(Ok(bytes)) = c.recv_blob(
+                                            project_id.sync_name(),
+                                            &snap.hash,
+                                            std::time::Duration::from_secs(30),
+                                        ) {
+                                            store_put_blob(&clavus_root, &bytes);
+                                        }
+                                    }
                                     let (stored, imported) =
                                         store_pulled(&snapshots, &cues, &clavus_root, &project_id);
                                     let _ = result_tx.send(format!(
@@ -613,9 +688,16 @@ impl App {
                             let _ = result_tx.send("not connected".to_string());
                         }
                     }
-                    SyncCmd::Connect { addr: new_addr, project: new_project } => {
+                    SyncCmd::Connect {
+                        addr: new_addr,
+                        project: new_project,
+                        folder: new_folder,
+                    } => {
                         if let Some(p) = new_project {
                             project = Some(p);
+                        }
+                        if let Some(f) = new_folder {
+                            folder = Some(f);
                         }
                         // Close the old connection, then reconnect.
                         if let Some(c) = client.take() {
@@ -623,7 +705,11 @@ impl App {
                         }
                         client = match SyncClient::connect(&new_addr) {
                             Ok(c) => {
-                                let _ = c.hello(project.as_deref().unwrap_or("clavus-tui"), vec![]);
+                                let _ = c.hello_in(
+                                    project.as_deref().unwrap_or("clavus-tui"),
+                                    vec![],
+                                    folder.as_deref().unwrap_or(""),
+                                );
                                 let _ = result_tx.send(format!("connected to {}", new_addr));
                                 Some(c)
                             }
@@ -725,6 +811,17 @@ impl App {
     }
 }
 
+/// Whether the local store already has a blob.
+fn store_has_blob(clavus_root: &std::path::Path, hash: &str) -> bool {
+    clavus_core::blob::BlobStore::open(clavus_root.join("blobs")).has(hash)
+}
+
+/// File a blob in the local store.
+fn store_put_blob(clavus_root: &std::path::Path, bytes: &[u8]) {
+    let store = clavus_core::blob::BlobStore::open(clavus_root.join("blobs"));
+    store.put(bytes);
+}
+
 /// Store snapshots and cues that arrived from a relay.
 ///
 /// Returns `(snapshots stored, cues imported)`. Everything that arrives is
@@ -753,9 +850,11 @@ pub fn store_pulled(
                     stored += 1;
                 }
             }
-            // Advance HEAD to the newest snapshot the relay sent.
-            if let Some(newest) = snapshots.last() {
-                let _ = snap_store.set_head(&newest.hash, "pull");
+            // Advance HEAD to the newest snapshot the relay sent. The
+            // list is not necessarily in chain order, so the newest is
+            // the one that is nobody's parent.
+            if let Some(newest) = clavus_core::snapshot::newest_in(snapshots) {
+                let _ = snap_store.set_head(&newest, "pull");
             }
         }
     }

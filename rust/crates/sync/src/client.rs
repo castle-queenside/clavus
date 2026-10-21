@@ -14,7 +14,17 @@ use std::time::Duration;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SyncMsg {
-    Hello { client_name: String, known_heads: Vec<String> },
+    Hello {
+        client_name: String,
+        known_heads: Vec<String>,
+        /// The name of the folder the project lives in.
+        ///
+        /// Two projects can share a file name, and the folder tells
+        /// them apart. An empty folder means the project sits at the
+        /// top of a directory.
+        #[serde(default)]
+        folder: String,
+    },
     Push { snapshots: Vec<Snapshot>, cues: Vec<Cue> },
     Pull { missing: Vec<String> },
     PullResp { snapshots: Vec<Snapshot>, cues: Vec<Cue> },
@@ -24,6 +34,20 @@ pub enum SyncMsg {
     Conflict { project: String, relay_head: String, push_head: String },
     Subscribe { project: String },
     Event { project: String, event: SyncEvent },
+    /// A chunk of a project's bytes, on its way to the relay.
+    BlobPush { chunk: crate::blob_transfer::BlobChunk },
+    /// The last chunk of a blob has been sent.
+    BlobEnd { project: String, hash: String },
+    /// The relay has the blob and has checked its hash.
+    BlobStored { hash: String },
+    /// The client asks for a project's bytes.
+    BlobRequest { project: String, hash: String },
+    /// A chunk of a project's bytes, on its way to the client.
+    BlobChunk { chunk: crate::blob_transfer::BlobChunk },
+    /// The whole blob has been sent.
+    BlobDone { project: String, hash: String },
+    /// The relay does not have those bytes.
+    BlobMissing { project: String, hash: String },
 }
 
 /// Events broadcast to subscribers.
@@ -63,6 +87,35 @@ fn connect_with_timeout(addr: &str, timeout: Duration) -> std::io::Result<TcpStr
 
 /// Result type alias for this module.
 pub type Result<T> = std::result::Result<T, ClavusError>;
+
+/// Why a blob did not arrive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlobError {
+    /// The relay does not have those bytes.
+    Missing,
+    /// The relay did not answer in time.
+    Timeout,
+    /// The bytes do not hash to the name they were sent under.
+    HashMismatch(String),
+    /// The relay sent something else.
+    WrongBlob,
+    /// The relay stopped before the whole blob arrived.
+    Incomplete,
+}
+
+impl std::fmt::Display for BlobError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BlobError::Missing => write!(f, "the relay does not have those bytes"),
+            BlobError::Timeout => write!(f, "the relay did not send the bytes in time"),
+            BlobError::HashMismatch(e) => write!(f, "the bytes do not match their hash: {}", e),
+            BlobError::WrongBlob => write!(f, "the relay sent a different blob"),
+            BlobError::Incomplete => write!(f, "the relay stopped before the blob was complete"),
+        }
+    }
+}
+
+impl std::error::Error for BlobError {}
 
 /// A connected sync client.
 ///
@@ -137,9 +190,23 @@ impl SyncClient {
 
     /// Send a Hello message and announce the client's known snapshot heads.
     pub fn hello(&self, client_name: &str, known_heads: Vec<String>) -> Result<()> {
+        self.hello_in(client_name, known_heads, "")
+    }
+
+    /// Say hello, saying which folder the project lives in.
+    ///
+    /// The folder tells two projects that share a file name apart, so
+    /// a relay never hands one project's history to the other.
+    pub fn hello_in(
+        &self,
+        client_name: &str,
+        known_heads: Vec<String>,
+        folder: &str,
+    ) -> Result<()> {
         self.send(SyncMsg::Hello {
             client_name: client_name.to_string(),
             known_heads,
+            folder: folder.to_string(),
         })
     }
 
@@ -161,6 +228,84 @@ impl SyncClient {
     /// detects a divergent HEAD for one of the projects involved.
     pub fn push(&self, snapshots: Vec<Snapshot>, cues: Vec<Cue>) -> Result<()> {
         self.send(SyncMsg::Push { snapshots, cues })
+    }
+
+    /// Send a project's bytes to the relay.
+    ///
+    /// The bytes travel in chunks, and the relay checks that the whole
+    /// blob hashes to the name it was sent under before it stores it.
+    pub fn push_blob(&self, project: &str, hash: &str, data: &[u8]) -> Result<()> {
+        for chunk in crate::blob_transfer::chunk_blob(project, hash, data) {
+            self.send(SyncMsg::BlobPush { chunk })?;
+        }
+        self.send(SyncMsg::BlobEnd {
+            project: project.to_string(),
+            hash: hash.to_string(),
+        })
+    }
+
+    /// Ask the relay for a project's bytes.
+    pub fn request_blob(&self, project: &str, hash: &str) -> Result<()> {
+        self.send(SyncMsg::BlobRequest {
+            project: project.to_string(),
+            hash: hash.to_string(),
+        })
+    }
+
+    /// Collect a blob that the relay is sending.
+    ///
+    /// Returns the bytes once every chunk has arrived. The hash is
+    /// checked, so a relay cannot hand over bytes under the wrong name.
+    pub fn recv_blob(
+        &self,
+        _project: &str,
+        hash: &str,
+        timeout: Duration,
+    ) -> Result<std::result::Result<Vec<u8>, BlobError>> {
+        let mut assembler = crate::blob_transfer::BlobAssembler::new();
+        let deadline = std::time::Instant::now() + timeout;
+
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Ok(Err(BlobError::Timeout));
+            }
+            let Some(msg) = self.recv_timeout(remaining) else {
+                return Ok(Err(BlobError::Timeout));
+            };
+            match msg {
+                SyncMsg::BlobChunk { chunk } => {
+                    if chunk.hash != hash {
+                        return Ok(Err(BlobError::WrongBlob));
+                    }
+                    match assembler.add(&chunk) {
+                        Ok(Some(whole)) => {
+                            if let Err(e) = crate::blob_transfer::verify_blob(hash, &whole) {
+                                return Ok(Err(BlobError::HashMismatch(e)));
+                            }
+                            return Ok(Ok(whole));
+                        }
+                        Ok(None) => {}
+                        Err(e) => return Ok(Err(BlobError::HashMismatch(e))),
+                    }
+                }
+                SyncMsg::BlobDone { hash: done_hash, .. } => {
+                    // The relay sends the chunks and then says the blob
+                    // is finished. The last chunk completes the blob
+                    // before that message arrives, so the message for
+                    // the blob just fetched is still in the queue when
+                    // the next blob is fetched. It belongs to the
+                    // previous blob and says nothing about this one.
+                    if done_hash == hash {
+                        return Ok(Err(BlobError::Incomplete));
+                    }
+                }
+                SyncMsg::BlobMissing { .. } => {
+                    return Ok(Err(BlobError::Missing));
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Respond to a Pull with the requested objects.

@@ -483,9 +483,10 @@ State: ~/.clavus/relay-state
 
 The bind address can also be given positionally: `clavus relay 0.0.0.0:4477`
 
-> **Note:** sync transfers snapshot *metadata* (hash, message, track count, BPM, samples),
-> not the project file contents. A pulled snapshot can be viewed in `clavus log`, but
-> can't be restored on the receiving machine.
+> **Note:** the project file contents travel with the snapshots. They are
+> cut into chunks, sent, and checked against their SHA-256 before the relay
+> accepts them — so a pulled snapshot can be restored on the other machine,
+> byte for byte.
 
 ### 7.2 Push from Machine B
 
@@ -520,8 +521,7 @@ Connecting to 192.168.1.X:4477...
   HEAD → abc12345
   ✎ 9a8b7c6d…  Fix bass level
 ✓ Pulled 1 new snapshot(s)
-  Note: sync transfers snapshot metadata, not project file contents.
-        Restoring a pulled snapshot isn't possible on this machine.
+  1 of them came with the project bytes — they can be restored here.
 ✓ Imported 1 new cue(s)
 ```
 
@@ -529,9 +529,18 @@ Connecting to 192.168.1.X:4477...
 
 - A pull must **never** move your HEAD backwards. If you had a newer
   local snapshot and the pull replaced it, your work is gone — report it.
+- On a **first** pull, the head must land on the **newest** snapshot, not
+  the oldest. Check `clavus log` — every snapshot of the chain must be
+  there, and the newest one must be the head.
 - A pull against a relay that does not answer must **fail**, not print
   "✓ up to date".
 - The relay must not hand you another project's snapshots or cues.
+- **Every** pulled snapshot must bring its own bytes. A pull that says
+  "the relay has no bytes for this snapshot" for a snapshot the relay
+  really has is a bug — report it.
+- Two projects with the same file name in different folders are two
+  projects. A pull of `Album2/Track.als` must not bring the history or
+  the notes of `Album1/Track.als`.
 
 ### 7.4 Conflict Detection
 
@@ -542,6 +551,35 @@ Connecting to 192.168.1.X:4477...
 **Expected:** At least one client should see a **conflict warning** (not silent overwrite).
 
 **What to watch for:** Does the system detect divergent chains? Does it warn the user rather than silently overwriting?
+
+**And then:** pull on the machine that was refused, so it has the other
+side's history, and push again. The push must now succeed.
+
+**What to watch for:** a push that was *refused* must not have been
+stored by the relay anyway. After the refusal, a third machine that pulls
+the project must see the accepted snapshot and **not** the refused one. If
+the refused push turned up anyway, the relay silently overwrote the
+history — report it.
+
+### 7.5 Restore a Snapshot That Was Pulled
+
+**On the machine that pulled:**
+
+```bash
+clavus restore "/path/to/project.als" HEAD
+```
+
+**Expected:** the file is replaced by the version the collaborator pushed,
+byte for byte.
+
+**What to watch for:**
+
+- The restore must work. A pull that brought the snapshot but not the
+  bytes leaves you with a history you cannot use.
+- The restored file must be the *collaborator's* file, not your own — check
+  the tempo or the track list, or compare the bytes.
+- Take a snapshot afterwards. The chain must keep both versions, and the
+  log must show the new one on top.
 
 ---
 

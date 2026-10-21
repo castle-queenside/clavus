@@ -73,7 +73,7 @@ fn test_hello_serialization() {
     let json = r#"{"type":"hello","client_name":"test","known_heads":[]}"#;
     let msg: SyncMsg = serde_json::from_str(json).unwrap();
     match msg {
-        SyncMsg::Hello { client_name, known_heads } => {
+        SyncMsg::Hello { client_name, known_heads, .. } => {
             assert_eq!(client_name, "test");
             assert!(known_heads.is_empty());
         }
@@ -86,7 +86,7 @@ fn test_hello_with_heads_serialization() {
     let json = r#"{"type":"hello","client_name":"cli","known_heads":["h1","h2"]}"#;
     let msg: SyncMsg = serde_json::from_str(json).unwrap();
     match msg {
-        SyncMsg::Hello { client_name, known_heads } => {
+        SyncMsg::Hello { client_name, known_heads, .. } => {
             assert_eq!(client_name, "cli");
             assert_eq!(known_heads, vec!["h1", "h2"]);
         }

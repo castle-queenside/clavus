@@ -369,19 +369,28 @@ fn relay_state_lists_stored_snapshots() {
     state.store(vec![snap.clone()], vec![]);
 
     // The snapshot's project path is "/tmp/test.als", so it belongs to
-    // the project "test.als" — the name a client uses on the wire.
-    let found = state.find_missing("test.als", &[]);
+    // the project "test.als" in the folder "tmp" — the name a client
+    // uses on the wire, plus the folder that tells two projects with
+    // the same file name apart.
+    let found = state.find_missing("test.als::tmp", &[]);
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].hash, "f".repeat(64));
 
     // A client that already knows the head gets nothing.
     let known = vec!["f".repeat(64)];
-    assert!(state.find_missing("test.als", &known).is_empty());
+    assert!(state.find_missing("test.als::tmp", &known).is_empty());
 
     // A client on a different project is offered nothing.
     assert!(
         state.find_missing("some-other-project", &[]).is_empty(),
         "another project must not be offered this history"
+    );
+
+    // The client says which file it is working on, and the relay works
+    // out which project that is.
+    assert_eq!(
+        state.resolve_lineage("test.als", "tmp", &[]),
+        Some("test.als::tmp".to_string())
     );
 }
 
@@ -696,4 +705,349 @@ fn a_cue_only_push_reaches_the_relay() {
     }
     client.close();
     client2.close();
+}
+
+// ─── The relay keeps the project bytes ────────────────────────────────────
+//
+// Regression: the relay only kept the metadata, so a collaborator could
+// see that a snapshot existed but could not restore it on their own
+// machine. The bytes travel with the snapshot.
+
+#[test]
+fn the_relay_stores_and_serves_the_project_bytes() {
+    let tmp = TempDir::new().unwrap();
+    let addr = start_real_relay(&tmp);
+
+    let project = "Track.als";
+    let bytes = b"the project bytes";
+    let hash = clavus_core::blob::BlobStore::sha256(bytes);
+
+    let client = SyncClient::connect(&addr).expect("connect");
+    client.hello(project, vec![]).expect("hello");
+    let _ = client.recv_timeout(Duration::from_secs(3));
+
+    client
+        .push_blob(project, &hash, bytes)
+        .expect("push the bytes");
+    let msg = client.recv_timeout(Duration::from_secs(3)).expect("the relay confirms");
+    assert!(
+        matches!(msg, SyncMsg::BlobStored { .. }),
+        "the relay must confirm the blob: {:?}",
+        msg
+    );
+
+    // A second client asks for the bytes.
+    let client2 = SyncClient::connect(&addr).expect("connect");
+    client2.hello(project, vec![]).expect("hello");
+    let _ = client2.recv_timeout(Duration::from_secs(3));
+    client2.request_blob(project, &hash).expect("request");
+    let got = client2
+        .recv_blob(project, &hash, Duration::from_secs(5))
+        .expect("a blob");
+    assert!(got.is_ok(), "the blob must arrive: {:?}", got);
+    assert_eq!(got.unwrap(), bytes.to_vec());
+
+    client.close();
+    client2.close();
+}
+
+#[test]
+fn the_relay_refuses_bytes_that_do_not_match_their_name() {
+    let tmp = TempDir::new().unwrap();
+    let addr = start_real_relay(&tmp);
+
+    let project = "Track.als";
+    // The name says one thing, the bytes are another.
+    let hash = "a".repeat(64);
+
+    let client = SyncClient::connect(&addr).expect("connect");
+    client.hello(project, vec![]).expect("hello");
+    let _ = client.recv_timeout(Duration::from_secs(3));
+    client
+        .push_blob(project, &hash, b"not the bytes the name promises")
+        .expect("push");
+
+    // The relay must not confirm a blob it did not check.
+    let confirmed = matches!(
+        client.recv_timeout(Duration::from_secs(2)),
+        Some(SyncMsg::BlobStored { .. })
+    );
+    assert!(!confirmed, "the relay must not store bytes under a false name");
+
+    // And it must not serve them.
+    let client2 = SyncClient::connect(&addr).expect("connect");
+    client2.hello(project, vec![]).expect("hello");
+    let _ = client2.recv_timeout(Duration::from_secs(3));
+    client2.request_blob(project, &hash).expect("request");
+    match client2.recv_blob(project, &hash, Duration::from_secs(3)).expect("a reply") {
+        Err(clavus_sync::client::BlobError::Missing) => {}
+        other => panic!("the relay must not serve bytes it refused: {:?}", other),
+    }
+
+    client.close();
+    client2.close();
+}
+
+#[test]
+fn the_relay_refuses_a_blob_name_that_is_not_a_hash() {
+    let tmp = TempDir::new().unwrap();
+    let addr = start_real_relay(&tmp);
+
+    let client = SyncClient::connect(&addr).expect("connect");
+    client.hello("Track.als", vec![]).expect("hello");
+    let _ = client.recv_timeout(Duration::from_secs(3));
+    client
+        .push_blob("Track.als", "../../etc/passwd", b"hello")
+        .expect("push");
+
+    // Nothing may be written outside the blob directory.
+    assert!(
+        !tmp.path().join("etc").exists(),
+        "a blob name must never become a path"
+    );
+    client.close();
+}
+
+// ─── Two projects with the same file name stay apart ─────────────────────
+//
+// Regression: the relay filed a project under its file name alone, so
+// `Album1/Track.als` and `Album2/Track.als` shared one bucket. A pull
+// for one of them handed over the other's history and notes.
+
+#[test]
+fn the_relay_keeps_same_named_projects_apart() {
+    let tmp = TempDir::new().unwrap();
+    let addr = start_real_relay(&tmp);
+
+    // Two projects that share a file name, in different folders.
+    let one = make_snap_for("a".repeat(64).as_str(), None, "Album1/Track.als");
+    let two = make_snap_for("b".repeat(64).as_str(), None, "Album2/Track.als");
+
+    // The first client works on the first project.
+    let client = SyncClient::connect(&addr).expect("connect");
+    client
+        .hello_in("Track.als", vec![], "Album1")
+        .expect("hello");
+    let _ = client.recv_timeout(Duration::from_secs(3));
+    client
+        .send(SyncMsg::Push {
+            snapshots: vec![one.clone()],
+            cues: vec![make_cue_for("cue-one", "Track.als")],
+        })
+        .expect("push");
+
+    // The second client works on the second project.
+    let client2 = SyncClient::connect(&addr).expect("connect");
+    client2
+        .hello_in("Track.als", vec![], "Album2")
+        .expect("hello");
+    let _ = client2.recv_timeout(Duration::from_secs(3));
+    client2
+        .send(SyncMsg::Push {
+            snapshots: vec![two.clone()],
+            cues: vec![make_cue_for("cue-two", "Track.als")],
+        })
+        .expect("push");
+
+    // A client in the first folder must only be offered the first
+    // project.
+    let client3 = SyncClient::connect(&addr).expect("connect");
+    client3
+        .hello_in("Track.als", vec![], "Album1")
+        .expect("hello");
+    let reply = client3
+        .recv_timeout(Duration::from_secs(3))
+        .expect("the relay must answer");
+    match reply {
+        SyncMsg::Push { snapshots, cues } => {
+            assert_eq!(snapshots.len(), 1, "only the first project");
+            assert_eq!(snapshots[0].hash, "a".repeat(64));
+            assert_eq!(cues.len(), 1);
+            assert_eq!(cues[0].id, "cue-one", "the first project's note");
+        }
+        other => panic!("unexpected reply: {:?}", other),
+    }
+
+    // And a client in the second folder only the second project.
+    let client4 = SyncClient::connect(&addr).expect("connect");
+    client4
+        .hello_in("Track.als", vec![], "Album2")
+        .expect("hello");
+    let reply = client4
+        .recv_timeout(Duration::from_secs(3))
+        .expect("the relay must answer");
+    match reply {
+        SyncMsg::Push { snapshots, cues } => {
+            assert_eq!(snapshots.len(), 1, "only the second project");
+            assert_eq!(snapshots[0].hash, "b".repeat(64));
+            assert_eq!(cues.len(), 1);
+            assert_eq!(cues[0].id, "cue-two", "the second project's note");
+        }
+        other => panic!("unexpected reply: {:?}", other),
+    }
+
+    client.close();
+    client2.close();
+    client3.close();
+    client4.close();
+}
+
+#[test]
+fn an_ambiguous_name_is_served_to_nobody() {
+    let tmp = TempDir::new().unwrap();
+    let addr = start_real_relay(&tmp);
+
+    // Two projects share a file name.
+    let client = SyncClient::connect(&addr).expect("connect");
+    client
+        .hello_in("Track.als", vec![], "Album1")
+        .expect("hello");
+    let _ = client.recv_timeout(Duration::from_secs(3));
+    client
+        .send(SyncMsg::Push {
+            snapshots: vec![make_snap_for("a".repeat(64).as_str(), None, "Album1/Track.als")],
+            cues: vec![],
+        })
+        .expect("push");
+
+    let client2 = SyncClient::connect(&addr).expect("connect");
+    client2
+        .hello_in("Track.als", vec![], "Album2")
+        .expect("hello");
+    let _ = client2.recv_timeout(Duration::from_secs(3));
+    client2
+        .send(SyncMsg::Push {
+            snapshots: vec![make_snap_for("b".repeat(64).as_str(), None, "Album2/Track.als")],
+            cues: vec![],
+        })
+        .expect("push");
+
+    // A client that names the file but sits in neither folder cannot be
+    // told apart from the two. It gets nothing rather than the wrong
+    // project's history.
+    let client3 = SyncClient::connect(&addr).expect("connect");
+    client3.hello_in("Track.als", vec![], "").expect("hello");
+    let reply = client3
+        .recv_timeout(Duration::from_secs(3))
+        .expect("the relay must answer");
+    match reply {
+        SyncMsg::Push { snapshots, cues } => {
+            assert!(snapshots.is_empty(), "no project may be guessed at");
+            assert!(cues.is_empty(), "no notes may be guessed at");
+        }
+        other => panic!("unexpected reply: {:?}", other),
+    }
+
+    client.close();
+    client2.close();
+    client3.close();
+}
+
+#[test]
+fn a_refused_push_is_not_stored_by_the_relay() {
+    let tmp = TempDir::new().unwrap();
+    let addr = start_real_relay(&tmp);
+
+    // The first chain is accepted.
+    let client = SyncClient::connect(&addr).expect("connect");
+    client.hello_in("Split.als", vec![], "Album").expect("hello");
+    let _ = client.recv_timeout(Duration::from_secs(3));
+    client
+        .send(SyncMsg::Push {
+            snapshots: vec![make_snap_for("a".repeat(64).as_str(), None, "Album/Split.als")],
+            cues: vec![],
+        })
+        .expect("push");
+    let _ = client.recv_timeout(Duration::from_secs(3));
+
+    // A different chain with the same parent is refused.
+    let client2 = SyncClient::connect(&addr).expect("connect");
+    client2.hello_in("Split.als", vec![], "Album").expect("hello");
+    let _ = client2.recv_timeout(Duration::from_secs(3));
+    client2
+        .send(SyncMsg::Push {
+            snapshots: vec![make_snap_for("b".repeat(64).as_str(), None, "Album/Split.als")],
+            cues: vec![],
+        })
+        .expect("push");
+
+    // The relay must say so.
+    let mut saw_conflict = false;
+    for _ in 0..4 {
+        match client2.recv_timeout(Duration::from_secs(2)) {
+            Some(SyncMsg::Conflict { .. }) => {
+                saw_conflict = true;
+                break;
+            }
+            Some(_) => continue,
+            None => break,
+        }
+    }
+    assert!(saw_conflict, "the relay must report the conflict");
+
+    // And it must not have kept the refused snapshot.
+    let snaps: Vec<serde_json::Value> = {
+        let data = std::fs::read_to_string(tmp.path().join("snapshots.json")).expect("snapshots");
+        serde_json::from_str(&data).expect("readable")
+    };
+    let hashes: Vec<String> = snaps
+        .iter()
+        .filter_map(|s| s.get("hash").and_then(|m| m.as_str()).map(String::from))
+        .collect();
+    assert!(
+        !hashes.contains(&"b".repeat(64)),
+        "the refused snapshot must not be stored: {:?}",
+        hashes
+    );
+    assert!(
+        hashes.contains(&"a".repeat(64)),
+        "the accepted snapshot must be stored: {:?}",
+        hashes
+    );
+
+    client.close();
+    client2.close();
+}
+
+#[test]
+fn an_older_relay_keeps_its_history_after_the_upgrade() {
+    let tmp = TempDir::new().unwrap();
+
+    // A relay state file written before projects were told apart by
+    // their folder: the head and the notes are filed under the bare
+    // file name.
+    let snap = make_snap_for("a".repeat(64).as_str(), None, "Album1/Track.als");
+    std::fs::write(
+        tmp.path().join("snapshots.json"),
+        serde_json::to_string(&vec![snap]).expect("write snapshots"),
+    )
+    .expect("write snapshots");
+    std::fs::write(
+        tmp.path().join("heads.json"),
+        serde_json::to_string(&serde_json::json!({ "Track.als": "a".repeat(64) }))
+            .expect("write heads"),
+    )
+    .expect("write heads");
+    let mut cue = make_cue_for("old-cue", "Track.als");
+    cue.id = "old-cue".to_string();
+    std::fs::write(
+        tmp.path().join("cues.json"),
+        serde_json::to_string(&serde_json::json!({ "Track.als": vec![cue] }))
+            .expect("write cues"),
+    )
+    .expect("write cues");
+
+    // The relay must still serve the history and the notes.
+    let state = clavus_relay::relay::RelayState::new(tmp.path().to_path_buf()).expect("state");
+    let lineage = state.resolve_lineage("Track.als", "Album1", &[]);
+    assert_eq!(
+        lineage,
+        Some("Track.als::Album1".to_string()),
+        "the history must still be found"
+    );
+    let missing = state.find_missing("Track.als::Album1", &[]);
+    assert_eq!(missing.len(), 1, "the snapshot must still be there");
+    let cues = state.cues.get("Track.als::Album1").expect("the notes");
+    assert_eq!(cues.len(), 1, "the notes must still be there");
+    assert_eq!(cues[0].id, "old-cue");
 }

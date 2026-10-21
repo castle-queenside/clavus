@@ -74,12 +74,14 @@ already points at its own internal sample needs no repair.
 
 ### Project identity
 `clavus_core::project::ProjectId` is the identity of a project, and it
-carries four names:
+carries five names:
 - `key` — the storage key: the project's folder and file name, made safe
   for use as a directory name (`Album1__Track.als`). It names the
   project's HEAD, its snapshot records and its cues.
 - `name` — the display name: the file's stem (`Track`).
 - `file_name` — the file name with its extension (`Track.als`).
+- `folder()` — the name of the folder the project lives in (`Album1`).
+  It is empty when the project sits at the top of a directory.
 - `sync_name()` — the name on the wire: the file name with its extension,
   because two machines holding the same project have it at different
   paths and must still agree, while an `.als` and a `.bwproject` with the
@@ -89,6 +91,14 @@ The identity is path-aware on purpose. A shared file name is not a shared
 project: `Album1/Track.als` and `Album2/Track.als` are two different sets
 with two different histories, and a snapshot of one must never be written
 over the other.
+
+On the wire the identity is the file name *and* the folder, and the relay
+files a project under `<file name>::<folder>`. A client says which folder
+it is in when it says hello. When the relay cannot tell which project a
+client means — several projects with that file name, and none of them
+identified by the client's history — it serves none of them rather than
+guessing. A relay written before this change keeps its history: the old
+heads and notes are moved to the project's new key when it starts.
 
 ### Untrusted remote data
 Snapshots, cues, hashes and ref names all arrive from remote peers.
@@ -149,23 +159,26 @@ git add -A && git commit && git push
 - TUI: all screens, keyboard nav, Omarchy theme, editable relay address
 - Cliamp spectrum analyzer (sync screen)
 - Relay sync server + client, isolated per project
-- Project identity: path-aware, so two same-named projects never mix
-- 391 tests passing, clippy clean, CI green
+- Project identity: path-aware locally, and file name + folder on the wire,
+  so two same-named projects never mix
+- Blob transfer: the project bytes travel with the snapshots, hash-verified,
+  so a pulled snapshot can be restored on the other machine
+- 409 tests passing, clippy clean, CI green
 
 ### Blocked ⛔
 | Item | Blocker |
 |------|---------|
 | Bitwig schema | The committed fixtures are realistic but synthetic — a real export from Bitwig Studio is still needed to confirm the schema |
 | Windows binary | Cross-compile target TBD — need studio machine distro |
-| Blob transfer | Sync carries metadata only, so a pulled snapshot cannot be restored on another machine yet |
 
 ## Pending Work
 
 ### High Priority
 1. **Real Bitwig export** — user action needed, to confirm the schema
 2. **Linux musl binaries** — build and test on the studio machine
-3. **Blob transfer** — decide whether v0.1.0 ships with metadata-only sync
-4. **PR #13 review** — ready for review
+3. **PR #13 review** — ready for review
+4. **Two real machines** — exercise a relay push and pull with a
+   collaborator on another machine
 
 ### Nice to Have
 5. HTML timeline visualization (like ableton-cookbook's historian)

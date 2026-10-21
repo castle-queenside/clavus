@@ -9,22 +9,24 @@
 |------|-----------|-------|--------|
 | Parser ALS | `crates/parser-als/tests/als_parser.rs` | 48 | 🟢 |
 | Parser Bitwig | `crates/parser-bw/tests/bw_parser.rs` | 21 | 🟢 |
-| Sample audit + collect | `crates/core/tests/collect_tests.rs` | 19 | 🟢 |
-| BlobStore / snapshot core | `crates/core/tests/core_tests.rs` | 43 | 🟢 |
+| Sample audit + collect | `crates/core/tests/collect_tests.rs` | 22 | 🟢 |
+| BlobStore / snapshot core | `crates/core/tests/core_tests.rs` | 42 | 🟢 |
 | Cue store | `crates/core/tests/cue_tests.rs` | 26 | 🟢 |
 | Property-based (core) | `crates/core/tests/property_tests.rs` | 11 | 🟢 |
-| Beta regressions (core) | `crates/core/tests/beta_regressions.rs` | 24 | 🟢 |
+| Beta regressions (core) | `crates/core/tests/beta_regressions.rs` | 12 | 🟢 |
 | Relay sync | `crates/relay/tests/relay_tests.rs` | 10 | 🟢 |
-| Relay (real server) | `crates/relay/tests/real_relay.rs` | 17 | 🟢 |
+| Relay (real server) | `crates/relay/tests/real_relay.rs` | 24 | 🟢 |
 | Sync client (protocol) | `crates/sync/tests/sync_client.rs` | 8 | 🟢 |
-| Sync client (hostile server) | `crates/sync/tests/hostile_server.rs` | 15 | 🟢 |
-| TUI | `crates/tui/tests/tui_tests.rs` | 43 | 🟢 |
+| Sync client (hostile server) | `crates/sync/tests/hostile_server.rs` | 19 | 🟢 |
+| TUI | `crates/tui/tests/tui_tests.rs` | 45 | 🟢 |
 | TUI (beta regressions) | `crates/tui/tests/beta_tui_tests.rs` | 10 | 🟢 |
-| CLI commands | `crates/cli/tests/cli_tests.rs` | 45 | 🟢 |
-| CLI (beta regressions) | `crates/cli/tests/beta_cli_tests.rs` | 16 | 🟢 |
+| TUI (sync round trip) | `crates/tui/tests/sync_blob_tests.rs` | 1 | 🟢 |
+| CLI commands | `crates/cli/tests/cli_tests.rs` | 54 | 🟢 |
+| CLI (beta regressions) | `crates/cli/tests/beta_cli_tests.rs` | 17 | 🟢 |
+| CLI (second beta wave) | `crates/cli/tests/wave2_tests.rs` | 4 | 🟢 |
 | Core unit tests | `crates/core/src/**` | 35 | 🟢 |
 
-**391 tests passing, 0 failed, 0 ignored.**
+**409 tests passing, 0 failed, 0 ignored.**
 
 Legend: 🟢 good  🟡 partial  🟠 manual only  🔴 missing
 
@@ -70,10 +72,18 @@ and matches the schema the parser expects, but it has not been validated
 against a project saved by Bitwig Studio itself. The parser should be
 re-checked against a real file when one is available.
 
-### 2.4 Sync blob transfer 🟠
+### 2.4 Sync blob transfer ✅
 
-Sync currently transfers snapshot *metadata* only. A pulled snapshot cannot
-be restored on another machine because the project bytes are not transferred.
+The project bytes travel with the snapshots. They are cut into 3 MiB
+chunks, base64 encoded inside the framed JSON, and reassembled by the
+receiver. The whole blob must hash to the name it was sent under, or it
+is refused. A pulled snapshot can therefore be restored on the other
+machine, byte for byte.
+
+- `sync/src/blob_transfer.rs` — the chunking and the hashing
+- `relay/tests/real_relay.rs` — the relay stores and serves the bytes
+- `cli/tests/wave2_tests.rs` — a machine pulls and restores
+- `tui/tests/sync_blob_tests.rs` — the TUI pulls and restores
 
 ---
 
@@ -199,6 +209,65 @@ a line of code changed, and every fix has a regression test.
 | B18 | The snapshot log printed UTC times with no label | The times are local, and the offset is named | `core/src/time.rs` |
 | B19 | The TUI's idle phrase never changed | The phrases rotate | `tui/tests/beta_tui_tests.rs` |
 | B20 | `Esc` did not walk back one level in the TUI | `Esc` goes back and drops the text | `tui/tests/beta_tui_tests.rs` |
+
+---
+
+## The Second Beta Wave
+
+A second round of AI beta agents ran against the compiled binary with
+the first wave's fixes in place. Four findings came back from the
+collaborator persona. Each was reproduced by hand, then written down as
+a failing test before a line of code changed.
+
+| Finding | Symptom | Fix | Test |
+|---------|---------|-----|------|
+| W1 | A pull handed over the snapshots and notes of a different project that merely had the same file name | A project is identified on the wire by its file name *and* the folder it lives in | `cli/tests/wave2_tests.rs`, `relay/tests/real_relay.rs` |
+| W2 | The relay said it had no bytes for a snapshot it did have, and only the first snapshot's bytes ever arrived | The "the blob is finished" message of one snapshot no longer fails the fetch of the next | `cli/tests/wave2_tests.rs` |
+| W3 | A fresh collaborator's pull put the head on the *oldest* snapshot, so the newer ones were missing from the log and the status | The head goes on the newest snapshot of the pulled history — the one that is nobody's parent | `cli/tests/wave2_tests.rs`, `cli/tests/cli_tests.rs` |
+| W4 | A push that reported a conflict and exited non-zero had in fact already been stored by the relay, which also moved the project's head | A refused push is not stored, and the head does not move | `cli/tests/wave2_tests.rs`, `relay/tests/real_relay.rs` |
+
+### How a project is identified on the wire
+
+The wire name of a project is its file name with its extension, so an
+Ableton set and a Bitwig bundle with the same stem stay apart, and two
+machines holding the same project agree on the name.
+
+The wire name alone is not enough: `Album1/Track.als` and
+`Album2/Track.als` are two different sets. A client therefore says which
+folder it is in, and the relay files the project under
+`<file name>::<folder>`.
+
+When a client names a file the relay has never seen in that folder, the
+relay falls back to a project the client already has history from, and
+then to the only project with that file name. If the relay holds several
+projects with that name and none of them can be identified, it serves
+**none** of them: handing over the wrong project's history is worse than
+handing over nothing.
+
+A relay written before this change keeps its history: the old heads and
+notes are moved to the project's new key when the relay starts.
+
+### The blob transfer protocol
+
+```
+push:  BlobPush { project, hash, size }
+       BlobChunk { project, hash, index, data }   (3 MiB raw, base64 in the frame)
+       BlobEnd   { project, hash }
+       → BlobStored { hash }      the relay has the whole blob, hash verified
+
+pull:  BlobRequest { project, hash }
+       → BlobChunk { … }          one chunk at a time
+       → BlobDone { hash }        no more chunks
+       → BlobMissing { hash }     the relay does not have those bytes
+```
+
+The relay only acknowledges a blob once every chunk has arrived and the
+whole blob hashes to the name it was sent under, so a peer cannot make
+the relay file bytes under someone else's name. The CLI sends the bytes
+*before* the snapshot metadata, so the relay owns the bytes by the time
+it learns about the snapshot. The pull fetches the bytes before it saves
+the metadata, and says which of the pulled snapshots can be restored here
+and which cannot.
 
 ### The Beta Harness
 

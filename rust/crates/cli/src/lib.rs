@@ -191,7 +191,7 @@ pub fn cmd_snapshot(
 
     let store = BlobStore::new(clavus_root.join("blobs"))
         .map_err(|e| anyhow::anyhow!("BlobStore: {}", e))?;
-    let snap_store = SnapshotStore::new(store, &id);
+    let snap_store = SnapshotStore::new(store.clone(), &id);
 
     // Parent: current HEAD
     let parent = snap_store.head().map(|s| s.hash);
@@ -261,6 +261,20 @@ fn ensure_project_exists(project: &Path) -> anyhow::Result<()> {
         anyhow::bail!("{} is a directory, not a project file", project.display());
     }
     anyhow::bail!("the project {} does not exist", project.display());
+}
+
+/// A size in bytes, said the way a person would say it.
+fn human_size(bytes: usize) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = 1024.0 * 1024.0;
+    let b = bytes as f64;
+    if b >= MB {
+        format!("{:.1} MB", b / MB)
+    } else if b >= KB {
+        format!("{:.0} KB", b / KB)
+    } else {
+        format!("{} bytes", bytes)
+    }
 }
 
 /// The name to record as the author of a note.
@@ -604,7 +618,7 @@ pub fn cmd_push(relay: &str, project: &Path, clavus_root: &Path,
     // Load local snapshot store
     let store = BlobStore::new(clavus_root.join("blobs"))
         .map_err(|e| anyhow::anyhow!("BlobStore: {}", e))?;
-    let snap_store = SnapshotStore::new(store, &id);
+    let snap_store = SnapshotStore::new(store.clone(), &id);
 
     // Collect all local snapshots in the chain
     let mut snapshots = Vec::new();
@@ -642,7 +656,7 @@ pub fn cmd_push(relay: &str, project: &Path, clavus_root: &Path,
         .map_err(|e| anyhow::anyhow!("Failed to connect to {}: {}", relay, e))?;
 
     // Say hello with empty known_heads so relay sends us everything
-    client.hello(id.sync_name(), vec![])
+    client.hello_in(id.sync_name(), vec![], id.folder())
         .map_err(|e| anyhow::anyhow!("Hello: {}", e))?;
 
     // Receive relay's state
@@ -673,6 +687,23 @@ pub fn cmd_push(relay: &str, project: &Path, clavus_root: &Path,
             project_path: s.project_path.clone(),
         }
     }).collect();
+
+    // The project bytes travel first, so the relay has them by the
+    // time it learns about the snapshot. Without them a collaborator
+    // could see that a snapshot existed but not restore it.
+    let mut pushed_bytes = 0usize;
+    for snap in &push_snaps {
+        let Some(bytes) = store.get(&snap.hash) else {
+            continue;
+        };
+        client
+            .push_blob(id.sync_name(), &snap.hash, &bytes)
+            .map_err(|e| anyhow::anyhow!("Could not send the project bytes: {}", e))?;
+        pushed_bytes += bytes.len();
+    }
+    if pushed_bytes > 0 {
+        outln!(out, "  sent the project bytes ({})", human_size(pushed_bytes));
+    }
 
     let push_count = push_snaps.len();
     let push_cue_count = push_cues.len();
@@ -711,6 +742,10 @@ pub fn cmd_push(relay: &str, project: &Path, clavus_root: &Path,
                 // must be able to tell that.
                 anyhow::bail!("the relay has a different history for '{}'", project);
             }
+            Some(SyncMsg::BlobStored { .. }) => {
+                // The relay confirming that it has the bytes. Nothing to
+                // say — the user does not need the hash.
+            }
             Some(msg) => {
                 outln!(out, "  relay: {:?}", msg);
             }
@@ -722,6 +757,30 @@ pub fn cmd_push(relay: &str, project: &Path, clavus_root: &Path,
     }
 
     Ok(())
+}
+
+/// Ask the relay for a snapshot's bytes.
+///
+/// Returns `None` when the relay does not have them, or does not
+/// answer. A snapshot without its bytes can still be seen in the log,
+/// but it cannot be restored on this machine.
+fn fetch_blob(
+    client: &SyncClient,
+    id: &clavus_core::project::ProjectId,
+    hash: &str,
+) -> Option<Vec<u8>> {
+    client.request_blob(id.sync_name(), hash).ok()?;
+    match client.recv_blob(id.sync_name(), hash, std::time::Duration::from_secs(30)) {
+        Ok(Ok(bytes)) => Some(bytes),
+        Ok(Err(e)) => {
+            tracing::debug!("the relay did not send the bytes for {}: {}", hash, e);
+            None
+        }
+        Err(e) => {
+            tracing::debug!("the blob transfer failed for {}: {}", hash, e);
+            None
+        }
+    }
 }
 
 pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
@@ -737,7 +796,7 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
     // Load local snapshot store
     let store = BlobStore::new(clavus_root.join("blobs"))
         .map_err(|e| anyhow::anyhow!("BlobStore: {}", e))?;
-    let snap_store = SnapshotStore::new(store, &id);
+    let snap_store = SnapshotStore::new(store.clone(), &id);
 
     // Tell the relay everything we already have, not just our HEAD.
     // Sending only the HEAD made the relay offer the whole history back,
@@ -754,13 +813,16 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
         .map_err(|e| anyhow::anyhow!("Failed to connect to {}: {}", relay, e))?;
 
     // Announce what we know
-    client.hello(id.sync_name(), known_heads)
+    client.hello_in(id.sync_name(), known_heads, id.folder())
         .map_err(|e| anyhow::anyhow!("Hello: {}", e))?;
 
     // Receive relay's response (Push with missing snapshots)
     let timeout = std::time::Duration::from_secs(10);
     let mut pulled_count = 0;
     let mut pulled_cues = 0;
+    // How many of the pulled snapshots came with the project bytes.
+    let mut pulled_with_bytes = 0;
+    let mut pulled_without_bytes = 0;
     // A pull that never got an answer is a failure, not a success.
     let mut got_response = false;
     loop {
@@ -769,6 +831,22 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
                 got_response = true;
                 for snap in &snapshots {
                     if !snap_store.has(&snap.hash) {
+                        // The bytes come first, so the snapshot can
+                        // really be restored on this machine.
+                        let bytes = fetch_blob(&client, &id, &snap.hash);
+                        match bytes {
+                            Some(data) => {
+                                store.put(&data);
+                                pulled_with_bytes += 1;
+                            }
+                            None => {
+                                pulled_without_bytes += 1;
+                                outln!(
+                                    out,
+                                    "    (the relay has no bytes for this snapshot — it can be seen but not restored here)"
+                                );
+                            }
+                        }
                         snap_store.save_raw(snap.clone())?;
                         outln!(
                         out,
@@ -791,17 +869,20 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
                         .map(|s| s.hash.clone())
                         .filter(|h| snap_store.has(h))
                         .collect();
-                    let new_head = candidates
-                        .iter()
-                        .find(|h| extends_chain(&snap_store, local_head.as_deref(), h));
+                    // The head must be the *newest* of the pulled
+                    // snapshots. Picking the first one that extends the
+                    // chain put the head on the oldest snapshot of a
+                    // fresh client's first pull, and the newer
+                    // snapshots then went missing from the log.
+                    let new_head = newest_of(&snap_store, local_head.as_deref(), &candidates);
                     match new_head {
-                        Some(hash) => match snap_store.set_head(hash, "pull") {
+                        Some(hash) => match snap_store.set_head(&hash, "pull") {
                             Ok(()) => {
-                                outln!(out, "  HEAD → {}", clavus_core::short(hash, 8))
+                                outln!(out, "  HEAD → {}", clavus_core::short(&hash, 8))
                             }
                             Err(e) => outln!(out,
                                 "  ⚠ Could not advance HEAD to {}: {}",
-                                clavus_core::short(hash, 8),
+                                clavus_core::short(&hash, 8),
                                 e
                             ),
                         },
@@ -848,8 +929,20 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
 
     if pulled_count > 0 {
         outln!(out, "✓ Pulled {} new snapshot(s)", pulled_count);
-        outln!(out, "  Note: sync transfers snapshot metadata, not project file contents.");
-        outln!(out, "        Restoring a pulled snapshot isn't possible on this machine.");
+        if pulled_with_bytes > 0 {
+            outln!(
+                out,
+                "  {} of them came with the project bytes — they can be restored here.",
+                pulled_with_bytes
+            );
+        }
+        if pulled_without_bytes > 0 {
+            outln!(
+                out,
+                "  {} came without the project bytes — they can be seen but not restored here.",
+                pulled_without_bytes
+            );
+        }
     } else {
         // "Already up to date" was also printed when the relay had never
         // heard of this project, which reads as if the relay had checked
@@ -870,6 +963,35 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
 /// ancestors — that is, when the candidate was made *after* the head.
 /// Anything else is a different history, and moving HEAD to it would
 /// drop the snapshots the user already had.
+/// The newest of the pulled snapshots that extends the local chain.
+///
+/// The head must be the tip of the pulled history. Picking the first
+/// candidate that extended the chain put a fresh client's head on the
+/// *oldest* snapshot, and the newer ones went missing from the log.
+fn newest_of(
+    snap_store: &clavus_core::snapshot::SnapshotStore,
+    local_head: Option<&str>,
+    candidates: &[String],
+) -> Option<String> {
+    // The candidates that extend what we already have.
+    let extending: Vec<String> = candidates
+        .iter()
+        .filter(|h| extends_chain(snap_store, local_head, h))
+        .cloned()
+        .collect();
+    if extending.is_empty() {
+        return None;
+    }
+
+    // The tip of the pulled history: the snapshot that is nobody's
+    // parent.
+    let snaps: Vec<clavus_core::types::Snapshot> = extending
+        .iter()
+        .filter_map(|h| snap_store.load(h))
+        .collect();
+    clavus_core::snapshot::newest_in(&snaps)
+}
+
 fn extends_chain(
     snap_store: &clavus_core::snapshot::SnapshotStore,
     head: Option<&str>,
@@ -950,7 +1072,7 @@ pub fn cmd_restore(project: &Path, hash_arg: &str, clavus_root: &Path,
 
     let store = BlobStore::new(clavus_root.join("blobs"))
         .map_err(|e| anyhow::anyhow!("BlobStore: {}", e))?;
-    let snap_store = SnapshotStore::new(store, &id);
+    let snap_store = SnapshotStore::new(store.clone(), &id);
 
     // Find the snapshot: HEAD keyword, or full hash / unique prefix.
     let target_hash = if hash_arg == "HEAD" {

@@ -491,3 +491,70 @@ fn a_push_sends_the_cues_of_a_project_without_snapshots() {
     );
     let _ = result;
 }
+
+// ─── A pulled snapshot can be restored on the other machine ───────────────
+//
+// Regression: the sync only carried metadata, so a collaborator could
+// see that a snapshot existed but could not restore it on their own
+// machine. The project bytes now travel with the snapshot.
+
+#[test]
+fn a_pulled_snapshot_can_be_restored_on_the_other_machine() {
+    use std::net::TcpListener;
+
+    // A relay on a free port.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr").to_string();
+    let relay_dir = TempDir::new().expect("relay dir");
+
+    let relay = std::thread::spawn(move || {
+        let _ = clavus_relay::run_with_listener(listener, relay_dir.path().to_path_buf());
+    });
+    // Wait until the relay accepts connections.
+    for _ in 0..200 {
+        if std::net::TcpStream::connect(&addr).is_ok() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    // ── Machine A: snapshot, push ──
+    let ws_a = Workspace::new();
+    let als_a = ws_a.als("Alpha.als");
+    let (out, result) = run(|o, e| cmd_snapshot(&als_a, &Some("machine A v1".to_string()), false, &ws_a.root, o, e));
+    assert!(result.is_ok(), "the snapshot must be taken: {}", out.all());
+
+    let (out, result) = run(|o, e| cmd_push(&addr, &als_a, &ws_a.root, o, e));
+    assert!(result.is_ok(), "the push must work: {}", out.all());
+    assert!(
+        out.all().contains("sent the project bytes"),
+        "the push must send the bytes: {}",
+        out.all()
+    );
+
+    // ── Machine B: pull, then restore ──
+    let ws_b = Workspace::new();
+    let als_b = ws_b.als("Alpha.als");
+
+    let (out, result) = run(|o, e| cmd_pull(&addr, &als_b, &ws_b.root, o, e));
+    assert!(result.is_ok(), "the pull must work: {}", out.all());
+    assert!(
+        out.all().contains("came with the project bytes"),
+        "the pull must bring the bytes: {}",
+        out.all()
+    );
+
+    // The pulled snapshot can be restored over B's own project.
+    let (out, result) = run(|o, e| cmd_restore(&als_b, "HEAD", &ws_b.root, o, e));
+    assert!(result.is_ok(), "the restore must work: {}", out.all());
+
+    // And the restored file is A's file, byte for byte.
+    let restored = fs::read(&als_b).expect("the restored file");
+    let original = fs::read(&als_a).expect("the original file");
+    assert_eq!(
+        restored, original,
+        "the restored project must be the collaborator's file"
+    );
+
+    drop(relay);
+}

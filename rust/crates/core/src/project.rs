@@ -27,6 +27,10 @@ pub struct ProjectId {
     pub name: String,
     /// The file name with its extension, e.g. `Track.als`.
     pub file_name: String,
+    /// The name of the folder the project lives in, e.g. `Album1`.
+    ///
+    /// It is empty when the project sits at the top of a directory.
+    pub folder: String,
     /// The project's path.
     pub path: PathBuf,
 }
@@ -53,8 +57,8 @@ impl ProjectId {
             .map(|s| s.to_string_lossy().to_string())
             .filter(|s| !s.is_empty() && s != "." && s != "..");
 
-        let key = match folder {
-            Some(f) => format!("{}__{}", sanitize(&f), sanitize(&file_name)),
+        let key = match &folder {
+            Some(f) => format!("{}__{}", sanitize(f), sanitize(&file_name)),
             None => sanitize(&file_name),
         };
 
@@ -62,6 +66,7 @@ impl ProjectId {
             key,
             name,
             file_name,
+            folder: folder.unwrap_or_default(),
             path: path.to_path_buf(),
         }
     }
@@ -73,6 +78,24 @@ impl ProjectId {
     /// machines holding the same project still agree on the name.
     pub fn sync_name(&self) -> &str {
         &self.file_name
+    }
+
+    /// The name of the folder the project lives in.
+    ///
+    /// This is the second half of the project's identity on the wire.
+    /// Two projects that share a file name but live in different
+    /// folders are different projects, and a relay that only knew the
+    /// file name would hand one's history to the other.
+    pub fn folder(&self) -> &str {
+        &self.folder
+    }
+
+    /// The project's identity on the relay.
+    ///
+    /// The file name says *which* project it is; the folder says
+    /// *which one* when two of them share a file name.
+    pub fn relay_key(&self) -> String {
+        format!("{}::{}", self.file_name, self.folder)
     }
 }
 

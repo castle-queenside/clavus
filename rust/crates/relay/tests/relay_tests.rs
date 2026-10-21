@@ -169,7 +169,7 @@ fn test_conflict_message_deserialization() {
 #[test]
 fn test_all_syncmsg_variants_serialize_deserialize() {
     let variants = vec![
-        SyncMsg::Hello { client_name: "test".into(), known_heads: vec!["abc".into()] },
+        SyncMsg::Hello { client_name: "test".into(), known_heads: vec!["abc".into()], folder: String::new() },
         SyncMsg::Push { snapshots: vec![], cues: vec![] },
         SyncMsg::Pull { missing: vec!["def".into()] },
         SyncMsg::PullResp { snapshots: vec![], cues: vec![] },
@@ -258,9 +258,9 @@ fn test_relaystate_chain_storage() {
         vec![],
     );
     assert!(conflicts.is_empty());
-    assert!(state.snapshot("test.als", &a).is_some());
-    assert!(state.snapshot("test.als", &b).is_some());
-    assert!(state.snapshot("test.als", &c).is_some());
+    assert!(state.snapshot("test.als::tmp", &a).is_some());
+    assert!(state.snapshot("test.als::tmp", &b).is_some());
+    assert!(state.snapshot("test.als::tmp", &c).is_some());
 }
 
 #[test]
