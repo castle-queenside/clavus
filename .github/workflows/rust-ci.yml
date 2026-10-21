@@ -40,5 +40,14 @@ jobs:
         working-directory: rust
 
       - name: Clippy
-        run: cargo clippy --all -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: rust
+
+      - name: Build the Linux targets
+        # The studio machine runs Linux, so both musl targets are built
+        # here to catch a compile error before a release, not after.
+        run: |
+          rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+          cargo build --release --target x86_64-unknown-linux-musl
+          cargo build --release --target aarch64-unknown-linux-musl
         working-directory: rust
