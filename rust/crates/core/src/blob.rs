@@ -98,6 +98,32 @@ impl BlobStore {
         self.objects_dir.join(&hash[..2]).join(hash)
     }
 
+    /// List the hashes of every stored snapshot metadata file.
+    ///
+    /// Used to resolve a short hash prefix to a full snapshot hash.
+    pub fn list_meta_hashes(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Ok(dirs) = fs::read_dir(&self.objects_dir) {
+            for dir in dirs.flatten() {
+                if !dir.path().is_dir() {
+                    continue;
+                }
+                if let Ok(entries) = fs::read_dir(dir.path()) {
+                    for entry in entries.flatten() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        if let Some(stripped) = name.strip_suffix(".meta") {
+                            if stripped.len() == 64 {
+                                out.push(stripped.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
     /// Path to the metadata file for a snapshot.
     pub fn meta_path(&self, hash: &str) -> PathBuf {
         self.objects_dir.join(&hash[..2]).join(format!("{}.meta", hash))

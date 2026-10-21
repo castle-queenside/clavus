@@ -140,8 +140,19 @@ impl SnapshotStore {
     /// Walk the snapshot chain from `head` back to root.
     /// Returns snapshots in order: [newest, ..., oldest].
     pub fn walk_chain(&self, head: Option<&str>) -> Vec<Snapshot> {
+        // `head` may be a ref name (e.g. "HEAD") or a snapshot hash — both
+        // are used by callers, so resolve either one.
         let mut current = head
-            .and_then(|h| self.store.read_ref(h))
+            .and_then(|h| {
+                self.store.read_ref(h).or_else(|| {
+                    // A snapshot hash that exists is its own chain head.
+                    if self.store.load_meta(h).is_some() {
+                        Some(h.to_string())
+                    } else {
+                        None
+                    }
+                })
+            })
             .or_else(|| self.store.read_ref("HEAD"));
         let mut snapshots = Vec::new();
         let mut seen = std::collections::HashSet::new();
@@ -205,6 +216,48 @@ impl SnapshotStore {
         self.store.load_meta(hash).is_some()
     }
 
+    /// Resolve a full hash or a unique hash prefix to a full snapshot hash.
+    ///
+    /// Returns [`ClavusError::SnapshotNotFound`] when nothing matches, and an
+    /// error when the prefix is ambiguous — picking one at random would
+    /// restore the wrong version of someone's project.
+    pub fn resolve(&self, hash_or_prefix: &str) -> Result<String, ClavusError> {
+        let prefix = hash_or_prefix.trim();
+        if prefix.is_empty() {
+            return Err(ClavusError::SnapshotNotFound(hash_or_prefix.to_string()));
+        }
+        if self.has(prefix) {
+            return Ok(prefix.to_string());
+        }
+
+        // Prefer a match on the current chain.
+        if let Some(s) = self
+            .walk_chain(None)
+            .into_iter()
+            .find(|s| s.hash.starts_with(prefix))
+        {
+            return Ok(s.hash);
+        }
+
+        // Fall back to every snapshot we know about.
+        let mut matches = self
+            .store
+            .list_meta_hashes()
+            .into_iter()
+            .filter(|h| h.starts_with(prefix));
+        let first = match matches.next() {
+            Some(h) => h,
+            None => return Err(ClavusError::SnapshotNotFound(hash_or_prefix.to_string())),
+        };
+        if let Some(second) = matches.next() {
+            return Err(ClavusError::AmbiguousSnapshot(format!(
+                "{} (matches {} and {})",
+                prefix, &first[..8], &second[..8]
+            )));
+        }
+        Ok(first)
+    }
+
     /// Save a pre-built snapshot (from relay pull) without re-reading the file.
     /// Does NOT update HEAD — caller decides when to do that.
     pub fn save_raw(&self, snapshot: Snapshot) -> Result<(), ClavusError> {
@@ -218,10 +271,11 @@ impl SnapshotStore {
     /// Restore a snapshot's raw project bytes back to its original path.
     ///
     /// # Arguments
-    /// * `hash` — full or short snapshot hash
+    /// * `hash` — full or short snapshot hash (a unique prefix is accepted)
     /// * `target` — destination path (defaults to snapshot's `project_path` if `None`)
     pub fn restore(&self, hash: &str, target: Option<&Path>) -> Result<Snapshot, ClavusError> {
-        let snap = self.load(hash).ok_or_else(|| {
+        let full_hash = self.resolve(hash)?;
+        let snap = self.load(&full_hash).ok_or_else(|| {
             ClavusError::SnapshotNotFound(hash.to_string())
         })?;
 

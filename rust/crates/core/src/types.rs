@@ -369,6 +369,9 @@ pub enum ClavusError {
     #[error("Snapshot not found: {0}")]
     SnapshotNotFound(String),
 
+    #[error("Ambiguous snapshot hash '{0}' — use more characters")]
+    AmbiguousSnapshot(String),
+
     #[error("Blob not found in store: {0}")]
     BlobNotFound(String),
 

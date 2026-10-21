@@ -678,21 +678,20 @@ fn cmd_restore(project: &Path, hash_arg: &str, clavus_root: &Path) -> anyhow::Re
         .map_err(|e| anyhow::anyhow!("BlobStore: {}", e))?;
     let snap_store = SnapshotStore::new(store, &name);
 
-    // Find the snapshot: HEAD keyword, or prefix match
+    // Find the snapshot: HEAD keyword, or full hash / unique prefix.
     let target_hash = if hash_arg == "HEAD" {
         snap_store.head()
             .map(|h| h.hash)
             .ok_or_else(|| anyhow::anyhow!("No snapshots found for '{}'", name))?
     } else {
-        // Walk chain looking for a hash that starts with hash_arg
-        snap_store.walk_chain(None)
-            .into_iter()
-            .find(|s| s.hash.starts_with(hash_arg))
-            .map(|s| s.hash)
-            .ok_or_else(|| anyhow::anyhow!(
+        snap_store.resolve(hash_arg).map_err(|e| match e {
+            // A genuine ambiguity is worth reporting verbatim.
+            clavus_core::ClavusError::AmbiguousSnapshot(_) => anyhow::anyhow!("{}", e),
+            _ => anyhow::anyhow!(
                 "No snapshot found matching '{}'. Run `clavus log {:?}` to see snapshot hashes.",
                 hash_arg, project
-            ))?
+            ),
+        })?
     };
 
     println!("Restoring {} to snapshot {}...", name, &target_hash[..8]);
