@@ -401,6 +401,7 @@ fn audit_sample_refs(
     let mut missing = Vec::new();
     let mut outside_project = Vec::new();
     let mut embedded = Vec::new();
+    let mut factory = Vec::new();
 
     // De-duplicate references: a sample used by six clips is one file, and
     // reporting it six times hides the real problem behind noise.
@@ -433,6 +434,15 @@ fn audit_sample_refs(
     // treat anything as "inside the project" in that case.
     let root_is_usable = !abs_root.as_os_str().is_empty();
 
+    // Where a relative reference may live, besides the project folder.
+    //
+    // A Live set can point its samples at the machine's *user folder*
+    // rather than at itself. The path then starts with empty elements,
+    // which stand for the user folder's root. The user folder is a
+    // setting of the machine that made the set, not something the set
+    // records, so the places it is likely to be are tried in turn.
+    let extra_roots = user_folder_roots(project_root);
+
     for path in paths {
         let filename = path
             .file_name()
@@ -460,6 +470,15 @@ fn audit_sample_refs(
             if let Some(found) = resolve_case_insensitive(&abs_root, path) {
                 if !candidates.contains(&found) {
                     candidates.push(found);
+                }
+            }
+            // The same reference, looked for in the places a user folder
+            // is usually kept. A sample found here is *outside* the
+            // project, and the audit says so — it is collectable, not lost.
+            for root in &extra_roots {
+                let candidate = root.join(path);
+                if !candidates.contains(&candidate) {
+                    candidates.push(candidate);
                 }
             }
         }
@@ -541,6 +560,11 @@ fn audit_sample_refs(
                 // Inside the project archive — present, just not extracted
                 embedded.push(ref_);
             }
+            (false, _) if is_factory_library_path(path) => {
+                // Live's own factory library. Not the user's audio, and
+                // it comes back whenever Live is installed.
+                factory.push(ref_);
+            }
             (false, _) => {
                 // NOT FOUND
                 missing.push(ref_);
@@ -553,6 +577,7 @@ fn audit_sample_refs(
         missing,
         outside_project,
         embedded,
+        factory,
     };
 
     if !report.is_clean() {
@@ -1141,6 +1166,81 @@ pub fn link_target_of(path: &Path) -> PathBuf {
 /// on a case-sensitive filesystem the exact path then does not exist. This
 /// walks the *same* path, only relaxing the case of each component — it
 /// never accepts a different file that merely shares a name.
+///
+/// Is this path inside a macOS application bundle?
+///
+/// A Live set can use a drum from Live's own factory library, which
+/// lives inside `Ableton Live 11 Suite.app`. That content belongs to
+/// Live, not to the user, and it returns whenever Live is installed —
+/// so it is not a missing sample and it must not stop a snapshot.
+pub fn is_factory_library_path(path: &Path) -> bool {
+    path.components().any(|c| {
+        c.as_os_str()
+            .to_string_lossy()
+            .to_ascii_lowercase()
+            .ends_with(".app")
+    })
+}
+
+/// The places a machine's Ableton *user folder* is likely to be.
+///
+/// A set may point its samples at the user folder instead of at itself.
+/// The set does not record where that folder was, so the usual places
+/// are tried: whatever `CLAVUS_USER_FOLDER` names, the two standard
+/// macOS places, and the volume the project itself sits on — because a
+/// drive full of sets usually has its samples in the same place.
+pub fn user_folder_roots(project_root: &Path) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    let mut add = |p: PathBuf| {
+        if !p.as_os_str().is_empty() && !roots.contains(&p) {
+            roots.push(p);
+        }
+    };
+
+    if let Some(dir) = std::env::var_os("CLAVUS_USER_FOLDER") {
+        let dir = PathBuf::from(dir);
+        if dir.is_absolute() {
+            add(dir);
+        }
+    }
+
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        add(home.join("Music"));
+        add(home.join("Documents"));
+    }
+
+    // The volume the project is on: `/Volumes/LaCie`, or `/` for
+    // anything under the home directory.
+    if let Some(mount) = volume_root(project_root) {
+        add(mount);
+    }
+
+    roots
+}
+
+/// The volume a path sits on: `/Volumes/LaCie` for a drive, `/` for
+/// anything on the boot volume.
+fn volume_root(path: &Path) -> Option<PathBuf> {
+    let mut current = path;
+    loop {
+        let parent = current.parent()?;
+        if parent == current {
+            return None;
+        }
+        // A `Volumes` directory means *this* level is the mount point.
+        if parent
+            .file_name()
+            .map(|n| n == "Volumes")
+            .unwrap_or(false)
+        {
+            return Some(current.to_path_buf());
+        }
+        current = parent;
+    }
+}
+
+/// Resolve a case-insensitive path, used when a Live set has changed the
+/// case of a folder since the sample was recorded.
 fn resolve_case_insensitive(root: &Path, rel: &Path) -> Option<PathBuf> {
     let mut current = root.to_path_buf();
     for component in rel.components() {

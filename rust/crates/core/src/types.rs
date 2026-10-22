@@ -341,6 +341,14 @@ pub struct SampleAuditReport {
     /// but they can be extracted with `clavus collect`.
     #[serde(default)]
     pub embedded: Vec<SampleRef>,
+    /// Samples that Live itself supplies, from its own factory library.
+    ///
+    /// A set can use a drum from `Ableton Live 11 Suite.app`. That
+    /// content is not the user's audio, it is Live's, and it comes back
+    /// whenever Live is installed. It is not "missing" — nothing was
+    /// lost — and it must not stop a snapshot being taken.
+    #[serde(default)]
+    pub factory: Vec<SampleRef>,
 }
 
 impl SampleAuditReport {
@@ -371,7 +379,11 @@ impl SampleAuditReport {
 
     /// Total number of sample references found.
     pub fn total(&self) -> usize {
-        self.collected.len() + self.missing.len() + self.outside_project.len() + self.embedded.len()
+        self.collected.len()
+            + self.missing.len()
+            + self.outside_project.len()
+            + self.embedded.len()
+            + self.factory.len()
     }
 
     /// Total size of all collected samples in bytes.

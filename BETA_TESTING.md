@@ -1219,6 +1219,73 @@ FILE FORMATS
 
 ---
 
+## Part 11: A Real Library of Sets
+
+The workflow above uses small, tidy fixtures. This part is for the
+real thing: a drive of hundreds of sets, made over years, on several
+machines.
+
+### 11.1 Pointing Clavus at a drive
+
+```bash
+clavus --dir /Volumes/YourDrive projects
+clavus --dir /Volumes/YourDrive tui
+```
+
+**Expected:** The list of sets on the drive. A set that Live keeps a
+`Backup/` or `Autosave/` copy of is **not** listed twice — those copies
+are not projects of their own.
+
+**What to watch for:** A drive of a few hundred sets usually holds more
+copies than sets. On one drive, 2,690 `.als` files were 1,245 sets and
+1,445 of Live's own copies.
+
+### 11.2 A set made on another machine
+
+```bash
+clavus audit "/Volumes/YourDrive/Some Set/Some Set Project/Some Set.als"
+```
+
+**Expected:** The report names the samples it cannot find. A set that
+was made on a machine with a different user name, or with a drive
+mounted under a different name, will point at paths that do not exist
+here — that is the truth, and the report should say so.
+
+**What to watch for:** A set whose samples live in the machine's Ableton
+*user folder* rather than beside the set. The path starts with an empty
+element, and the sample should be found in the user folder — and
+reported as **outside the project**, so `clavus collect` can bring it
+in. If it is reported as *missing* when the file is sitting in
+`~/Music`, that is a bug.
+
+### 11.3 A set that uses Live's own sounds
+
+```bash
+clavus audit "/Volumes/YourDrive/Some Set/Some Set Project/Some Set.als"
+```
+
+**Expected:** A drum from `Ableton Live 11 Suite.app` is named as
+coming from Live's own library. It is **not** reported as missing, and
+it does **not** stop the snapshot — it comes back whenever Live is
+installed.
+
+### 11.4 Taking the whole library
+
+```bash
+clavus --dir /Volumes/YourDrive status "/Volumes/YourDrive/Some Set/Some Set Project/Some Set.als"
+```
+
+**What to watch for:** Clavus does not copy your sets anywhere. The set
+stays where it is; only a snapshot's bytes are kept, in the data
+directory, and only for the sets you actually snapshot. Check the size
+of the data directory afterwards:
+
+```bash
+du -sh ~/.clavus
+```
+
+---
+
 ## Open Questions
 
 If you run into behavior you can't explain, note it here:

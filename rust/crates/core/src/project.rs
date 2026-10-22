@@ -215,6 +215,26 @@ pub fn folders_are_siblings(a: &str, b: &str) -> bool {
     leaf(a) == leaf(b) && parent(a) != parent(b) && depth(a) == depth(b)
 }
 
+/// Is this file one of Ableton's own copies of a set, rather than the
+/// set itself?
+///
+/// Live keeps a `Backup/` folder and an `Autosave/` folder beside every
+/// set, holding copies of it — the autosave named after the set, the
+/// backups named after the moment they were taken. A drive with a few
+/// hundred sets holds more copies than sets: on one drive, 2,690 `.als`
+/// files were 1,245 sets and 1,445 of Live's own copies.
+///
+/// Listing the copies as projects of their own makes the list twice as
+/// long and shows the same set under a dozen different names, which is
+/// not what anyone means by "my projects".
+pub fn is_live_backup_copy(path: &Path) -> bool {
+    path.ancestors()
+        .skip(1) // the file itself
+        .filter_map(|p| p.file_name())
+        .map(|n| n.to_string_lossy().to_ascii_lowercase())
+        .any(|n| n == "backup" || n == "autosave")
+}
+
 /// The path made absolute, with `.` and `..` resolved.
 ///
 /// The path is not resolved through symlinks: a project's identity

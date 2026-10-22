@@ -1037,6 +1037,46 @@ fn projects_does_not_hang_on_a_symlink_loop() {
 }
 
 #[test]
+fn projects_does_not_list_live_s_own_backup_copies() {
+    // Live keeps a `Backup/` folder and an `Autosave/` folder beside
+    // every set, holding copies of it. On a real drive of 2,690 `.als`
+    // files, 1,445 were these copies and 1,245 were the sets — so more
+    // than half the list was the same projects again, under new names.
+    let tmp = TempDir::new().unwrap();
+    let scan = tmp.path().join("scan");
+    let set = scan.join("MySet").join("MySet Project");
+    fs::create_dir_all(set.join("Backup")).unwrap();
+    fs::create_dir_all(set.join("Autosave")).unwrap();
+    fs::write(set.join("MySet.als"), gzip_als("set")).unwrap();
+    fs::write(set.join("Backup").join("MySet [2020-01-30 022324].als"), gzip_als("b")).unwrap();
+    fs::write(set.join("Autosave").join("MySet.als"), gzip_als("a")).unwrap();
+
+    let (out, result) = run(|o, e| cmd_projects(true, Some(&scan), o, e));
+    assert!(result.is_ok(), "{:?}", result);
+    let text = out.all();
+    assert!(
+        text.contains("MySet.als"),
+        "the set itself is listed: {}",
+        text
+    );
+    assert!(
+        !text.contains("2020-01-30"),
+        "Live's own backup copy is not a project of its own: {}",
+        text
+    );
+    assert!(
+        !text.contains("Autosave"),
+        "Live's own autosave copy is not a project of its own: {}",
+        text
+    );
+    assert!(
+        text.contains("Found 1 project(s)"),
+        "one set, one entry: {}",
+        text
+    );
+}
+
+#[test]
 fn projects_finds_files_with_an_uppercase_extension() {
     // Ableton writes ".als", but a project exported on a case-insensitive
     // filesystem can arrive as ".ALS".

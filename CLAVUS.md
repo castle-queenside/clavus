@@ -54,6 +54,36 @@ streams rather than straight to stdout.
 
 ## Key Design Decisions
 
+### A project is a pointer, not a copy
+This is the question every user asks first, so it is worth stating
+plainly.
+
+**Clavus never imports a project into a database.** There is no import
+command, and there is no project database. A project is identified by
+*where it is*: its file name, its folder, and a digest of its absolute
+path. Your `.als` file stays exactly where it is, and Clavus never
+moves, re-saves or duplicates it.
+
+What Clavus stores is **version history**, and that is a copy by
+design — you cannot restore yesterday's bytes unless you kept them:
+
+| What | Where it lives | Copied? |
+|---|---|---|
+| The set itself | where you put it | **no** — Clavus only points at it |
+| A snapshot's project bytes | `~/.clavus/blobs/objects/<xx>/<sha256>` | yes — that is the history |
+| A snapshot's audio | the same blob store | yes — so a restore brings the sound back |
+| A snapshot's note | `~/.clavus/blobs/projects/<key>/snapshots/<hash>.json` | a small manifest |
+| The cues (notes) | `~/.clavus/cues/<key>/*.json` | yes — they are Clavus's own |
+
+So a library of a thousand sets is not duplicated a thousand times.
+Only the sets you actually snapshot cost anything, and only the bytes
+of those.
+
+A corollary: **a set on an unmounted drive is unreachable**, and the
+project's identity includes its path, so renaming the drive gives the
+sets a new identity. The blob store keeps the bytes, but the *pointer*
+now names a path that is not there.
+
 ### Content-addressed storage
 - Raw `.als` bytes are the blob. SHA256 = snapshot hash.
 - Duplicate saves detected automatically — same bytes = same hash.
@@ -215,7 +245,7 @@ git add -A && git commit && git push
 - A store that cannot be read is an error, never an empty history
 - The TUI survives any terminal size, shows its selection, and notices
   a relay that has gone away
-- 478 tests passing, clippy clean, CI green
+- 487 tests passing, clippy clean, CI green
 
 ### Blocked ⛔
 | Item | Blocker |

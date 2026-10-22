@@ -87,6 +87,7 @@ fn test_audit_report_is_clean() {
         missing: vec![],
         outside_project: vec![],
         embedded: vec![],
+        factory: vec![],
     };
     assert!(report.is_clean());
 }
@@ -106,7 +107,8 @@ fn test_audit_report_missing_not_clean() {
         }],
         outside_project: vec![],
     
-        embedded: vec![],};
+        embedded: vec![],
+        factory: vec![],};
     assert!(!report.is_clean());
     assert_eq!(report.total(), 1);
 }
@@ -126,7 +128,8 @@ fn test_audit_report_outside_project_not_clean() {
             archive_entry: None,
         }],
     
-        embedded: vec![],};
+        embedded: vec![],
+        factory: vec![],};
     assert!(!report.is_clean());
     assert_eq!(report.total(), 1);
 }
@@ -148,7 +151,8 @@ fn test_audit_report_all_present() {
         missing: vec![],
         outside_project: vec![],
     
-        embedded: vec![],};
+        embedded: vec![],
+        factory: vec![],};
     assert!(report.is_clean());
     assert_eq!(report.total(), 1);
 }

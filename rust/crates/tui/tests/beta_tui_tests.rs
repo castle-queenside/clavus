@@ -189,6 +189,38 @@ fn the_tui_finds_projects_in_sub_folders() {
     );
 }
 
+#[test]
+fn the_tui_does_not_list_live_s_own_backup_copies() {
+    // The CLI skips Live's own `Backup/` and `Autosave/` copies, and the
+    // TUI has to skip them too — otherwise the two disagree about the
+    // same drive, which is exactly the bug the CLI's recursive scan was.
+    let tmp = TempDir::new().unwrap();
+    let projects = tmp.path().join("clavus").join("projects");
+    let data = tmp.path().join("data");
+    let set = projects.join("MySet").join("MySet Project");
+    std::fs::create_dir_all(set.join("Backup")).unwrap();
+    std::fs::create_dir_all(set.join("Autosave")).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(set.join("MySet.als"), MINIMAL_ALS).unwrap();
+    std::fs::write(
+        set.join("Backup").join("MySet [2020-01-30 022324].als"),
+        MINIMAL_ALS,
+    )
+    .unwrap();
+    std::fs::write(set.join("Autosave").join("MySet.als"), MINIMAL_ALS).unwrap();
+
+    let mut app = App::new(projects);
+    app.clavus_root = data;
+    app.refresh_projects().unwrap();
+
+    assert_eq!(
+        app.projects.len(),
+        1,
+        "one set, one entry — Live's copies are not projects: {:?}",
+        app.projects
+    );
+}
+
 // ─── The relay address can be changed ─────────────────────────────────────
 //
 // Regression: the TUI could only ever talk to 127.0.0.1:4477, so a

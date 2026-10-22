@@ -295,6 +295,14 @@ impl App {
                 .to_ascii_lowercase();
 
             if ext == "als" || ext == "bwproject" {
+                // Live's own `Backup/` and `Autosave/` copies are not
+                // projects of their own — they are copies of one. The
+                // CLI's `clavus projects` skips them, and the TUI has
+                // to skip them too or the two disagree about the same
+                // drive.
+                if clavus_core::project::is_live_backup_copy(&path) {
+                    continue;
+                }
                 if let Some(project_entry) = self.project_entry(&path, &ext) {
                     out.push(project_entry);
                 }

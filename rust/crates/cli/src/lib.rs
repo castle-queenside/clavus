@@ -642,6 +642,13 @@ pub fn cmd_audit(project: &Path, strict: bool,
                 outln!(out, "  {}", s.path.display());
             }
         }
+        // Live's own factory samples are not the user's audio and are
+        // not lost. They are named, so the user knows what the set
+        // expects, but they do not fail the audit.
+        if !report.factory.is_empty() {
+            outln!(out, "  {} from Live's own library (not missing — they come back with Live):",
+                report.factory.len());
+        }
         if strict {
             return Err(anyhow::anyhow!("Audio audit failed"));
         }
@@ -1709,6 +1716,13 @@ fn find_projects_in(
             .unwrap_or("")
             .to_ascii_lowercase();
         if ext == "als" || ext == "bwproject" {
+            // Live's own `Backup/` and `Autosave/` copies are not
+            // projects of their own — they are copies of one. Listing
+            // them made the list twice as long and showed the same set
+            // under a dozen names.
+            if clavus_core::project::is_live_backup_copy(&path) {
+                continue;
+            }
             if let Some(name) = path.file_stem().map(|s| s.to_string_lossy().to_string()) {
                 out.push((name, path));
             }

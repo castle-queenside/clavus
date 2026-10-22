@@ -32,7 +32,7 @@
 | Core unit tests | `crates/core/src/**` | 33 | 🟢 |
 | Sync unit tests (blob transfer) | `crates/sync/src/**` | 10 | 🟢 |
 
-**478 tests passing, 0 failed, 0 ignored.**
+**487 tests passing, 0 failed, 0 ignored.**
 
 Legend: 🟢 good  🟡 partial  🟠 manual only  🔴 missing
 
@@ -182,6 +182,9 @@ real ones. Each now has a regression test:
 | A Bitwig archive's samples looked missing | A `.bwproject` exported from Bitwig keeps a copy of every sample, but `project.xml` still points at the original machine's absolute paths — so the samples looked lost | The audit sees what the archive holds and reports those samples as present; `collect` extracts them and rewrites the reference inside the archive |
 | The CLI and the TUI disagreed about the same folder | `clavus projects` looked only at the top level of each location while the TUI always looked into sub-folders, so a set in `~/Music/Archive/2013` was visible in the TUI and invisible to the CLI | The command scans into sub-folders by default, the same way the TUI does; `--no-recursive` asks for the top level alone |
 | A test run could fail for no reason | The parser tests wrote to fixed names in the system temp dir, so two runs happening at once wrote the same file and deleted it out from under each other | Every throwaway file gets a name built from the process id, the clock and a counter |
+| Live's own backup copies were listed as projects | Live keeps a `Backup/` and an `Autosave/` folder beside every set. A real drive held 2,690 `.als` files, of which 1,445 were these copies and 1,245 were the sets — so more than half the list was the same projects again under new names | A file inside a `Backup/` or `Autosave/` folder is a copy, not a project; the CLI and the TUI both skip them |
+| A user-folder sample was looked for at the root of the filesystem | A Live 9 set stores its sample path relative to the machine's *user folder*, and the chain begins with an empty element standing for that folder's root. Joined naively the path began with `//`, and `//` is absolute on Unix, so the sample was looked for at `/Samples/kick.wav` | The empty element is dropped, and the path is looked for beside the project and in the usual places a user folder lives |
+| Live's own factory library was reported as missing | 60 of the 200 missing references on a real drive were `Ableton Live 11 Suite.app`'s own drum kits. Calling those "missing" said the user's audio was lost and stopped the snapshot | A sample inside an application bundle is Live's own content: it is named, and it does not stop a snapshot |
 
 ---
 

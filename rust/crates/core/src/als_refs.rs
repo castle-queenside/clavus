@@ -258,6 +258,20 @@ fn build_path(
 
 /// Join path components and a file name with `/`.
 fn join_parts(parts: &[String], name: &str) -> String {
+    // A Live 9 chain that is relative to the *user folder* starts with
+    // empty elements — they stand for the user folder's own root. Joined
+    // naively they make a path that begins with `//`, and `//` is an
+    // absolute path on Unix, so the whole chain would be looked for at
+    // the root of the filesystem instead of next to the project.
+    //
+    // The empty elements carry no information of their own, so they are
+    // dropped and what is left is an ordinary relative path.
+    let start = parts
+        .iter()
+        .position(|p| !p.trim().is_empty())
+        .unwrap_or(parts.len());
+    let parts = &parts[start..];
+
     let mut p = parts.join("/");
     if !name.is_empty() {
         if !p.is_empty() {
