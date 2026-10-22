@@ -39,10 +39,6 @@ fn make_snap_for(hash: &str, parent: Option<&str>, project: &str) -> Snapshot {
     }
 }
 
-fn make_cue(id: &str) -> Cue {
-    make_cue_for(id, "demo.als")
-}
-
 /// A cue belonging to `project`.
 fn make_cue_for(id: &str, project: &str) -> Cue {
     Cue {

@@ -36,11 +36,13 @@ jobs:
         working-directory: rust
 
       - name: Check
-        run: cargo check --all-targets
+        run: cargo check --workspace --all-targets
         working-directory: rust
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        # `--workspace` matters: `--all-targets` alone lints only the
+        # root package, so the member crates' tests were never checked.
+        run: cargo clippy --workspace --all-targets -- -D warnings
         working-directory: rust
 
       - name: Build the Linux targets

@@ -245,7 +245,7 @@ fn test_collect_missing_file_not_copied() {
 
     let result = collect_samples(&als_path, &report).unwrap();
     assert!(result.copied.is_empty(), "missing files can't be copied");
-    assert!(result.failed.len() >= 1, "missing file should be in failed list");
+    assert!(!result.failed.is_empty(), "missing file should be in failed list");
 }
 
 #[test]
@@ -568,7 +568,7 @@ fn make_bwproject(path: &Path, sample_name: &str, reference: &str, embed: bool) 
     w.write_all(xml.as_bytes()).unwrap();
 
     if embed {
-        w.start_file(&format!("samples/{}", sample_name), opts).unwrap();
+        w.start_file(format!("samples/{}", sample_name), opts).unwrap();
         w.write_all(b"RIFF----WAVEfake").unwrap();
     }
 

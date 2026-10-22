@@ -34,7 +34,7 @@ jobs:
 
       - name: Check
         run: |
-          cargo clippy --all-targets --manifest-path rust/Cargo.toml -- -D warnings
+          cargo clippy --workspace --all-targets --manifest-path rust/Cargo.toml -- -D warnings
           cargo test --all --manifest-path rust/Cargo.toml
 
       - name: Build

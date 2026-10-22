@@ -13,8 +13,14 @@ RUST="${HOME}/.cargo/bin"
 cd rust
 
 echo "── cargo check ──"
-"${RUST}/cargo" check --all-targets
+"${RUST}/cargo" check --workspace --all-targets
 echo "  ✓ cargo check"
+
+echo "── cargo clippy ──"
+# `--workspace` matters: `--all-targets` alone lints only the root
+# package, so the member crates' tests were never checked.
+"${RUST}/cargo" clippy --workspace --all-targets -- -D warnings
+echo "  ✓ cargo clippy"
 
 echo "── cargo test ──"
 "${RUST}/cargo" test --all

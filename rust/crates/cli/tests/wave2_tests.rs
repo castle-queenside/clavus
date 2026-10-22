@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clavus_cli::{
-    cmd_cue, cmd_cues, cmd_log, cmd_pull, cmd_push, cmd_relay, cmd_restore, cmd_snapshot, cmd_status,
+    cmd_cue, cmd_cues, cmd_log, cmd_pull, cmd_push, cmd_restore, cmd_snapshot, cmd_status,
 };
 use tempfile::TempDir;
 
@@ -188,7 +188,7 @@ fn two_projects_with_the_same_file_name_do_not_mix() {
 
     // ── Machine B: the same two projects ──
     let ws_b = Workspace::new();
-    let b_album1 = ws_b.als_in("Album1", "Track.als");
+    let _b_album1 = ws_b.als_in("Album1", "Track.als");
     let b_album2 = ws_b.als_in("Album2", "Track.als");
 
     // Pulling the second project must not bring the first project's
@@ -426,7 +426,7 @@ fn a_refused_push_is_not_stored_by_the_relay() {
 
 #[test]
 fn a_collaborator_in_another_folder_pulls_the_right_project() {
-    let (addr, _dir, relay) = start_relay();
+    let (addr, _dir, _relay) = start_relay();
 
     // ── Machine A: one project, in a folder of its own ──
     let ws_a = Workspace::new();
@@ -494,7 +494,7 @@ fn the_same_bytes_in_two_folders_are_two_projects() {
 
     // ── Machine B: the same two folders ──
     let ws_b = Workspace::new();
-    let b_one = ws_b.als_in("Album1", "Track.als");
+    let _b_one = ws_b.als_in("Album1", "Track.als");
     let b_two = ws_b.als_in("Album2", "Track.als");
 
     let (out, result) = run(|o, e| cmd_pull(&addr, &b_two, &ws_b.root, o, e));

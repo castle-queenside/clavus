@@ -147,7 +147,7 @@ fn a_project_that_cannot_be_parsed_reports_an_error() {
 
 #[test]
 fn the_project_list_shows_the_real_tempo_and_track_count() {
-    let mut h = Harness::with_project();
+    let h = Harness::with_project();
     let entry = h.app.projects.first().expect("a project");
     assert_eq!(
         entry.bpm, 128.0,

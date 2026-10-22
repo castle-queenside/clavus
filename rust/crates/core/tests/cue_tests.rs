@@ -6,7 +6,6 @@
 
 use clavus_core::cue::{CueStore, ImportOutcome};
 use clavus_core::types::CueStatus;
-use std::path::Path;
 use tempfile::TempDir;
 
 fn store(dir: &TempDir, project: &str) -> CueStore {
@@ -26,7 +25,7 @@ fn add_and_list_a_cue() {
         .add("kick is too loud", "4.1.1", "chris", "abc123", "Drums")
         .expect("add");
     assert!(!cue.id.is_empty(), "cue should get an id");
-    let id = cue.id;
+    let _id = cue.id;
 
     let cues = s.list(None).expect("list");
     assert_eq!(cues.len(), 1);

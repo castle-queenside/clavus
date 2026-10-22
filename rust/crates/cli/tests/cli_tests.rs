@@ -113,7 +113,7 @@ fn healthy_workspace() -> (Workspace, PathBuf) {
 
 #[test]
 fn audit_reports_present_samples() {
-    let (ws, als) = healthy_workspace();
+    let (_ws, als) = healthy_workspace();
     let (out, result) = run(|o, e| cmd_audit(&als, false, o, e));
     assert!(result.is_ok(), "audit should succeed: {:?}", result);
     let text = out.all();
@@ -149,7 +149,7 @@ fn audit_strict_fails_on_missing_samples() {
 
 #[test]
 fn audit_strict_passes_when_all_samples_present() {
-    let (ws, als) = healthy_workspace();
+    let (_ws, als) = healthy_workspace();
     let (_, result) = run(|o, e| cmd_audit(&als, true, o, e));
     assert!(result.is_ok(), "strict audit should pass: {:?}", result);
 }
@@ -297,7 +297,8 @@ fn snapshot_of_unchanged_content_reports_that_nothing_was_created() {
 fn snapshot_after_a_real_change_creates_a_second_entry() {
     let (ws, als) = healthy_workspace();
     let first = "one".to_string();
-    run(|o, e| cmd_snapshot(&als, &Some(first), false, &ws.root, o, e));
+    let (_, result) = run(|o, e| cmd_snapshot(&als, &Some(first), false, &ws.root, o, e));
+    assert!(result.is_ok(), "the first snapshot must succeed: {:?}", result);
 
     // Change the project so the content hash differs.
     let mut xml = als_xml(&["Samples/kick.wav"]);
@@ -362,7 +363,8 @@ fn cue_is_added_and_listed() {
 #[test]
 fn cues_can_be_filtered_by_status() {
     let (ws, als) = healthy_workspace();
-    run(|o, e| cmd_cue(&als, "a cue", "1.1.1", None, None, &ws.root, o, e));
+    let (_, result) = run(|o, e| cmd_cue(&als, "a cue", "1.1.1", None, None, &ws.root, o, e));
+    assert!(result.is_ok(), "the cue must be added: {:?}", result);
 
     let (out, _) = run(|o, e| cmd_cues(&als, Some("pending"), &ws.root, o, e));
     assert!(out.all().contains("a cue"), "pending filter: {}", out.all());
@@ -393,7 +395,7 @@ fn cues_with_multibyte_text_do_not_panic() {
         "日本語のキュー文言 trikken",
         "é",
     ] {
-        let (out, result) = run(|o, e| cmd_cue(&als, text, "1.1.1", None, None, &ws.root, o, e));
+        let (_out, result) = run(|o, e| cmd_cue(&als, text, "1.1.1", None, None, &ws.root, o, e));
         assert!(result.is_ok(), "cue {:?} should be added: {:?}", text, result);
         let (list, list_result) = run(|o, e| cmd_cues(&als, None, &ws.root, o, e));
         assert!(list_result.is_ok(), "listing cues should work: {:?}", list_result);
@@ -431,7 +433,8 @@ fn cue_on_a_project_with_no_snapshots_errors_cleanly() {
 #[test]
 fn status_reports_a_healthy_project() {
     let (ws, als) = healthy_workspace();
-    run(|o, e| cmd_snapshot(&als, &None, false, &ws.root, o, e));
+    let (_, result) = run(|o, e| cmd_snapshot(&als, &None, false, &ws.root, o, e));
+    assert!(result.is_ok(), "the snapshot must succeed: {:?}", result);
 
     let (out, result) = run(|o, e| cmd_status(&als, &ws.root, o, e));
     assert!(result.is_ok(), "status should succeed: {:?}", result);
@@ -460,7 +463,8 @@ fn status_of_a_missing_project_errors_cleanly() {
 #[test]
 fn restore_rejects_an_unknown_hash_without_touching_the_project() {
     let (ws, als) = healthy_workspace();
-    run(|o, e| cmd_snapshot(&als, &None, false, &ws.root, o, e));
+    let (_, result) = run(|o, e| cmd_snapshot(&als, &None, false, &ws.root, o, e));
+    assert!(result.is_ok(), "the snapshot must succeed: {:?}", result);
     let before = fs::read(&als).unwrap();
 
     let (_, result) = run(|o, e| cmd_restore(&als, "deadbeef", &ws.root, o, e));
@@ -476,7 +480,8 @@ fn restore_rejects_an_unknown_hash_without_touching_the_project() {
 #[test]
 fn restore_of_head_after_a_snapshot_keeps_the_project_usable() {
     let (ws, als) = healthy_workspace();
-    run(|o, e| cmd_snapshot(&als, &None, false, &ws.root, o, e));
+    let (_, result) = run(|o, e| cmd_snapshot(&als, &None, false, &ws.root, o, e));
+    assert!(result.is_ok(), "the snapshot must succeed: {:?}", result);
     let (_, result) = run(|o, e| cmd_restore(&als, "HEAD", &ws.root, o, e));
     assert!(result.is_ok(), "restoring HEAD should work: {:?}", result);
     assert!(als.exists(), "the project should still exist after a restore");
@@ -511,9 +516,12 @@ fn collect_is_idempotent() {
     fs::write(&outside, b"RIFFoutside").unwrap();
     let als = ws.write_als(&als_xml(&["../outside.wav"]));
 
-    run(|o, e| cmd_collect(&als, &ws.root, o, e));
+    let (_, result) = run(|o, e| cmd_collect(&als, &ws.root, o, e));
+
+    assert!(result.is_ok(), "the command must succeed: {:?}", result);
     let first = fs::read(&als).unwrap();
-    run(|o, e| cmd_collect(&als, &ws.root, o, e));
+    let (_, result) = run(|o, e| cmd_collect(&als, &ws.root, o, e));
+    assert!(result.is_ok(), "the command must succeed: {:?}", result);
     let second = fs::read(&als).unwrap();
     assert_eq!(first, second, "a second collect should not change the project");
 }
@@ -552,7 +560,8 @@ fn projects_lists_projects_it_can_find() {
 #[test]
 fn push_to_a_dead_relay_fails_cleanly() {
     let (ws, als) = healthy_workspace();
-    run(|o, e| cmd_snapshot(&als, &None, false, &ws.root, o, e));
+    let (_, result) = run(|o, e| cmd_snapshot(&als, &None, false, &ws.root, o, e));
+    assert!(result.is_ok(), "the snapshot must succeed: {:?}", result);
     let (_, result) = run(|o, e| {
         cmd_push("127.0.0.1:1", &als, &ws.root, o, e)
     });
@@ -591,7 +600,7 @@ fn the_binary_runs_audit_and_reports_the_project() {
         eprintln!("skipping: the clavus binary was not built");
         return;
     };
-    let (ws, als) = healthy_workspace();
+    let (_ws, als) = healthy_workspace();
     let output = Command::new(&bin)
         .arg("audit")
         .arg(&als)
@@ -914,9 +923,11 @@ fn two_projects_keep_separate_chains() {
     fs::write(&beta, gzip_als("beta")).unwrap();
 
     let msg = "alpha work".to_string();
-    run(|o, e| cmd_snapshot(&alpha, &Some(msg), false, &root, o, e));
+    let (_, result) = run(|o, e| cmd_snapshot(&alpha, &Some(msg), false, &root, o, e));
+    assert!(result.is_ok(), "the command must succeed: {:?}", result);
     let msg = "beta work".to_string();
-    run(|o, e| cmd_snapshot(&beta, &Some(msg), false, &root, o, e));
+    let (_, result) = run(|o, e| cmd_snapshot(&beta, &Some(msg), false, &root, o, e));
+    assert!(result.is_ok(), "the command must succeed: {:?}", result);
 
     // Each project logs only its own snapshot.
     let (out, _) = run(|o, e| cmd_log(&alpha, &root, o, e));
@@ -946,12 +957,16 @@ fn a_second_project_does_not_become_a_child_of_the_first() {
     fs::write(&alpha, gzip_als("alpha")).unwrap();
     fs::write(&beta, gzip_als("beta")).unwrap();
 
-    run(|o, e| cmd_snapshot(&alpha, &None, false, &root, o, e));
-    run(|o, e| cmd_snapshot(&beta, &None, false, &root, o, e));
+    let (_, result) = run(|o, e| cmd_snapshot(&alpha, &None, false, &root, o, e));
+
+    assert!(result.is_ok(), "the command must succeed: {:?}", result);
+    let (_, result) = run(|o, e| cmd_snapshot(&beta, &None, false, &root, o, e));
+    assert!(result.is_ok(), "the command must succeed: {:?}", result);
 
     // Change alpha and snapshot it again.
     fs::write(&alpha, gzip_als("alpha v2")).unwrap();
-    run(|o, e| cmd_snapshot(&alpha, &None, false, &root, o, e));
+    let (_, result) = run(|o, e| cmd_snapshot(&alpha, &None, false, &root, o, e));
+    assert!(result.is_ok(), "the command must succeed: {:?}", result);
 
     // Alpha's chain has two entries; beta's still has one.
     let (out, _) = run(|o, e| cmd_log(&alpha, &root, o, e));
@@ -1061,7 +1076,7 @@ fn bwproject_with_embedded_sample(path: &Path, sample_name: &str, reference: &st
     );
     w.start_file("project.xml", opts).unwrap();
     w.write_all(xml.as_bytes()).unwrap();
-    w.start_file(&format!("samples/{}", sample_name), opts).unwrap();
+    w.start_file(format!("samples/{}", sample_name), opts).unwrap();
     w.write_all(b"RIFF----WAVEfake").unwrap();
 
     let cursor = w.finish().unwrap();
@@ -1261,7 +1276,9 @@ fn a_snapshot_of_one_project_cannot_be_restored_over_another() {
     fs::write(&alpha, gzip_als("alpha")).unwrap();
     fs::write(&beta, gzip_als("beta")).unwrap();
 
-    run(|o, e| cmd_snapshot(&alpha, &None, false, &root, o, e));
+    let (_, result) = run(|o, e| cmd_snapshot(&alpha, &None, false, &root, o, e));
+
+    assert!(result.is_ok(), "the command must succeed: {:?}", result);
 
     // The alpha snapshot's hash.
     let (out, _) = run(|o, e| cmd_log(&alpha, &root, o, e));

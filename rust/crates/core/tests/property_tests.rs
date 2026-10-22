@@ -332,7 +332,7 @@ proptest! {
         // repeat, so compare against the distinct set.
         let mut distinct: Vec<&String> = Vec::new();
         for r in &refs {
-            if !distinct.iter().any(|d| *d == r) {
+            if !distinct.contains(&r) {
                 distinct.push(r);
             }
         }

@@ -48,7 +48,7 @@ fn test_snapshot_chain_multiple() {
 // ─── Conflict detection ─────────────────────────────────────────────────────
 
 /// Build a relay-state-like structure and test is_ancestor
-fn make_chain<'a>(pairs: &[(&str, Option<&str>)]) -> HashMap<String, Snapshot> {
+fn make_chain(pairs: &[(&str, Option<&str>)]) -> HashMap<String, Snapshot> {
     pairs
         .iter()
         .map(|(h, p)| (h.to_string(), make_snap(h, *p)))

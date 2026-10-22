@@ -268,16 +268,16 @@ fn concurrent_clients_each_get_their_own_connection() {
                 if stream.read_exact(&mut data).is_err() {
                     return;
                 }
-                if let Ok(msg) = serde_json::from_slice::<SyncMsg>(&data) {
-                    if let SyncMsg::Hello { client_name, .. } = msg {
-                        let reply = format!(
-                            r#"{{"type":"event","project":"{}","event":{{"kind":"new_snapshot","project":"{}","hash":"h"}}}}"#,
-                            client_name, client_name
-                        );
-                        let _ = stream.write_all(&(reply.len() as u32).to_be_bytes());
-                        let _ = stream.write_all(reply.as_bytes());
-                        let _ = stream.flush();
-                    }
+                if let Ok(SyncMsg::Hello { client_name, .. }) =
+                    serde_json::from_slice::<SyncMsg>(&data)
+                {
+                    let reply = format!(
+                        r#"{{"type":"event","project":"{}","event":{{"kind":"new_snapshot","project":"{}","hash":"h"}}}}"#,
+                        client_name, client_name
+                    );
+                    let _ = stream.write_all(&(reply.len() as u32).to_be_bytes());
+                    let _ = stream.write_all(reply.as_bytes());
+                    let _ = stream.flush();
                 }
             });
         }

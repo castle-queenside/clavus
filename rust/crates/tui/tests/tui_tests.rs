@@ -706,7 +706,6 @@ fn pushing_includes_the_projects_cues() {
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// A relay that records the client name of every Hello it receives.

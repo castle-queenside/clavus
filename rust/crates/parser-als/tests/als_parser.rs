@@ -161,7 +161,7 @@ fn test_fuzz_very_long_attribute_value() {
 
 #[test]
 fn test_fuzz_very_long_element_content() {
-    let long_content = "x".repeat(1 * 1024 * 1024);
+    let long_content = "x".repeat(1024 * 1024);
     let xml = format!(
         "<?xml version=\"1.0\"?><LiveSet><AudioTrack><Name Value=\"Test\" />{}</AudioTrack></LiveSet>",
         long_content
