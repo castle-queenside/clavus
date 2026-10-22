@@ -692,6 +692,19 @@ pub fn cmd_collect(project: &Path, _clavus_root: &Path,
     // Copy outside-project samples into project/Samples/ and rewrite paths
     let collect = sample::collect_samples(project, &report)?;
 
+    if collect.repointed_in_project > 0 {
+        // Nothing was copied: the audio was already in the project and
+        // the set was still pointing at the machine it came from. That
+        // is a repair, and it has to be said — "nothing to collect"
+        // would leave the user thinking the set was left alone.
+        outln!(
+            out,
+            "\n✓ Pointed {} at the copies already in the project",
+            plural(collect.repointed_in_project, "reference", "references")
+        );
+        outln!(out, "  Nothing was copied — the samples were already there. Paths in .als rewritten — restart Ableton to reload");
+    }
+
     if !collect.copied.is_empty() {
         let is_bitwig = project
             .extension()
@@ -749,7 +762,7 @@ pub fn cmd_collect(project: &Path, _clavus_root: &Path,
         anyhow::bail!("{} sample(s) could not be collected", collect.failed.len());
     }
 
-    if collect.copied.is_empty() {
+    if collect.copied.is_empty() && collect.repointed_in_project == 0 {
         outln!(out, "\nNothing to collect.");
     }
 

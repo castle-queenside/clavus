@@ -779,6 +779,9 @@ pub fn collect_samples(
     let mut pointed_inside = 0usize;
     // Map: original path as stored in XML → new relative path (Unix-slash)
     let mut path_replacements: HashMap<String, String> = HashMap::new();
+    // The references that were pointed at a file the project already
+    // carried, rather than at a copy that had to be made.
+    let mut repointed_in_project = 0usize;
 
     // A `.bwproject` archive carries its own copies of the samples it
     // uses. Those can be extracted even though nothing is on disk.
@@ -949,8 +952,32 @@ pub fn collect_samples(
                 }
             }
         } else {
-            // Missing: file doesn't exist on disk and isn't in the archive
-            failed.push((ref_.path.clone(), "file not found on disk".to_string()));
+            // The file is not where the project says it is.
+            //
+            // It may still be *in* the project. A set that another tool
+            // collected keeps the old references — pointing at the
+            // machine the set came from — while the audio sits in the
+            // project's own sample folder. Re-pointing the reference
+            // at the file that is already there is the repair, and it
+            // is only safe when the name matches exactly one file.
+            let orig = ref_.path.to_string_lossy().replace('\\', "/");
+            match find_sample_in_project(project_root, &ref_.path, &ref_.filename) {
+                Ok(Some(local)) => {
+                    let rel = relative_to(&local, project_root);
+                    info!(
+                        "Pointed {} at the copy already in the project ({})",
+                        ref_.filename, rel
+                    );
+                    path_replacements.insert(orig, rel);
+                    repointed_in_project += 1;
+                }
+                Ok(None) => {
+                    failed.push((ref_.path.clone(), "file not found on disk".to_string()));
+                }
+                Err(e) => {
+                    failed.push((ref_.path.clone(), e.to_string()));
+                }
+            }
         }
     }
 
@@ -998,6 +1025,7 @@ pub fn collect_samples(
         added_to_bundle,
         pointed_inside,
         rewritten,
+        repointed_in_project,
     })
 }
 
@@ -1027,6 +1055,121 @@ pub struct CollectReport {
     /// Fewer than the number of collected samples means the project
     /// still points at some of the outside files.
     pub rewritten: usize,
+    /// The references that were pointed at a file the project already
+    /// carried.
+    ///
+    /// The set pointed at a path on another machine while the audio was
+    /// already in the project. Nothing was copied; the reference was
+    /// pointed at the file that was there.
+    pub repointed_in_project: usize,
+}
+
+/// Find the file a missing reference is really pointing at.
+///
+/// A set made on another machine points at a path that does not exist
+/// here. The audio may still be in the project — a set that another
+/// tool collected keeps the old references while the audio was
+/// brought along.
+///
+/// Two rules, in order:
+///
+/// 1. **The same path.** The reference is an absolute path on another
+///    machine, but it ends in the project's own layout. The longest
+///    tail of it that exists in the project is the file it means.
+/// 2. **The same name.** The collect that brought the audio along may
+///    have flattened the folder structure, so only the file's name
+///    matches. That is used only when exactly one file has the name —
+///    an ambiguity is refused rather than guessed at.
+fn find_sample_in_project(
+    project_root: &Path,
+    reference: &Path,
+    filename: &str,
+) -> Result<Option<PathBuf>, ClavusError> {
+    // 1. The same path, found by its tail.
+    let normalized = reference.to_string_lossy().replace('\\', "/");
+    let parts: Vec<&str> = normalized
+        .split('/')
+        .filter(|p| !p.is_empty() && *p != "." && *p != "..")
+        .collect();
+    // The longest tail first: the most specific one that exists is
+    // the one the reference means.
+    for start in (0..parts.len()).rev() {
+        let tail = parts[start..].join("/");
+        let candidate = project_root.join(&tail);
+        if candidate.is_file() {
+            return Ok(Some(candidate));
+        }
+    }
+
+    // 2. The same name, if there is exactly one file of that name —
+    //    or if the files of that name all hold the same audio.
+    let samples = project_root.join("Samples");
+    if !samples.is_dir() {
+        return Ok(None);
+    }
+
+    let mut found: Vec<PathBuf> = Vec::new();
+    let mut stack = vec![samples];
+    while let Some(dir) = stack.pop() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                error!("Failed to read {}: {}", dir.display(), e);
+                continue;
+            }
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            // A name that carries separators is a path in a name. Its
+            // last part is the file's real name.
+            let last = name.rsplit(['/', '\\']).next().unwrap_or(&name);
+            if name == filename || last == filename {
+                found.push(path);
+            }
+        }
+    }
+
+    if found.is_empty() {
+        return Ok(None);
+    }
+    if found.len() == 1 {
+        return Ok(found.pop());
+    }
+
+    // More than one file of that name. A collect run twice leaves the
+    // same audio in two places, and then the choice does not matter:
+    // the files hold the same bytes. Files that *differ* are a real
+    // ambiguity, and that is refused rather than guessed at.
+    if found.len() > 16 {
+        return Ok(None);
+    }
+    let first = found[0].clone();
+    for other in &found[1..] {
+        if !same_bytes(&first, other) {
+            return Ok(None);
+        }
+    }
+    // The shallowest one, so the reference reads the way the set's own
+    // folder does.
+    Ok(found.into_iter().min_by_key(|p| p.components().count()))
+}
+
+/// A path relative to a root, with the root taken off.
+///
+/// The path is used as the file system has it. A file whose *name*
+/// holds a separator — `Samples\Imported\loop.wav` — is one file, and
+/// writing it with `/` instead would point at a file that is not
+/// there.
+fn relative_to(path: &Path, root: &Path) -> String {
+    match path.strip_prefix(root) {
+        Ok(rel) => rel.to_string_lossy().to_string(),
+        Err(_) => path.to_string_lossy().to_string(),
+    }
 }
 
 /// Rewrite sample paths in an `.als` project file.

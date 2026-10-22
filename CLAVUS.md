@@ -78,6 +78,21 @@ So a library of a thousand sets is not duplicated a thousand times.
 Only the sets you actually snapshot cost anything, and only the bytes
 of those.
 
+**This is a change from the version before.** That one *did* import:
+it copied each project into `~/Clavus/Projects/<Name>/`, collected the
+samples into the copy, and worked there. The evidence survives in a
+backup — the recovered library holds copies whose sets still point at
+the machine they were made on (`C:/Users/chris/OneDrive/…`), with the
+audio beside them, and its own Live backups show the work continued
+there afterwards.
+
+That behaviour is recoverable but not reproducible by the current
+code: `clavus import-legacy` brings the old *history* across, and the
+library itself is copied back with `recover-clavus-library.sh`. The
+current design deliberately leaves your set alone. If you want a set
+made self-contained — its audio beside it and its paths pointing at
+that copy — `clavus collect` does exactly that, in place.
+
 A corollary: **a set on an unmounted drive is unreachable**, and the
 project's identity includes its path, so renaming the drive gives the
 sets a new identity. The blob store keeps the bytes, but the *pointer*
@@ -284,7 +299,7 @@ git add -A && git commit && git push
 - A store that cannot be read is an error, never an empty history
 - The TUI survives any terminal size, shows its selection, and notices
   a relay that has gone away
-- 503 tests passing, clippy clean, CI green
+- 509 tests passing, clippy clean, CI green
 
 ### Blocked ⛔
 | Item | Blocker |

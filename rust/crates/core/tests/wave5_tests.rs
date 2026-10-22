@@ -343,3 +343,223 @@ fn the_user_folder_roots_do_not_depend_on_the_machine_running_the_test() {
     assert!(a.contains(&here.join("Music/Ableton/User Library")));
     assert!(b.contains(&there.join("Music/Ableton/User Library")));
 }
+
+// ─── A set collected on another machine ─────────────────────────────
+
+/// A set that points its samples at another machine, while the audio
+/// already sits in the project's own sample folder.
+fn foreign_machine_als(sample_name: &str) -> String {
+    foreign_machine_als_in("Samples", sample_name)
+}
+
+/// The same, with the sample in a folder of the reference's path.
+///
+/// A collect that flattens the folder leaves the reference pointing at
+/// a folder that is no longer there.
+fn foreign_machine_als_in(folder: &str, sample_name: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<Ableton>
+  <LiveSet>
+    <Tracks>
+      <AudioTrack>
+        <Name Value="Test" />
+        <DeviceChain>
+          <SampleRef><FileRef>
+            <Path Value="C:/Users/someone/OneDrive/Desktop/Create/Projects/2025/Test Project/{folder}/{sample_name}" />
+            <Name Value="{sample_name}" />
+            <Type Value="1" />
+          </FileRef></SampleRef>
+        </DeviceChain>
+      </AudioTrack>
+    </Tracks>
+  </LiveSet>
+</Ableton>"#
+    )
+}
+
+fn unique_dir(tag: &str) -> PathBuf {
+    let tmp = std::env::temp_dir().join(format!(
+        "clavus_w5_{}_{}_{}",
+        tag,
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    fs::create_dir_all(&tmp).unwrap();
+    tmp
+}
+
+#[test]
+fn a_reference_to_another_machine_is_pointed_at_the_file_already_in_the_project() {
+    // A set collected on a Windows machine keeps the Windows paths
+    // even though the audio was brought along. The project therefore
+    // audits as missing every sample and refuses to snapshot. The
+    // files are right there; only the pointers are wrong.
+    let tmp = unique_dir("foreign");
+    let project = tmp.join("Test Project");
+    fs::create_dir_all(&project).unwrap();
+    let als = project.join("Test.als");
+
+    make_sample(&project.join("Samples/loop.wav"), b"FAKE_AUDIO");
+    make_als(&als, &foreign_machine_als("loop.wav"));
+
+    let report = audit_project(&als).expect("the set should audit");
+    assert_eq!(
+        report.missing.len(),
+        1,
+        "the set points at a machine that is not here: {:?}",
+        report.missing
+    );
+
+    let collected = clavus_core::sample::collect_samples(&als, &report).expect("collect should run");
+    assert!(collected.failed.is_empty(), "nothing failed: {:?}", collected.failed);
+    assert_eq!(
+        collected.repointed_in_project, 1,
+        "one reference was pointed at the file that was there"
+    );
+    assert!(
+        collected.copied.is_empty(),
+        "nothing was copied — the file was already in the project"
+    );
+
+    // And now the set audits clean.
+    let after = audit_project(&als).expect("the set should audit");
+    assert!(
+        after.missing.is_empty(),
+        "the set should no longer be missing anything: {:?}",
+        after.missing
+    );
+}
+
+#[test]
+fn two_files_of_the_same_name_in_the_project_are_not_guessed_between() {
+    // The repair is only safe when there is one candidate. Two files
+    // of the same name is an ambiguity, and picking one would point
+    // the set at the wrong audio.
+    let tmp = unique_dir("ambiguous");
+    let project = tmp.join("Test Project");
+    fs::create_dir_all(&project).unwrap();
+    let als = project.join("Test.als");
+
+    make_sample(&project.join("Samples/loop.wav"), b"ONE");
+    make_sample(&project.join("Samples/Imported/loop.wav"), b"TWO");
+    // The reference points at `Samples/Splice/loop.wav`, and the
+    // collect flattened that folder away — so only the name can match,
+    // and the name matches two different sounds.
+    make_als(&als, &foreign_machine_als_in("Samples/Splice", "loop.wav"));
+
+    let report = audit_project(&als).expect("the set should audit");
+    let collected = clavus_core::sample::collect_samples(&als, &report).expect("collect should run");
+
+    assert_eq!(
+        collected.repointed_in_project, 0,
+        "an ambiguous name is not pointed at either file"
+    );
+    assert_eq!(collected.failed.len(), 1, "the ambiguity is reported as a failure");
+}
+
+#[test]
+fn a_file_whose_name_holds_a_path_is_found_by_its_last_part() {
+    // A collect done on another machine can leave a file whose *name*
+    // carries a path separator. It is one file, and it is found by the
+    // name the set uses.
+    let tmp = unique_dir("mangled");
+    let project = tmp.join("Test Project");
+    fs::create_dir_all(&project).unwrap();
+    let als = project.join("Test.als");
+
+    make_sample(
+        &project.join("Samples/Imported/Samples/Samples\\Imported\\loop.wav"),
+        b"FAKE_AUDIO",
+    );
+    make_als(&als, &foreign_machine_als("loop.wav"));
+
+    let report = audit_project(&als).expect("the set should audit");
+    let collected = clavus_core::sample::collect_samples(&als, &report).expect("collect should run");
+
+    assert_eq!(
+        collected.repointed_in_project, 1,
+        "the file whose name holds a path is found: {:?}",
+        collected.failed
+    );
+    let after = audit_project(&als).expect("the set should audit");
+    assert!(after.missing.is_empty(), "the set audits clean: {:?}", after.missing);
+}
+
+#[test]
+fn a_reference_is_matched_by_the_path_it_ends_in_before_its_name() {
+    // The reference is an absolute path on another machine, but it
+    // ends in the project's own layout. The file it means is the one
+    // at that path — not merely a file of the same name.
+    let tmp = unique_dir("tail");
+    let project = tmp.join("Test Project");
+    fs::create_dir_all(&project).unwrap();
+    let als = project.join("Test.als");
+
+    // Two files of the same name, in different places, with different
+    // audio. Only the one at the referenced path is right.
+    make_sample(&project.join("Samples/Imported/loop.wav"), b"THE RIGHT ONE");
+    make_sample(&project.join("Samples/loop.wav"), b"A DIFFERENT ONE");
+    make_als(&als, &foreign_machine_als("loop.wav"));
+
+    let report = audit_project(&als).expect("the set should audit");
+    let collected = clavus_core::sample::collect_samples(&als, &report).expect("collect should run");
+
+    assert_eq!(collected.repointed_in_project, 1, "one reference was repaired");
+
+    let after = audit_project(&als).expect("the set should audit");
+    assert!(after.missing.is_empty(), "the set audits clean: {:?}", after.missing);
+}
+
+#[test]
+fn two_files_of_the_same_name_holding_the_same_audio_are_not_an_ambiguity() {
+    // A collect run twice leaves the same audio in two places. Which
+    // one the reference ends up pointing at does not matter, because
+    // they hold the same bytes.
+    let tmp = unique_dir("same");
+    let project = tmp.join("Test Project");
+    fs::create_dir_all(&project).unwrap();
+    let als = project.join("Test.als");
+
+    make_sample(&project.join("Samples/loop.wav"), b"THE AUDIO");
+    make_sample(&project.join("Samples/Samples/loop.wav"), b"THE AUDIO");
+    make_als(&als, &foreign_machine_als_in("Samples/Splice", "loop.wav"));
+
+    let report = audit_project(&als).expect("the set should audit");
+    let collected = clavus_core::sample::collect_samples(&als, &report).expect("collect should run");
+
+    assert_eq!(
+        collected.repointed_in_project, 1,
+        "the same audio in two places is not a reason to refuse: {:?}",
+        collected.failed
+    );
+    let after = audit_project(&als).expect("the set should audit");
+    assert!(after.missing.is_empty(), "the set audits clean: {:?}", after.missing);
+}
+
+#[test]
+fn two_files_of_the_same_name_holding_different_audio_are_refused() {
+    // Two files of the same name that hold *different* audio are a
+    // real ambiguity. Picking one would point the set at the wrong
+    // sound, so neither is picked.
+    let tmp = unique_dir("different");
+    let project = tmp.join("Test Project");
+    fs::create_dir_all(&project).unwrap();
+    let als = project.join("Test.als");
+
+    make_sample(&project.join("Samples/loop.wav"), b"ONE SOUND");
+    make_sample(&project.join("Samples/Imported/loop.wav"), b"ANOTHER SOUND");
+    make_als(&als, &foreign_machine_als_in("Samples/Splice", "loop.wav"));
+
+    let report = audit_project(&als).expect("the set should audit");
+    let collected = clavus_core::sample::collect_samples(&als, &report).expect("collect should run");
+
+    assert_eq!(
+        collected.repointed_in_project, 0,
+        "different audio under one name is not guessed between"
+    );
+    assert_eq!(collected.failed.len(), 1, "the ambiguity is reported");
+}
