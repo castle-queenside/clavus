@@ -21,6 +21,14 @@ pub fn handle_key(key: &KeyEvent, app: &mut App) -> bool {
 
     match (key.code, key.modifiers) {
         // ── Quit / back ──────────────────────────────────
+        //
+        // Ctrl-C quits. The terminal is in raw mode, so the interrupt
+        // arrives as an ordinary key and never reaches the shell: a
+        // user who pressed Ctrl-C and saw the app carry on would think
+        // the program had hung.
+        (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+            return true;
+        }
         (KeyCode::Esc, _) | (KeyCode::Char('q'), KeyModifiers::NONE) => {
             if app.screen == Screen::ProjectList {
                 return true;
@@ -224,6 +232,10 @@ fn self_len(app: &App) -> usize {
 /// Handle a key press while a text field has the focus.
 fn handle_text_input(key: &KeyEvent, app: &mut App) -> bool {
     match (key.code, key.modifiers) {
+        // Ctrl-C quits from anywhere, even from a text field.
+        (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+            return true;
+        }
         (KeyCode::Esc, _) => {
             // Cancelling throws the typed text away — it used to stay in
             // the buffer, so the next cue started with the text of the

@@ -485,14 +485,17 @@ fn uppercase_q_does_not_exit() {
 }
 
 #[test]
-fn modified_keys_are_ignored() {
-    // Ctrl-C should not be treated as 'c' (no accidental snapshot).
+fn ctrl_c_quits_without_creating_a_snapshot() {
+    // The terminal is in raw mode, so the interrupt arrives as an
+    // ordinary key. It must not be treated as 'c' (no accidental
+    // snapshot) and it must not be swallowed: the user who pressed it
+    // expects the app to end.
     let mut h = Harness::with_project();
     press(&mut h.app, KeyCode::Down);
     press(&mut h.app, KeyCode::Enter);
     let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-    assert!(!handle_key(&key, &mut h.app));
-    assert!(h.app.info.is_none());
+    assert!(handle_key(&key, &mut h.app), "Ctrl-C must quit the app");
+    assert!(h.app.info.is_none(), "Ctrl-C must not snapshot anything");
 }
 
 // ─── App state ──────────────────────────────────────────────────────────────

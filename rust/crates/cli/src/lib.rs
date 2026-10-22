@@ -254,11 +254,14 @@ pub fn cmd_snapshot(
 /// missing file as an error for `audit`, `status` and `snapshot`, so
 /// the behaviour was inconsistent.
 fn ensure_project_exists(project: &Path) -> anyhow::Result<()> {
-    if project.exists() {
-        return Ok(());
-    }
+    // A directory exists, so the order of the checks matters: a folder
+    // of projects is not a project, and saying "no snapshots yet" about
+    // it would be a lie about a project that was never there.
     if project.is_dir() {
         anyhow::bail!("{} is a directory, not a project file", project.display());
+    }
+    if project.exists() {
+        return Ok(());
     }
     anyhow::bail!("the project {} does not exist", project.display());
 }
@@ -290,7 +293,17 @@ pub fn default_author() -> String {
             }
         }
     }
-    "cli".to_string()
+    // A machine with no user name — a container, a cron job, CI — still
+    // needs a name to sign a note with. The host name says who is
+    // speaking; the word "cli" said nothing at all and looked like a
+    // person's name in a list of people.
+    if let Ok(host) = std::env::var("HOSTNAME") {
+        let host = host.trim().to_string();
+        if !host.is_empty() {
+            return host;
+        }
+    }
+    "unknown".to_string()
 }
 
 /// Check that a cue position is a `bars.beats.sixteenths` position.
@@ -423,14 +436,33 @@ pub fn cmd_cues(project: &Path, status: Option<&str>, clavus_root: &Path,
     } else {
         for c in &cues {
             let text = truncate(&c.text, 22);
-            outln!(out,
-                "  {}  [{:9}]  {:22}  @ {:>8}  {}",
-                truncate(&c.id, 8),
-                c.status.as_str(),
-                text,
-                c.position,
-                c.author
-            );
+            // The track is part of the note: a note that says "drop the
+            // bass here" is useless without knowing which track it is
+            // on. The column is only shown when a note carries one, so
+            // the common case stays quiet.
+            let track = match c.track_name.as_str().trim() {
+                t if !t.is_empty() => Some(truncate(t, 14)),
+                _ => None,
+            };
+            match track {
+                Some(track) => outln!(out,
+                    "  {}  [{:9}]  {:22}  @ {:>8}  {:14}  {}",
+                    truncate(&c.id, 8),
+                    c.status.as_str(),
+                    text,
+                    c.position,
+                    track,
+                    c.author
+                ),
+                None => outln!(out,
+                    "  {}  [{:9}]  {:22}  @ {:>8}  {}",
+                    truncate(&c.id, 8),
+                    c.status.as_str(),
+                    text,
+                    c.position,
+                    c.author
+                ),
+            }
         }
         outln!(out, "\n{}", plural(cues.len(), "cue", "cues"));
     }
@@ -534,23 +566,28 @@ fn print_sample_summary(report: &clavus_core::SampleAuditReport, out: &mut dyn W
 
 pub fn cmd_audit(project: &Path, strict: bool,
     out: &mut dyn Write,
-    err: &mut dyn Write,
+    _err: &mut dyn Write,
 ) -> anyhow::Result<()> {
     let report = sample::audit_project(project)?;
 
     if report.is_clean() {
         print_sample_summary(&report, out);
     } else {
+        // The audit's *result* belongs on stdout, like the clean
+        // report and like `clavus status`. A script that reads stdout
+        // must not find it empty exactly when there is something to
+        // say. Errors — a project that could not be read — go to
+        // stderr.
         if !report.missing.is_empty() {
-            errln!(err, "✗ {} missing:", report.missing.len());
+            outln!(out, "✗ {} missing:", report.missing.len());
             for s in &report.missing {
-                errln!(err, "  {}", s.path.display());
+                outln!(out, "  {}", s.path.display());
             }
         }
         if !report.outside_project.is_empty() {
-            errln!(err, "✗ {} outside project:", report.outside_project.len());
+            outln!(out, "✗ {} outside project:", report.outside_project.len());
             for s in &report.outside_project {
-                errln!(err, "  {}", s.path.display());
+                outln!(out, "  {}", s.path.display());
             }
         }
         if strict {
@@ -928,13 +965,32 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
                             ),
                         },
                         None => {
-                            outln!(out,
-                                "  ⚠ The relay's history does not extend yours — HEAD was left at {}",
-                                local_head
-                                    .as_deref()
-                                    .map(|h| clavus_core::short(h, 8))
-                                    .unwrap_or_else(|| "nothing".to_string())
-                            );
+                            // The relay offering the snapshot we already
+                            // have is not a divergence: nothing is wrong
+                            // with the history, it simply does not move.
+                            // Warning about it would send the user to
+                            // fix a problem that does not exist.
+                            let same = local_head
+                                .as_deref()
+                                .map(|h| candidates.iter().any(|c| c == h))
+                                .unwrap_or(false);
+                            if same {
+                                outln!(out,
+                                    "  ✓ The relay's history is the one you already have — HEAD stays at {}",
+                                    local_head
+                                        .as_deref()
+                                        .map(|h| clavus_core::short(h, 8))
+                                        .unwrap_or_else(|| "nothing".to_string())
+                                );
+                            } else {
+                                outln!(out,
+                                    "  ⚠ The relay's history does not extend yours — HEAD was left at {}",
+                                    local_head
+                                        .as_deref()
+                                        .map(|h| clavus_core::short(h, 8))
+                                        .unwrap_or_else(|| "nothing".to_string())
+                                );
+                            }
                         }
                     }
                 }
@@ -999,10 +1055,18 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
         // "Already up to date" was also printed when the relay had never
         // heard of this project, which reads as if the relay had checked
         // and found nothing to give. The honest wording covers both.
-        outln!(out, "✓ Up to date — the relay had nothing new for this project");
+        if pulled_cues > 0 {
+            outln!(
+                out,
+                "✓ Up to date — the relay had no new snapshots for this project; {} imported",
+                plural(pulled_cues, "cue", "cues")
+            );
+        } else {
+            outln!(out, "✓ Up to date — the relay had nothing new for this project");
+        }
     }
 
-    if pulled_cues > 0 {
+    if pulled_cues > 0 && pulled_count > 0 {
         outln!(out, "✓ Imported {} new cue(s)", pulled_cues);
     }
 
@@ -1118,6 +1182,8 @@ pub fn cmd_restore(project: &Path, hash_arg: &str, clavus_root: &Path,
 ) -> anyhow::Result<()> {
     use clavus_core::blob::BlobStore;
     use clavus_core::snapshot::SnapshotStore;
+
+    ensure_project_exists(project)?;
 
     let id = clavus_core::project::ProjectId::new(project);
     let name = id.name.clone();
