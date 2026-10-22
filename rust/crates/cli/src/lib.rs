@@ -128,9 +128,9 @@ pub enum Commands {
     },
     /// List all Ableton/Bitwig projects found in standard locations
     Projects {
-        /// Search recursively into subdirectories
-        #[arg(short, long)]
-        recursive: bool,
+        /// Only look at the top level of each location
+        #[arg(long)]
+        no_recursive: bool,
     },
     /// Show project health at a glance: snapshots, samples and cues
     Status {

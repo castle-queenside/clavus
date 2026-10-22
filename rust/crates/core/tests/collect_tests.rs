@@ -96,8 +96,17 @@ fn test_audit_outside_project() {
     let tmp = TempDir::new().unwrap();
     let project_dir = tmp.path().to_path_buf();
 
-    // Sample lives OUTSIDE the project folder — use /tmp for guaranteed external location
-    let outside_path = PathBuf::from("/tmp/clavus_collect_ext_kick.wav");
+    // Sample lives OUTSIDE the project folder — a sibling path in the
+    // system temp dir. The name is unique so two test runs happening at
+    // once cannot write over each other's file.
+    let outside_path = std::env::temp_dir().join(format!(
+        "clavus_collect_ext_kick_{}_{}.wav",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
     make_sample(&outside_path, b"FAKE_AUDIO");
 
     let als_path = project_dir.join("Test.als");

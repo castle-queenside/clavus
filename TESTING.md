@@ -32,7 +32,7 @@
 | Core unit tests | `crates/core/src/**` | 33 | 🟢 |
 | Sync unit tests (blob transfer) | `crates/sync/src/**` | 10 | 🟢 |
 
-**477 tests passing, 0 failed, 0 ignored.**
+**478 tests passing, 0 failed, 0 ignored.**
 
 Legend: 🟢 good  🟡 partial  🟠 manual only  🔴 missing
 
@@ -180,6 +180,8 @@ real ones. Each now has a regression test:
 | One project could be restored over another | A snapshot lookup fell back to "every snapshot we know about", and the blob store is shared — so `restore Beta.als <alpha-hash>` wrote Alpha's contents into Beta.als | A lookup only considers snapshots whose file name says they belong to that project |
 | The relay stored hashes no client could file | The relay accepted a hash of any length, but a client can only file a 64-character digest | The relay refuses a hash or parent that is not exactly 64 hex characters |
 | A Bitwig archive's samples looked missing | A `.bwproject` exported from Bitwig keeps a copy of every sample, but `project.xml` still points at the original machine's absolute paths — so the samples looked lost | The audit sees what the archive holds and reports those samples as present; `collect` extracts them and rewrites the reference inside the archive |
+| The CLI and the TUI disagreed about the same folder | `clavus projects` looked only at the top level of each location while the TUI always looked into sub-folders, so a set in `~/Music/Archive/2013` was visible in the TUI and invisible to the CLI | The command scans into sub-folders by default, the same way the TUI does; `--no-recursive` asks for the top level alone |
+| A test run could fail for no reason | The parser tests wrote to fixed names in the system temp dir, so two runs happening at once wrote the same file and deleted it out from under each other | Every throwaway file gets a name built from the process id, the clock and a counter |
 
 ---
 

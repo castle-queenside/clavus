@@ -751,10 +751,16 @@ Scans `~/Music` and `~/Documents` for Ableton/Bitwig projects.
 **Test:**
 ```bash
 clavus projects
-clavus projects --recursive
+clavus projects --no-recursive
 ```
 
 **Expected:** A list of project names, last-modified times, and full paths.
+
+**What to watch for:** The scan looks into sub-folders by default — the
+same way the TUI does. Your sets are usually in
+`~/Music/Archive/2013`, not in `~/Music` itself, and a command that
+found none of them was looking in the wrong place. `--no-recursive`
+scans only the top level.
 
 ### 8.2 `clavus status`
 

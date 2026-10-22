@@ -102,10 +102,16 @@ fn main() -> anyhow::Result<()> {
             let project = resolve_project(&project, cli.dir.as_deref());
             cmd_pull(&relay, &project, &clavus_root, &mut stdout, &mut stderr)
         }
-        Commands::Projects { recursive } => {
+        Commands::Projects { no_recursive } => {
             // `cli.dir` is None unless the user asked for a specific
             // directory; otherwise the standard locations are scanned.
-            cmd_projects(recursive, cli.dir.as_deref(), &mut stdout, &mut stderr)
+            //
+            // The scan is recursive by default, because that is what the
+            // TUI does. A user whose sets live in `~/Music/Archive/2013`
+            // saw every one of them in the TUI and none of them in
+            // `clavus projects`, which told them the two disagreed
+            // about the same folder.
+            cmd_projects(!no_recursive, cli.dir.as_deref(), &mut stdout, &mut stderr)
         }
         Commands::Status { project } => {
             let project = resolve_project(&project, cli.dir.as_deref());

@@ -1049,6 +1049,68 @@ fn projects_finds_files_with_an_uppercase_extension() {
     assert!(out.all().contains("Loud"), "{}", out.all());
 }
 
+#[test]
+fn projects_finds_a_project_in_a_subfolder_by_default() {
+    // Regression: the TUI always looked into sub-folders, and
+    // `clavus projects` did not. A user whose sets live in
+    // `~/Music/Archive/2013` saw every one of them in the TUI and was
+    // told by the CLI that it had none — the two disagreed about the
+    // same folder, and the CLI's answer was the wrong one.
+    //
+    // The default lives in the argument parsing, so the real binary is
+    // what has to be driven here.
+    let Some(bin) = binary() else {
+        eprintln!("skipping: the clavus binary was not built");
+        return;
+    };
+
+    let tmp = TempDir::new().unwrap();
+    let scan = tmp.path().join("scan");
+    fs::create_dir_all(scan.join("Archive").join("2013")).unwrap();
+    fs::write(
+        scan.join("Archive").join("2013").join("Old.als"),
+        gzip_als("old"),
+    )
+    .unwrap();
+
+    // The default: a deep scan, the same one the TUI does.
+    let output = Command::new(&bin)
+        .arg("--dir")
+        .arg(&scan)
+        .arg("projects")
+        .output()
+        .expect("run clavus projects");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        text.contains("Old"),
+        "the default scan must reach into sub-folders, like the TUI: {}",
+        text
+    );
+
+    // The top level alone is still available when it is asked for.
+    let output = Command::new(&bin)
+        .arg("--dir")
+        .arg(&scan)
+        .arg("projects")
+        .arg("--no-recursive")
+        .output()
+        .expect("run clavus projects --no-recursive");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !text.contains("Old"),
+        "a shallow scan must not reach into the sub-folder: {}",
+        text
+    );
+}
+
 // ─── Bitwig archives with embedded samples ────────────────────────────────
 
 /// Build a `.bwproject` whose project.xml points at an absolute path but

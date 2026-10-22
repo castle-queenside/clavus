@@ -15,6 +15,32 @@ fn no_samples_path() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../fixtures/no_samples.bwproject")
 }
 
+/// A temp file name that no other test — in this process or in any other
+/// one — can collide with.
+///
+/// The name used to be a fixed string. Two test runs happening at once
+/// (a `cargo test` and a pre-commit hook's `cargo test`, say) then wrote
+/// the same file, and whichever finished first deleted it out from under
+/// the other. The other one failed with "No such file or directory" and
+/// looked like a parser bug. The process id and the clock make the name
+/// unique across processes; the counter makes it unique within one.
+fn unique_name(stem: &str) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static CTR: AtomicU64 = AtomicU64::new(0);
+    let n = CTR.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{}_{}_{}_{}", stem, std::process::id(), nanos, n)
+}
+
+/// A temp path for a throwaway `.bwproject`.
+fn temp_path(stem: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("{}.bwproject", unique_name(stem)))
+}
+
 // ─── Fixture parsing ─────────────────────────────────────────────────────────
 
 #[test]
@@ -127,7 +153,7 @@ fn test_nonexistent_file_returns_error() {
 
 #[test]
 fn test_not_a_zip_returns_error() {
-    let tmp = std::env::temp_dir().join("clavus_bw_notazip.bwproject");
+    let tmp = temp_path("clavus_bw_notazip");
     std::fs::write(&tmp, b"this is definitely not a zip archive").unwrap();
     let result = BitwigParser::new(&tmp);
     let _ = std::fs::remove_file(&tmp);
@@ -136,7 +162,7 @@ fn test_not_a_zip_returns_error() {
 
 #[test]
 fn test_empty_file_returns_error() {
-    let tmp = std::env::temp_dir().join("clavus_bw_empty.bwproject");
+    let tmp = temp_path("clavus_bw_empty");
     std::fs::write(&tmp, b"").unwrap();
     let result = BitwigParser::new(&tmp);
     let _ = std::fs::remove_file(&tmp);
@@ -146,7 +172,7 @@ fn test_empty_file_returns_error() {
 #[test]
 fn test_zip_without_project_xml_returns_error() {
     // A valid ZIP, but no project.xml inside.
-    let tmp = std::env::temp_dir().join("clavus_bw_noproject.bwproject");
+    let tmp = temp_path("clavus_bw_noproject");
     {
         use zip::write::SimpleFileOptions;
         use zip::ZipWriter;
@@ -167,7 +193,7 @@ fn test_zip_without_project_xml_returns_error() {
 #[test]
 fn test_truncated_zip_returns_error() {
     let bytes = std::fs::read(fixture_path()).unwrap();
-    let tmp = std::env::temp_dir().join("clavus_bw_truncated.bwproject");
+    let tmp = temp_path("clavus_bw_truncated");
     // Keep the first half — the central directory is gone, so it must fail.
     std::fs::write(&tmp, &bytes[..bytes.len() / 2]).unwrap();
     let result = BitwigParser::new(&tmp);
@@ -182,7 +208,7 @@ fn test_corrupt_zip_bytes_returns_error() {
     for i in (bytes.len() / 3)..(bytes.len() / 3 + 64) {
         bytes[i] = bytes[i].wrapping_add(0xFF);
     }
-    let tmp = std::env::temp_dir().join("clavus_bw_corrupt.bwproject");
+    let tmp = temp_path("clavus_bw_corrupt");
     std::fs::write(&tmp, &bytes).unwrap();
     let result = BitwigParser::new(&tmp);
     let _ = std::fs::remove_file(&tmp);
@@ -192,7 +218,7 @@ fn test_corrupt_zip_bytes_returns_error() {
 
 #[test]
 fn test_binary_garbage_returns_error() {
-    let tmp = std::env::temp_dir().join("clavus_bw_binary.bwproject");
+    let tmp = temp_path("clavus_bw_binary");
     std::fs::write(&tmp, vec![0x00u8, 0xFF, 0xFE, 0x42, 0x00, 0x7F, 0x80]).unwrap();
     let result = BitwigParser::new(&tmp);
     let _ = std::fs::remove_file(&tmp);
@@ -202,7 +228,7 @@ fn test_binary_garbage_returns_error() {
 #[test]
 fn test_project_xml_with_invalid_utf8_returns_error() {
     // Valid ZIP, but project.xml contains invalid UTF-8.
-    let tmp = std::env::temp_dir().join("clavus_bw_badutf8.bwproject");
+    let tmp = temp_path("clavus_bw_badutf8");
     {
         use zip::write::SimpleFileOptions;
         use zip::ZipWriter;
@@ -223,7 +249,7 @@ fn test_project_xml_with_invalid_utf8_returns_error() {
 #[test]
 fn test_malformed_xml_in_project_xml_does_not_panic() {
     // Valid ZIP, project.xml is not well-formed XML.
-    let tmp = std::env::temp_dir().join("clavus_bw_badxml.bwproject");
+    let tmp = temp_path("clavus_bw_badxml");
     {
         use zip::write::SimpleFileOptions;
         use zip::ZipWriter;
@@ -242,7 +268,7 @@ fn test_malformed_xml_in_project_xml_does_not_panic() {
 #[test]
 fn test_nested_project_xml_path_is_found() {
     // Some Bitwig versions nest project.xml inside a folder in the archive.
-    let tmp = std::env::temp_dir().join("clavus_bw_nested.bwproject");
+    let tmp = temp_path("clavus_bw_nested");
     {
         use zip::write::SimpleFileOptions;
         use zip::ZipWriter;

@@ -81,11 +81,24 @@ fn parse_project(xml: &str) -> clavus_core::types::Project {
     parser.project
 }
 
-/// Simple counter for unique temp file names (safe: tests run single-threaded)
+/// A temp file name that no other test — in this process or in any other
+/// one — can collide with.
+///
+/// The name used to be a counter alone, which was unique only within one
+/// process. Two test runs happening at once (a `cargo test` and a
+/// pre-commit hook's `cargo test`, say) then wrote the same file, and
+/// whichever finished first deleted it out from under the other. The
+/// process id and the clock make the name unique across processes.
 fn uuid_simple() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
     static CTR: AtomicU64 = AtomicU64::new(0);
-    format!("f{}", CTR.fetch_add(1, Ordering::Relaxed))
+    let n = CTR.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("f{}_{}_{}", std::process::id(), nanos, n)
 }
 
 #[test]
@@ -196,7 +209,7 @@ fn test_parse_returns_err_for_nonexistent_file() {
 
 #[test]
 fn test_parse_returns_err_for_plain_file_without_gzip() {
-    let tmp = std::env::temp_dir().join("clavus_not_gzip.als");
+    let tmp = std::env::temp_dir().join(format!("clavus_not_gzip_{}.als", uuid_simple()));
     std::fs::write(&tmp, b"this is not a gzip file").ok();
     let result = AlsParser::new(&tmp);
     let _ = std::fs::remove_file(&tmp);
