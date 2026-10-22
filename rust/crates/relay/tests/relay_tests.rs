@@ -279,3 +279,33 @@ fn test_relaystate_conflict_on_divergent_chain() {
     // Either 0 or 1 conflict — depends on project path matching
     assert!(c2.len() <= 1, "expected ≤1 conflict, got {:?}", c2);
 }
+
+// ─── The head only moves forward ─────────────────────────────────────────
+//
+// Regression: a client that pushed older history dragged the relay's
+// head back to the older snapshot. The relay's record of the project's
+// tip went backwards, and the next client to pull was offered the older
+// history as if it were the newest.
+
+#[test]
+fn an_older_push_does_not_move_the_head_backwards() {
+    let tmp = TempDir::new().unwrap();
+    let mut state = RelayState::new(tmp.path().to_path_buf()).unwrap();
+
+    let a = "a".repeat(64);
+    let b = "b".repeat(64);
+
+    // The chain a → b.
+    let conflicts = state.store(vec![make_snap(&a, None), make_snap(&b, Some(&a))], vec![]);
+    assert!(conflicts.is_empty(), "the first push is not a conflict");
+    assert_eq!(state.head_of("test.als::tmp"), Some(&b), "the head is b");
+
+    // A collaborator whose own head is still at a pushes a again.
+    let conflicts = state.store(vec![make_snap(&a, None)], vec![]);
+    assert!(conflicts.is_empty(), "older history is not a conflict");
+    assert_eq!(
+        state.head_of("test.als::tmp"),
+        Some(&b),
+        "the head must stay at the newest snapshot"
+    );
+}

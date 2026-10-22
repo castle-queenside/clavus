@@ -281,6 +281,11 @@ impl RelayState {
         self.snapshots.get(project)?.get(hash)
     }
 
+    /// The head of a project: the newest snapshot the relay holds.
+    pub fn head_of(&self, project: &str) -> Option<&String> {
+        self.heads.get(project)
+    }
+
     /// The projects the relay knows under a wire name.
     ///
     /// A wire name is a file name. Two projects can share one, and
@@ -588,8 +593,32 @@ impl RelayState {
                 project_hashes.push(snap_hash.clone());
             }
 
-            // Update HEAD for this project to the latest snapshot
-            self.heads.insert(project_name, snap_hash);
+            // The head only ever moves *forward*. A client that pushes
+            // older history — a collaborator whose own HEAD is behind —
+            // must not drag the relay's head back to an older snapshot:
+            // the relay's record of the project's tip would go
+            // backwards, and the next client to pull would be offered
+            // the older history as if it were the newest.
+            let move_forward = match self.heads.get(&project_name) {
+                None => true,
+                Some(current) => {
+                    if current == &snap_hash {
+                        false
+                    } else if self.is_ancestor(current, &snap_hash, &project_name) {
+                        // The relay's head is an ancestor of the
+                        // incoming snapshot: the incoming one is newer.
+                        true
+                    } else {
+                        // The incoming snapshot is older (or unrelated,
+                        // which the conflict check above has already
+                        // refused). The head stays where it is.
+                        false
+                    }
+                }
+            };
+            if move_forward {
+                self.heads.insert(project_name, snap_hash);
+            }
         }
 
         // The key the client's notes belong under.
