@@ -191,7 +191,7 @@ One person runs `clavus relay`. Others run `clavus tui`, press `c` to connect, t
 | Cue markers | ✅ Pending / Resolved / Skipped / Deferred / Archived |
 | Relay sync | ✅ TCP framed JSON, push/pull/connect, isolated per project |
 | TUI | ✅ Ratatui, full keyboard nav |
-| CI | ✅ GitHub Actions, clippy clean, 435 tests |
+| CI | ✅ GitHub Actions, clippy clean, 477 tests |
 | Project isolation | ✅ Two same-named projects never share a chain |
 | Windows | 🔜 Linux binary first |
 
@@ -205,7 +205,7 @@ MIT licensed. Contributions welcome.
 git clone https://github.com/castle-queenside/clavus
 cd clavus/rust
 cargo test --all
-cargo clippy --all -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 See [CLAVUS.md](CLAVUS.md) for full architecture documentation.

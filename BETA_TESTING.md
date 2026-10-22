@@ -519,6 +519,15 @@ clavus tui
 - Projects in **sub-folders** must appear. A project the CLI can see
   but the TUI cannot is a bug.
 - A project that **cannot be parsed** must show an error, not vanish.
+- Two projects with the **same file name** must be told apart. The
+  list shows the folder each one lives in; two rows both called "Song"
+  with nothing to tell them apart is a bug.
+- The **snapshot count** must match `clavus log`. Take a snapshot in
+  another terminal while the TUI is open, move through the list, and
+  the count must change.
+- A **directory** whose name ends in `.als` or `.bwproject` must not
+  be listed as a project. The CLI does not list it; the TUI must not
+  either.
 
 ### 6.1c Leaving the TUI
 
@@ -530,6 +539,52 @@ back. The same happens with `q` from the project list.
 **What to watch for:** The TUI is in raw mode, so Ctrl-C arrives as an
 ordinary key. If the app carries on, the interrupt was swallowed and
 the program looks hung. Report it.
+
+### 6.1d A Window That Is Too Small
+
+**Test:** Start the TUI and shrink the terminal to a few rows and
+columns — or resize it while the TUI is running.
+
+**Expected:** The TUI says the window is too small and what size it
+needs. It must not die with a bare exit code and no message, and it
+must not leave the terminal in the alternate screen.
+
+**What to watch for:** Anything the TUI prints on the way out has to
+be readable. A panic that says nothing is a bug.
+
+### 6.1e A Relay That Goes Away
+
+**Test:** Connect the TUI to a relay (`s`, then `c`), then kill the
+relay process and wait a few seconds.
+
+**Expected:** The TUI says the connection was lost. A screen that
+still shows "connected" — with the filled circle and the relay
+address — is a bug: the user would believe their work was synced when
+it was not.
+
+### 6.1f Pushing Notes Without a Snapshot
+
+**Test:** Make a note on a project that has no snapshot, open the sync
+screen and press `P`.
+
+**Expected:** The notes are sent. The CLI does this too, and a user
+who only writes notes must be able to share them.
+
+### 6.1g Typing a Relay Address
+
+**Test:** On the sync screen press `r` and type an address.
+
+**Expected:** The field starts **empty**, so what you type is the
+address. If the old address is still in the field, what you type is
+appended to it and the connection fails with a nonsense address.
+
+### 6.1h Esc From the Sync Screen
+
+**Test:** Open the sync screen from the project list, press `Esc`.
+
+**Expected:** You go back to the project list. Open it from a project
+instead, and `Esc` takes you back to that project. The back step must
+return you to the screen you came from.
 
 ### 6.2 Navigate the TUI
 
@@ -917,6 +972,48 @@ clavus restore /path/to/my/projects
 file. It must **not** say "no snapshots yet" — that would be a report
 about a project that was never there.
 
+### 9.0e Two Projects Outside the Home Directory
+
+**Setup:** The same case as 9.0c, but on a disk outside the home
+directory — an external drive, a network share:
+
+```
+/Volumes/Studio/external/p1/studio/Song.als
+/Volumes/Studio/external/p2/studio/Song.als
+```
+
+**Test:**
+```bash
+clavus snapshot "/Volumes/Studio/external/p1/studio/Song.als" -m "P1 song"
+clavus snapshot "/Volumes/Studio/external/p2/studio/Song.als" -m "P2 song"
+clavus log "/Volumes/Studio/external/p1/studio/Song.als"
+clavus log "/Volumes/Studio/external/p2/studio/Song.als"
+```
+
+**Expected:** Each log shows **its own** snapshot and its own message.
+The two projects are two projects.
+
+**What to watch for:** This case used to be broken even after 9.0c was
+fixed, because a project outside the home kept only the *name* of its
+folder — both of them were "studio" — and they shared one identity.
+
+### 9.0f An Unreadable Data Directory
+
+**Test:**
+```bash
+chmod 000 ~/.clavus
+clavus log "/path/to/project.als"
+chmod 755 ~/.clavus
+```
+
+**Expected:** An error that says the Clavus data directory cannot be
+read, and a non-zero exit code.
+
+**What to watch for:** "No snapshots yet" here is a lie: the snapshots
+are there, and the directory is simply closed. A tool that reports an
+empty history when it cannot read the history is worse than one that
+fails.
+
 ### 9.1 Unicode in Project Names
 
 **Setup:** A project with Unicode characters in the path or filename.
@@ -1071,10 +1168,18 @@ CUES
 TUI
 [ ] tui: launches and renders
 [ ] tui: navigation with arrow keys
+[ ] tui: the selected cue and snapshot are visibly highlighted
 [ ] tui: filter cycling with 'f'
 [ ] tui: snapshot detail view
 [ ] tui: quit with 'q'
 [ ] tui: quit with Ctrl-C
+[ ] tui: a window that is too small says so, and does not die silently
+[ ] tui: the project list shows the folder, so two same-named projects differ
+[ ] tui: the project list refreshes its counts after an external snapshot
+[ ] tui: notes can be pushed without a snapshot
+[ ] tui: the relay field starts empty
+[ ] tui: Esc from the sync screen goes back where you came from
+[ ] tui: a dead relay is noticed, not shown as connected
 
 RELAY
 [ ] relay: starts and listens
@@ -1089,7 +1194,9 @@ DISCOVERY & STATUS
 [ ] restore: refuses another project's snapshot
 [ ] two projects: separate chains and separate cues
 [ ] two projects in same-named folders: separate chains and separate cues
+[ ] two same-named projects outside the home: separate chains and separate cues
 [ ] a folder of projects is refused, not reported as an empty project
+[ ] an unreadable data directory is an error, not an empty history
 
 EDGE CASES
 [ ] Unicode in project name

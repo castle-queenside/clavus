@@ -11,16 +11,19 @@
 | **Python worktree** | `~/Projects/clavus/` (`main` branch) |
 | **PR** | [#13](https://github.com/castle-queenside/clavus/pull/13) — Rust rewrite |
 | **Binary** | `~/Projects/clavus-rust/rust/target/release/clavus` (4.2MB) |
-| **Verify** | `cargo clippy --all -- -D warnings` |
+| **Verify** | `cargo clippy --workspace --all-targets -- -D warnings` |
 | **CI** | `.github/workflows/rust-ci.yml` — Rust CI on push to `rust` |
 
 ## Verify Before Every Commit
 
 ```bash
 cd ~/Projects/clavus-rust/rust
-cargo clippy --all -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
 cargo test --all
 ```
+
+> The workspace flag matters: `--all-targets` alone lints only the root
+> package, so the member crates' tests were never checked.
 
 ## Architecture
 
@@ -81,8 +84,8 @@ carries five names:
 - `name` — the display name: the file's stem (`Track`).
 - `file_name` — the file name with its extension (`Track.als`).
 - `folder_path()` — the folder's path below the home directory
-  (`music/Album1`), or the folder's plain name for a project outside
-  the home directory.
+  (`music/Album1`), or the last two folders of the path for a project
+  outside the home directory (`media/p1/studio`).
 - `sync_name()` — the name on the wire: the file name with its extension,
   because two machines holding the same project have it at different
   paths and must still agree, while an `.als` and a `.bwproject` with the
@@ -109,6 +112,21 @@ several projects with that file name, and none of them identified by the
 client's history — it serves none of them rather than guessing. A relay
 written before this change keeps its history: the old heads and notes are
 moved to the project's new key when it starts.
+
+The folder path is what keeps two same-named projects apart, and it has
+to work outside the home directory too. A project on an external drive
+keeps the last two folders of its path, because the name of one folder
+was not enough: `external/p1/studio/Song.als` and
+`external/p2/studio/Song.als` both kept "studio" and shared one
+identity, and the relay served one the other's history and notes.
+
+Two folders of the same name at the **same depth** are two projects a
+user keeps side by side, and one must never be served the other's
+history however identical their bytes are. Two folders of the same name
+at **different depths** are a collaborator's copy of a set on another
+machine, and the bytes of the file are what prove it.
+`project::folders_are_siblings` draws that line, and the relay
+combines it with the client's file hash.
 
 ### Untrusted remote data
 Snapshots, cues, hashes and ref names all arrive from remote peers.
@@ -143,6 +161,19 @@ list, so a reader knows whose clock they are looking at.
 
 Navigation state per screen: `selected_project`, `selected_cue`, `selected_snapshot`.
 
+The selected cue and snapshot are **highlighted**. A cursor nobody can
+see is not a cursor, and the footer says "↑↓ navigate".
+
+The TUI refuses to draw below `60x10` and says so. Below that the
+layout underflowed and the app died with a bare exit code; the panic
+hook restores the terminal and then calls the default hook, so a panic
+is never silent.
+
+`App.sync_opened_from` records the screen the sync screen was opened
+from, so `Esc` returns to it. The TUI and the CLI share the same rules
+through `clavus_core`: `default_author()` for a note's author, and
+`snapshot::head_after_pull()` for where a pull leaves the HEAD.
+
 ### Theme (Omarchy-inspired)
 - BG: `#0b0c0d`, PANEL_0: `#0e1012`, PANEL_1: `#121517`
 - LINE: `#23282b`, ACCENT: `#74e08c`, WARM: `#e9b455`
@@ -152,11 +183,15 @@ Navigation state per screen: `selected_project`, `selected_cue`, `selected_snaps
 ## Verify Workflow
 
 ```
-cargo clippy --all -- -D warnings   # fast
-cargo test --all                    # fast
-cargo build --release              # only before push
+cargo clippy --workspace --all-targets -- -D warnings   # fast
+cargo test --all                                         # fast
+cargo build --release                                    # only before push
 git add -A && git commit && git push
 ```
+
+> The pre-commit hook stashes unstaged changes before it runs, so a
+> commit's tree must stand on its own. If a change depends on another,
+> they belong in the same commit.
 
 ## Current Status
 
@@ -177,7 +212,10 @@ git add -A && git commit && git push
 - `collect` keeps a Bitwig bundle self-contained: the samples go into
   the archive and the references point at the copies inside it
 - The relay's head only moves forward, and a refused push is not stored
-- 435 tests passing, clippy clean, CI green
+- A store that cannot be read is an error, never an empty history
+- The TUI survives any terminal size, shows its selection, and notices
+  a relay that has gone away
+- 477 tests passing, clippy clean, CI green
 
 ### Blocked ⛔
 | Item | Blocker |
@@ -232,5 +270,6 @@ cat ~/Projects/clavus-rust/CLAVUS.md
 
 # 4. Run verify
 cd ~/Projects/clavus-rust/rust
-cargo clippy --all -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --all
 ```

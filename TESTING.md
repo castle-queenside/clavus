@@ -15,20 +15,24 @@
 | Property-based (core) | `crates/core/tests/property_tests.rs` | 11 | 🟢 |
 | Beta regressions (core) | `crates/core/tests/beta_regressions.rs` | 12 | 🟢 |
 | Relay sync | `crates/relay/tests/relay_tests.rs` | 11 | 🟢 |
-| Relay (real server) | `crates/relay/tests/real_relay.rs` | 24 | 🟢 |
+| Relay (real server) | `crates/relay/tests/real_relay.rs` | 27 | 🟢 |
 | Sync client (protocol) | `crates/sync/tests/sync_client.rs` | 8 | 🟢 |
 | Sync client (hostile server) | `crates/sync/tests/hostile_server.rs` | 19 | 🟢 |
-| TUI | `crates/tui/tests/tui_tests.rs` | 45 | 🟢 |
+| TUI | `crates/tui/tests/tui_tests.rs` | 46 | 🟢 |
 | TUI (beta regressions) | `crates/tui/tests/beta_tui_tests.rs` | 10 | 🟢 |
 | TUI (sync round trip) | `crates/tui/tests/sync_blob_tests.rs` | 1 | 🟢 |
+| TUI (fourth wave) | `crates/tui/tests/wave4_tests.rs` | 13 | 🟢 |
 | CLI commands | `crates/cli/tests/cli_tests.rs` | 54 | 🟢 |
 | CLI (beta regressions) | `crates/cli/tests/beta_cli_tests.rs` | 17 | 🟢 |
 | CLI (second beta wave) | `crates/cli/tests/wave2_tests.rs` | 6 | 🟢 |
 | CLI (adversary findings) | `crates/cli/tests/adversary_tests.rs` | 5 | 🟢 |
-| CLI (ergonomics wave) | `crates/cli/tests/ergonomics_tests.rs` | 13 | 🟢 |
-| Core unit tests | `crates/core/src/**` | 40 | 🟢 |
+| CLI (ergonomics wave) | `crates/cli/tests/ergonomics_tests.rs` | 9 | 🟢 |
+| CLI (fourth wave) | `crates/cli/tests/wave4_tests.rs` | 22 | 🟢 |
+| CLI (collect reports) | `crates/cli/tests/collect_tests.rs` | 4 | 🟢 |
+| Core unit tests | `crates/core/src/**` | 33 | 🟢 |
+| Sync unit tests (blob transfer) | `crates/sync/src/**` | 10 | 🟢 |
 
-**435 tests passing, 0 failed, 0 ignored.**
+**477 tests passing, 0 failed, 0 ignored.**
 
 Legend: 🟢 good  🟡 partial  🟠 manual only  🔴 missing
 
@@ -335,10 +339,44 @@ makes the collision impossible.
 
 The folder path is relative to the home directory, so two machines that
 keep the same tree agree on it, and the user's name is not part of it.
-A project that lives outside the home directory keeps the name of its
-folder — the one part of the path two machines can be expected to agree
-on. The relay tells two projects of the same name apart by their bytes
-and by their history as well.
+A project that lives outside the home directory keeps the last two
+folders of its path — `media/p1/studio` — because the name of one
+folder was not enough: `external/p1/studio` and `external/p2/studio`
+kept one identity between them, and the relay served one the other's
+history and notes. The relay tells two projects of the same name apart
+by their bytes and by their history as well.
+
+Two folders of the same name at the *same depth* are two projects a
+user keeps side by side, and one must never be served the other's
+history however identical their bytes are. Two folders of the same name
+at *different depths* are a collaborator's copy of a set, and the bytes
+of the file are what prove it. `folders_are_siblings` draws that line,
+and two relay regressions cover both directions.
+
+### The Fourth Beta Wave: The TUI Navigator
+
+The wave-four TUI persona drove the TUI through its own code paths and
+through the real binary in a pty, and filed fourteen findings. Every
+one was reproduced by hand before a line of code changed, and every fix
+has a regression in `crates/tui/tests/wave4_tests.rs` that drives the
+real application state and the real key handler.
+
+| Finding | Severity | Symptom | Fix |
+|---------|----------|---------|-----|
+| B1 | critical | Two projects outside the home whose folders shared a name had one relay identity: the relay served one the other's history and notes | The folder path keeps the last two components of the path |
+| B2 | critical | A pull replaced the HEAD with the relay's branch, so the user's own snapshot dropped out of the chain | The HEAD only moves to a descendant of the local HEAD — the rule the CLI already used, now shared by both |
+| B3 | major | A window smaller than the TUI needs killed the app with exit code 101 and no message at all | The layout refuses to draw below `60x10` and says so; the panic hook lets the message through |
+| B4 | major | Any panic was completely silent — the hook replaced the one that prints it | The hook restores the terminal and then calls the default hook |
+| B5 | major | The cue and snapshot lists drew no selection, so the arrow keys moved a cursor nobody could see | The selected row is highlighted |
+| B6 | major | A note made in the TUI was signed "tui", so a collaborator saw one person as two authors | The TUI signs it the way the CLI does |
+| B7 | major | An unreadable data directory was shown as "0 snapshots" | The TUI and `clavus log` both name the problem |
+| B8 | minor | The project list was never refreshed, so its counts disagreed with the CLI | It is refreshed as the user moves through it |
+| B9 | minor | Notes could not be pushed without a snapshot, though the CLI pushes them on their own | The TUI does too |
+| B10 | minor | The sync screen kept saying "connected" after the relay had died | The connection is noticed and the screen says it was lost |
+| B11 | minor | Esc from the sync screen landed on an empty project screen | It goes back to the screen the user came from |
+| B12 | minor | The relay field was prefilled, so typing a new address produced a nonsense one | The field starts empty |
+| B13 | minor | Two projects with the same file name were indistinguishable in the list | The list shows the folder each project lives in |
+| B14 | minor | A directory named `Folder.als` was listed as a project and failed to open | A directory is not a project, however it is named |
 
 ### The Beta Harness
 
