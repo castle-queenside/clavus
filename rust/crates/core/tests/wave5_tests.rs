@@ -275,3 +275,71 @@ fn a_project_outside_the_home_keeps_a_pointer_to_its_own_path() {
     assert_eq!(id.path, path);
     assert!(id.key.contains("Set"), "the key names the set: {}", id.key);
 }
+
+#[test]
+fn live_s_user_library_is_where_a_user_folder_reference_is_measured_from() {
+    // A set that says `Samples/kick.wav` means the file in *Live's
+    // user library*, which lives at `~/Music/Ableton/User Library` —
+    // not at `~/Music/Samples/kick.wav`. Looking in the wrong place
+    // made a set that was complete read as broken, and stopped the
+    // snapshot for no reason.
+    let home = PathBuf::from("/Users/somebody");
+    let roots = clavus_core::sample::user_folder_roots_in(
+        &home.join("Music/Set/Set Project"),
+        Some(&home),
+        None,
+    );
+
+    assert!(
+        roots.contains(&home.join("Music/Ableton/User Library")),
+        "Live's user library is a root: {:?}",
+        roots
+    );
+    assert!(
+        roots.contains(&home.join("Music")),
+        "the music folder is still a root: {:?}",
+        roots
+    );
+}
+
+#[test]
+fn live_s_user_library_is_tried_before_the_bare_music_folder() {
+    // Order matters: the user library is the *right* answer for a
+    // user-folder reference, and `~/Music` is the wider guess. The
+    // right one is found first, so a set that has both is not
+    // reported as pointing at the wrong file.
+    let home = PathBuf::from("/Users/somebody");
+    let roots = clavus_core::sample::user_folder_roots_in(
+        &home.join("Music/Set/Set Project"),
+        Some(&home),
+        None,
+    );
+
+    let library = roots
+        .iter()
+        .position(|r| r == &home.join("Music/Ableton/User Library"))
+        .expect("the user library is a root");
+    let music = roots
+        .iter()
+        .position(|r| r == &home.join("Music"))
+        .expect("the music folder is a root");
+    assert!(
+        library < music,
+        "the user library comes first: {:?}",
+        roots
+    );
+}
+
+#[test]
+fn the_user_folder_roots_do_not_depend_on_the_machine_running_the_test() {
+    // The home folder is a parameter, so the list is the same on
+    // every machine and can be checked without changing the
+    // environment.
+    let here = PathBuf::from("/Users/somebody");
+    let there = PathBuf::from("/Volumes/LaCie/Music");
+    let a = clavus_core::sample::user_folder_roots_in(&here, Some(&here), None);
+    let b = clavus_core::sample::user_folder_roots_in(&there, Some(&there), None);
+    assert_ne!(a, b, "the roots follow the home folder given");
+    assert!(a.contains(&here.join("Music/Ableton/User Library")));
+    assert!(b.contains(&there.join("Music/Ableton/User Library")));
+}

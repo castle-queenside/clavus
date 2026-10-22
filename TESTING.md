@@ -32,7 +32,17 @@
 | Core unit tests | `crates/core/src/**` | 33 | 🟢 |
 | Sync unit tests (blob transfer) | `crates/sync/src/**` | 10 | 🟢 |
 
-**500 tests passing, 0 failed, 0 ignored.**
+**503 tests passing, 0 failed, 0 ignored.**
+
+The wave-five batch includes the Live user-library fix: a set that
+points at `Samples/kick.wav` means the file in Live's own user library
+at `~/Music/Ableton/User Library`, not `~/Music/Samples/kick.wav`.
+Looking in the wrong place made a complete set read as broken and
+stopped the snapshot. The user library is now a root, and it is tried
+before the wider music folder so a set that has both is not reported
+as pointing at the wrong file. The roots take the home folder as a
+parameter, so the list is checkable without changing the environment
+of the machine running the test.
 
 Legend: 🟢 good  🟡 partial  🟠 manual only  🔴 missing
 

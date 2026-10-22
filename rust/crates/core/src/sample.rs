@@ -1190,6 +1190,20 @@ pub fn is_factory_library_path(path: &Path) -> bool {
 /// macOS places, and the volume the project itself sits on — because a
 /// drive full of sets usually has its samples in the same place.
 pub fn user_folder_roots(project_root: &Path) -> Vec<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let extra = std::env::var_os("CLAVUS_USER_FOLDER").map(PathBuf::from);
+    user_folder_roots_in(project_root, home.as_deref(), extra.as_deref())
+}
+
+/// The same, with the home folder and the user's own folder given.
+///
+/// They are parameters so the list can be tested without changing the
+/// environment of the machine running the test.
+pub fn user_folder_roots_in(
+    project_root: &Path,
+    home: Option<&Path>,
+    extra: Option<&Path>,
+) -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
     let mut add = |p: PathBuf| {
         if !p.as_os_str().is_empty() && !roots.contains(&p) {
@@ -1197,14 +1211,20 @@ pub fn user_folder_roots(project_root: &Path) -> Vec<PathBuf> {
         }
     };
 
-    if let Some(dir) = std::env::var_os("CLAVUS_USER_FOLDER") {
-        let dir = PathBuf::from(dir);
+    if let Some(dir) = extra {
         if dir.is_absolute() {
-            add(dir);
+            add(dir.to_path_buf());
         }
     }
 
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+    if let Some(home) = home {
+        // Live's own user library comes first. This is where Live
+        // puts a user's own samples, and it is what a user-folder
+        // reference is measured from — a set that says
+        // `Samples/kick.wav` means this folder's `Samples/kick.wav`,
+        // not `~/Music/Samples/kick.wav`. The folder is made when Live
+        // is first run, so it may not be there yet.
+        add(home.join("Music").join("Ableton").join("User Library"));
         add(home.join("Music"));
         add(home.join("Documents"));
     }

@@ -194,7 +194,7 @@ One person runs `clavus relay`. Others run `clavus tui`, press `c` to connect, t
 | Cue markers | ✅ Pending / Resolved / Skipped / Deferred / Archived |
 | Relay sync | ✅ TCP framed JSON, push/pull/connect, isolated per project |
 | TUI | ✅ Ratatui, full keyboard nav |
-| CI | ✅ GitHub Actions, clippy clean, 500 tests |
+| CI | ✅ GitHub Actions, clippy clean, 503 tests |
 | Project isolation | ✅ Two same-named projects never share a chain |
 | Windows | 🔜 Linux binary first |
 
