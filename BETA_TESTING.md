@@ -107,9 +107,21 @@ clavus audit "/path/to/project.als"
 
 **Expected:**
 ```
-⚠ 5 sample(s) outside project folder — run `clavus collect --copy-missing`
-  0 missing  ·  5 outside project
+✗ 5 outside project:
+  /Users/you/Library/Samples/kick.wav
+  …
 ```
+
+**The report is on stdout.** A script that reads stdout must find the
+report there, and stderr must stay empty:
+
+```bash
+clavus audit "/path/to/project.als" 1>out.txt 2>err.txt
+wc -c out.txt err.txt
+```
+
+`out.txt` holds the report; `err.txt` is empty. (Only a project that
+could not be *read* writes to stderr.)
 
 ### 2.3 Audit a Bitwig Project
 
@@ -249,21 +261,53 @@ clavus collect "/path/to/SharedProject.bwproject"
 ```
   0 missing  ·  0 outside project  ·  24 inside archive
 
-✓ Collected 24 sample(s) into project/Samples/
+✓ 24 sample(s) already inside the project bundle
+  Paths in the project archive already point at the copies inside it
+```
+
+**Verify:**
+1. **No** `Samples/` folder appeared next to the `.bwproject` — the
+   bundle *is* the project, and it already carried its samples
+2. `unzip -l` still lists `project.xml` and the samples
+3. Re-running `clavus audit` says the samples are inside the archive
+4. Opening the project in Bitwig still finds its samples
+
+**What to watch for:** The message must not claim that files were
+copied into a folder. A bundle that carries its own samples has nothing
+to collect.
+
+### 3.5 Collect a Bitwig Project Whose Samples Live Outside the Bundle
+
+**Setup:** A `.bwproject` that points at samples in another folder
+(an export from another machine, or a bundle whose samples were moved
+out). The paths in the bundle must not exist inside the bundle's own
+folder.
+
+**Test:**
+```bash
+clavus collect "/path/to/Outsider.bwproject"
+```
+
+**Expected:**
+```
+  0 missing  ·  2 outside project  ·  0 inside archive
+
+✓ Collected 2 sample(s) into the project bundle
   Paths in the project archive rewritten — reopen the project in Bitwig
 ```
 
 **Verify:**
-1. A `Samples/` folder appeared next to the `.bwproject`
-2. The samples are in it
-3. Re-running `clavus audit` now says the samples are present with no
-   "inside the project archive" note
-4. Opening the project in Bitwig still finds its samples
+1. `unzip -l` now lists the samples **inside** the archive
+2. The references in `project.xml` point at the copies inside the
+   archive — not at the old absolute paths, and not at a `Samples/`
+   folder next to the bundle
+3. **No** `Samples/` folder appeared next to the `.bwproject`
+4. `clavus audit` now says the samples are inside the archive
+5. Opening the project in Bitwig still plays the audio
 
-**What to watch for:** The references inside the archive must be
-rewritten to the extracted copies, and the rest of the archive must
-survive the rewrite. If Bitwig cannot open the project afterwards, the
-rewrite is wrong.
+**What to watch for:** A bundle that points at a sample it does not
+carry opens without its audio. If the audit calls the bundle healthy
+while the reference points outside it, the collect is wrong.
 
 ---
 
@@ -396,6 +440,10 @@ constant like "cli" — otherwise you cannot tell whose notes are whose
 after a sync. If the author says "cli", report it. You can set it
 yourself with `--author "Dana"`.
 
+**On a machine with no user name** (a container, a cron job, CI), the
+author falls back to the host name, and to "unknown" if even that is
+missing. It is never the word "cli".
+
 ### 5.2b A Cue With a Bad Position
 
 **Test:**
@@ -406,6 +454,23 @@ clavus cue "/path/to/project.als" -t "typo" -p "4.1"
 **Expected:** An error. A position must be `bars.beats.sixteenths`, so
 `4.1` is not one. A cue stored with a position that can never be
 resolved to a time is worse than a refusal.
+
+### 5.2c A Cue With a Track
+
+**Test:**
+```bash
+clavus cue "/path/to/project.als" -t "drop bass at bar 17" -p 17.1.0 --track "Bass"
+clavus cues "/path/to/project.als"
+```
+
+**Expected:** The listing shows the track:
+
+```
+  fc6c8e8d…  [pending  ]  drop bass at bar 17     @   17.1.0  Bass            chris
+```
+
+**What to watch for:** A note that says "drop the bass here" is
+useless without the track it belongs to.
 
 ### 5.3 Resolve a Cue
 
@@ -454,6 +519,17 @@ clavus tui
 - Projects in **sub-folders** must appear. A project the CLI can see
   but the TUI cannot is a bug.
 - A project that **cannot be parsed** must show an error, not vanish.
+
+### 6.1c Leaving the TUI
+
+**Test:** Start the TUI and press **Ctrl-C**.
+
+**Expected:** The TUI leaves the alternate screen and the shell comes
+back. The same happens with `q` from the project list.
+
+**What to watch for:** The TUI is in raw mode, so Ctrl-C arrives as an
+ordinary key. If the app carries on, the interrupt was swallowed and
+the program looks hung. Report it.
 
 ### 6.2 Navigate the TUI
 
@@ -771,6 +847,37 @@ clavus cues "~/Music/AlbumB/Track.als"
 other, or a restore writes the wrong file, that is a critical bug.
 Report it with both paths.
 
+### 9.0c Two Projects in Folders of the Same Name
+
+**Setup:** Two different projects whose *parent folders* share a name —
+the case a folder name alone cannot tell apart:
+
+```
+~/Music/notes/p1/studio/Song.als
+~/Music/notes/p2/studio/Song.als
+```
+
+**Test:**
+```bash
+clavus snapshot "~/Music/notes/p1/studio/Song.als" -m "P1 song"
+clavus snapshot "~/Music/notes/p2/studio/Song.als" -m "P2 song"
+clavus log "~/Music/notes/p1/studio/Song.als"
+clavus log "~/Music/notes/p2/studio/Song.als"
+clavus cue "~/Music/notes/p1/studio/Song.als" -t "only for P1" -p 1.1.1
+clavus cues "~/Music/notes/p2/studio/Song.als"
+```
+
+**Expected:**
+
+- Each log shows **its own** snapshot and its own message. A snapshot
+  of P2 must not be reported as "already in this project's history".
+- The note added to P1 does **not** appear under P2.
+- `ls ~/.clavus/blobs/projects` shows **two** entries for them, not one.
+
+**What to watch for:** This is the same defect as 9.0, one level
+deeper: a folder's *name* is not a folder's *path*. Report it with
+both paths.
+
 ### 9.0b A Shared Bitwig Archive
 
 **Setup:** A `.bwproject` exported from Bitwig Studio. The archive
@@ -797,6 +904,18 @@ clavus audit "/path/to/Bundle.bwproject"
 folder next to the bundle, or if the bundle stops opening in Bitwig,
 that is a bug. The bundle has to stay a working Bitwig project.
 
+
+### 9.0d A Folder Is Not a Project
+
+**Test:**
+```bash
+clavus log /path/to/my/projects
+clavus restore /path/to/my/projects
+```
+
+**Expected:** An error that says the path is a directory, not a project
+file. It must **not** say "no snapshots yet" — that would be a report
+about a project that was never there.
 
 ### 9.1 Unicode in Project Names
 
@@ -925,6 +1044,7 @@ SAMPLE AUDIT
 [ ] audit: clean project passes
 [ ] audit: missing samples shows warning
 [ ] audit: outside-project samples shows warning
+[ ] audit: the report is on stdout (stderr stays empty)
 [ ] audit: Bitwig .bwproject works
 
 COLLECT
@@ -932,6 +1052,9 @@ COLLECT
 [ ] collect: rewrites .als paths
 [ ] collect: idempotent (second run is no-op)
 [ ] collect: missing files reported clearly
+[ ] collect: a .bwproject stays self-contained (samples inside the zip)
+[ ] collect: no Samples/ folder is created next to a bundle
+[ ] collect: a symlinked project is still a symlink afterwards
 
 SNAPSHOTS
 [ ] snapshot: saves successfully
@@ -941,6 +1064,7 @@ SNAPSHOTS
 
 CUES
 [ ] cues: lists existing cues
+[ ] cues: shows the track of a cue
 [ ] cue: adds new cue
 [ ] cue --resolve: marks resolved
 
@@ -950,6 +1074,7 @@ TUI
 [ ] tui: filter cycling with 'f'
 [ ] tui: snapshot detail view
 [ ] tui: quit with 'q'
+[ ] tui: quit with Ctrl-C
 
 RELAY
 [ ] relay: starts and listens
@@ -963,6 +1088,8 @@ DISCOVERY & STATUS
 [ ] snapshot --collect: auto-collects before snapshotting
 [ ] restore: refuses another project's snapshot
 [ ] two projects: separate chains and separate cues
+[ ] two projects in same-named folders: separate chains and separate cues
+[ ] a folder of projects is refused, not reported as an empty project
 
 EDGE CASES
 [ ] Unicode in project name

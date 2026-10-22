@@ -65,7 +65,7 @@ Clavus watches your project files and maintains a content-addressed snapshot cha
 | **Relay sync** | Push/pull snapshots over TCP to a collaborator's relay. No cloud. |
 | **Diff** | Walk the chain. See what changed: BPM, track count, sample manifest, message. |
 | **Restore** | Roll back to any snapshot — restore the raw project bytes from the blob store. A snapshot only ever restores within its own project. |
-| **Project isolation** | Every project keeps its own chain, cues and history. One project's work never lands in another's. |
+| **Project isolation** | Every project keeps its own chain, cues and history. One project's work never lands in another's — not even when two projects share a folder *name*. |
 
 ---
 
@@ -191,7 +191,7 @@ One person runs `clavus relay`. Others run `clavus tui`, press `c` to connect, t
 | Cue markers | ✅ Pending / Resolved / Skipped / Deferred / Archived |
 | Relay sync | ✅ TCP framed JSON, push/pull/connect, isolated per project |
 | TUI | ✅ Ratatui, full keyboard nav |
-| CI | ✅ GitHub Actions, clippy clean, 417 tests |
+| CI | ✅ GitHub Actions, clippy clean, 435 tests |
 | Project isolation | ✅ Two same-named projects never share a chain |
 | Windows | 🔜 Linux binary first |
 

@@ -1,7 +1,7 @@
 # Clavus Testing Plan
 
 > Last updated: 2026-10-21
-> Status: 🟢 Core suites complete — the AI beta wave's findings are all fixed and covered
+> Status: 🟢 Core suites complete — the AI beta waves' findings are all fixed and covered
 
 ## Coverage at a Glance
 
@@ -14,7 +14,7 @@
 | Cue store | `crates/core/tests/cue_tests.rs` | 26 | 🟢 |
 | Property-based (core) | `crates/core/tests/property_tests.rs` | 11 | 🟢 |
 | Beta regressions (core) | `crates/core/tests/beta_regressions.rs` | 12 | 🟢 |
-| Relay sync | `crates/relay/tests/relay_tests.rs` | 10 | 🟢 |
+| Relay sync | `crates/relay/tests/relay_tests.rs` | 11 | 🟢 |
 | Relay (real server) | `crates/relay/tests/real_relay.rs` | 24 | 🟢 |
 | Sync client (protocol) | `crates/sync/tests/sync_client.rs` | 8 | 🟢 |
 | Sync client (hostile server) | `crates/sync/tests/hostile_server.rs` | 19 | 🟢 |
@@ -25,9 +25,10 @@
 | CLI (beta regressions) | `crates/cli/tests/beta_cli_tests.rs` | 17 | 🟢 |
 | CLI (second beta wave) | `crates/cli/tests/wave2_tests.rs` | 6 | 🟢 |
 | CLI (adversary findings) | `crates/cli/tests/adversary_tests.rs` | 5 | 🟢 |
-| Core unit tests | `crates/core/src/**` | 35 | 🟢 |
+| CLI (ergonomics wave) | `crates/cli/tests/ergonomics_tests.rs` | 13 | 🟢 |
+| Core unit tests | `crates/core/src/**` | 40 | 🟢 |
 
-**417 tests passing, 0 failed, 0 ignored.**
+**435 tests passing, 0 failed, 0 ignored.**
 
 Legend: 🟢 good  🟡 partial  🟠 manual only  🔴 missing
 
@@ -236,7 +237,9 @@ machines holding the same project agree on the name.
 The wire name alone is not enough: `Album1/Track.als` and
 `Album2/Track.als` are two different sets. A client therefore says which
 folder it is in, and the relay files the project under
-`<file name>::<folder>`.
+`<file name>::<folder path>`. A colon inside either part is escaped, so
+a file called `A.als::B` in the folder `C` cannot be the same project
+as `A.als` in the folder `B::C`.
 
 When a client names a file the relay has never seen in that folder, the
 relay falls back to a project the client already has history from, and
@@ -286,6 +289,56 @@ three real defects, each reproduced by hand before it was fixed.
 
 A corrupt note is reported the same way: `clavus cues` says the note is
 corrupt instead of showing an empty list.
+
+## The Third Beta Wave: The CLI Ergonomics Persona
+
+The third wave ran two personas against the compiled binary: one that
+worked the command line the way a script would, and one that looked for
+data loss. They filed nine and six findings. Every one was reproduced by
+hand — twice — before a line of code changed, and every fix has a
+regression test in `crates/cli/tests/ergonomics_tests.rs`.
+
+| Finding | Severity | Symptom | Fix |
+|---------|----------|---------|-----|
+| E1 | critical | Two projects whose folders share a *name* shared one snapshot chain, one note list and one relay identity: `notes/p1/studio/Song.als` and `notes/p2/studio/Song.als` produced a single entry in the data directory | The storage key is the file name and a digest of the whole path, so no two projects can share a chain. The wire identity carries the folder's *path*, not just its name |
+| E2 | critical | `collect` on a `.bwproject` copied a sample *next to* the bundle and pointed the reference inside the bundle at the copy it did not carry — the project opened without its audio, and the audit called it healthy | A bundle stays self-contained: the bytes go into the archive and the reference points at the copy inside it |
+| E3 | major | `clavus audit` wrote its whole report to stderr and left stdout empty — exactly when there was something to say | The audit's result goes to stdout, like the clean report and like `status`. Errors stay on stderr |
+| E4 | minor | `collect` on a bundle whose samples were already inside it claimed "Collected 3 samples into project/Samples/" — a folder that was never created | The message says what actually happened: the samples are already inside the bundle |
+| E5 | minor | A note was signed with the literal word "cli" when `USER` and `LOGNAME` were unset — the case a container, a cron job or CI always hits | The fallback names the host, or says "unknown". It is never "cli" |
+| E6 | minor | A pull printed "the relay had nothing new for this project" and then imported a new note | The summary says "no new *snapshots*" and names the notes it imported |
+| E7 | minor | Ctrl-C did nothing in the TUI: the terminal is in raw mode, so the interrupt arrives as an ordinary key | Ctrl-C quits, from any screen, including a text field |
+| E8 | minor | `clavus cues` never showed the cue's track, although `--track` was stored | The track is a column of the listing |
+| E9 | minor | `restore` and `log` treated a directory as a project and said "no snapshots yet" | A directory is refused with the same clear message `audit` gives |
+| E10 | minor | `collect` replaced a symlinked project file with a regular file, so the user's project became a copy | A symlinked project is written *through* the link |
+| E11 | minor | Two projects whose names contain `::` mapped to the same relay key, so one project's push was refused as a conflict with the other's history | The parts of a relay key are escaped, so a colon cannot forge another project's identity |
+| E12 | minor | A pull warned that "the relay's history does not extend yours" when the relay merely re-offered the snapshot the client already had | Re-offering what we have is not a divergence; the pull says so |
+
+The head of a project on the relay also only moves *forward* now. A
+collaborator whose own head is behind used to drag the relay's head back
+to an older snapshot, and the next client to pull was offered the older
+history as if it were the newest.
+
+### How a project is identified
+
+Three names, each answering a different question:
+
+| Name | Question | Built from |
+|------|----------|-----------|
+| **the storage key** | *which chain is this?* | the file name and a digest of the whole path — `Song.als__a1b2c3d4e5f6` |
+| **the wire name** | *which project is this?* | the file name with its extension — `Song.als` |
+| **the folder path** | *which one, when two share a name?* | the folder's path below the home directory — `music/p1/studio` |
+
+The storage key is a digest of the path because a folder's *name* is not
+enough: `p1/studio/Song.als` and `p2/studio/Song.als` share both the
+folder name and the file name, and they are two projects. The digest
+makes the collision impossible.
+
+The folder path is relative to the home directory, so two machines that
+keep the same tree agree on it, and the user's name is not part of it.
+A project that lives outside the home directory keeps the name of its
+folder — the one part of the path two machines can be expected to agree
+on. The relay tells two projects of the same name apart by their bytes
+and by their history as well.
 
 ### The Beta Harness
 

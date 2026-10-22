@@ -75,13 +75,14 @@ already points at its own internal sample needs no repair.
 ### Project identity
 `clavus_core::project::ProjectId` is the identity of a project, and it
 carries five names:
-- `key` — the storage key: the project's folder and file name, made safe
-  for use as a directory name (`Album1__Track.als`). It names the
-  project's HEAD, its snapshot records and its cues.
+- `key` — the storage key: the file name and a digest of the whole
+  absolute path (`Track.als__23559124b783`). It names the project's
+  HEAD, its snapshot records and its cues.
 - `name` — the display name: the file's stem (`Track`).
 - `file_name` — the file name with its extension (`Track.als`).
-- `folder()` — the name of the folder the project lives in (`Album1`).
-  It is empty when the project sits at the top of a directory.
+- `folder_path()` — the folder's path below the home directory
+  (`music/Album1`), or the folder's plain name for a project outside
+  the home directory.
 - `sync_name()` — the name on the wire: the file name with its extension,
   because two machines holding the same project have it at different
   paths and must still agree, while an `.als` and a `.bwproject` with the
@@ -90,15 +91,24 @@ carries five names:
 The identity is path-aware on purpose. A shared file name is not a shared
 project: `Album1/Track.als` and `Album2/Track.als` are two different sets
 with two different histories, and a snapshot of one must never be written
-over the other.
+over the other. A folder's *name* is not enough either:
+`notes/p1/studio/Track.als` and `notes/p2/studio/Track.als` share both
+the folder name and the file name — only the path digest tells them
+apart.
 
-On the wire the identity is the file name *and* the folder, and the relay
-files a project under `<file name>::<folder>`. A client says which folder
-it is in when it says hello. When the relay cannot tell which project a
-client means — several projects with that file name, and none of them
-identified by the client's history — it serves none of them rather than
-guessing. A relay written before this change keeps its history: the old
-heads and notes are moved to the project's new key when it starts.
+The paths are normalised before they are hashed, so the same file given
+as a relative path and as an absolute path is one project, and symlinks
+are not followed.
+
+On the wire the identity is the file name *and* the folder's path, and
+the relay files a project under `<file name>::<folder path>`. A colon
+inside either part is escaped, so a file name cannot forge another
+project's identity. A client says which folder it is in when it says
+hello. When the relay cannot tell which project a client means —
+several projects with that file name, and none of them identified by the
+client's history — it serves none of them rather than guessing. A relay
+written before this change keeps its history: the old heads and notes are
+moved to the project's new key when it starts.
 
 ### Untrusted remote data
 Snapshots, cues, hashes and ref names all arrive from remote peers.
@@ -159,11 +169,15 @@ git add -A && git commit && git push
 - TUI: all screens, keyboard nav, Omarchy theme, editable relay address
 - Cliamp spectrum analyzer (sync screen)
 - Relay sync server + client, isolated per project
-- Project identity: path-aware locally, and file name + folder on the wire,
-  so two same-named projects never mix
+- Project identity: a path digest locally, so no two projects can ever
+  share a chain; the file name and the folder's *path* on the wire, so
+  two same-named projects never mix
 - Blob transfer: the project bytes travel with the snapshots, hash-verified,
   so a pulled snapshot can be restored on the other machine
-- 417 tests passing, clippy clean, CI green
+- `collect` keeps a Bitwig bundle self-contained: the samples go into
+  the archive and the references point at the copies inside it
+- The relay's head only moves forward, and a refused push is not stored
+- 435 tests passing, clippy clean, CI green
 
 ### Blocked ⛔
 | Item | Blocker |
