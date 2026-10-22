@@ -242,8 +242,17 @@ impl CueStore {
     // ─── Persistence ─────────────────────────────────────────────
 
     /// Save a cue atomically.
-    fn save(&self, cue: &Cue) -> Result<(), ClavusError> {
+    /// Write a cue to the store, replacing any cue of the same id.
+    ///
+    /// This is public because a note that arrives from somewhere else
+    /// — the relay, or a store written by the older version of Clavus
+    /// — has to be written down exactly as it was.
+    pub fn save(&self, cue: &Cue) -> Result<(), ClavusError> {
         Self::validate_cue_id(&cue.id)?;
+        // The folder is made here, so a note can be written down into a
+        // store that was opened for reading and had no folder yet.
+        fs::create_dir_all(&self.cues_dir)
+            .map_err(|e| ClavusError::IndexCorrupted(e.to_string()))?;
         let path = self.cue_path(&cue.id);
         let tmp = PathBuf::from(path.to_string_lossy().to_string() + ".tmp");
         let json = serde_json::to_string_pretty(cue)

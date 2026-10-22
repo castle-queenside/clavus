@@ -123,6 +123,20 @@ fn main() -> anyhow::Result<()> {
             let project = resolve_project(&project, cli.dir.as_deref());
             cmd_status(&project, &clavus_root, &mut stdout, &mut stderr)
         }
+        Commands::ImportLegacy {
+            store,
+            projects,
+            dry_run,
+        } => {
+            clavus_cli::cmd_import_legacy(
+                &store,
+                projects.as_deref(),
+                dry_run,
+                &clavus_root,
+                &mut std::io::stdout(),
+                &mut std::io::stderr(),
+            )
+        }
         Commands::Restore { project, hash } => {
             let project = resolve_project(&project, cli.dir.as_deref());
             cmd_restore(&project, &hash, &clavus_root, &mut stdout, &mut stderr)

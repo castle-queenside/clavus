@@ -219,13 +219,31 @@ pub struct Cue {
     pub replies: Vec<CueReply>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub enum CueStatus {
     Pending,
     Resolved,
     Skipped,
     Deferred,
     Archived,
+}
+
+impl<'de> Deserialize<'de> for CueStatus {
+    /// Read a status written by any version of Clavus.
+    ///
+    /// The older version wrote `pending` in lower case; this one writes
+    /// `Pending`. A store written years ago still has to be readable,
+    /// so the spelling is matched without regard to case rather than
+    /// turning a note into an error.
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let text = String::deserialize(deserializer)?;
+        CueStatus::parse(&text).ok_or_else(|| {
+            serde::de::Error::custom(format!("unknown cue status: {:?}", text))
+        })
+    }
 }
 
 impl CueStatus {
@@ -254,8 +272,12 @@ impl CueStatus {
     ];
 
     /// Parse a status name, returning `None` when it is not recognised.
+    ///
+    /// The spelling is matched without regard to case. The older
+    /// version of Clavus wrote `pending`; this one writes `Pending`,
+    /// and a store written years ago still has to be readable.
     pub fn parse(s: &str) -> Option<Self> {
-        match s {
+        match s.trim().to_ascii_lowercase().as_str() {
             "pending" => Some(CueStatus::Pending),
             "resolved" => Some(CueStatus::Resolved),
             "skipped" => Some(CueStatus::Skipped),

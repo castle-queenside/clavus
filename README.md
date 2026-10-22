@@ -124,6 +124,9 @@ cargo build --release
 ./clavus push --relay 192.168.1.10:4477 ~/Music/Ableton/MySet.als
 ./clavus pull --relay 192.168.1.10:4477 ~/Music/Ableton/MySet.als
 
+# Bring an older Clavus store into this one
+./clavus import-legacy --store ~/.clavus --projects ~/Clavus/Projects
+
 # Open the TUI
 ./clavus tui --dir ~/Music/Ableton
 ```
@@ -191,7 +194,7 @@ One person runs `clavus relay`. Others run `clavus tui`, press `c` to connect, t
 | Cue markers | ✅ Pending / Resolved / Skipped / Deferred / Archived |
 | Relay sync | ✅ TCP framed JSON, push/pull/connect, isolated per project |
 | TUI | ✅ Ratatui, full keyboard nav |
-| CI | ✅ GitHub Actions, clippy clean, 491 tests |
+| CI | ✅ GitHub Actions, clippy clean, 500 tests |
 | Project isolation | ✅ Two same-named projects never share a chain |
 | Windows | 🔜 Linux binary first |
 

@@ -143,6 +143,20 @@ pub enum Commands {
         #[arg(default_value = "HEAD")]
         hash: String,
     },
+    /// Bring an old Clavus store into this one
+    ImportLegacy {
+        /// The old `~/.clavus` directory to read from
+        #[arg(long)]
+        store: PathBuf,
+        /// Where the sets are now, if they are not where the old store
+        /// said. The old store names each project by a path on the
+        /// machine it was written on, which means nothing here.
+        #[arg(long)]
+        projects: Option<PathBuf>,
+        /// Say what would happen without writing anything
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 pub fn cmd_snapshot(
@@ -1882,3 +1896,114 @@ fn format_timestamp(secs: f64) -> String {
     clavus_core::time::format_local(secs)
 }
 
+
+/// Bring an old Clavus store into this one.
+///
+/// The older version kept its library in `~/Clavus/Projects` and its
+/// history in `~/.clavus`. Its snapshot records carry the same fields
+/// the current ones do, so the history can be brought across rather
+/// than lost.
+///
+/// What cannot be done is guessed at: a project whose file is not found
+/// is named and left behind, and a record that cannot be read is named
+/// too. A migration that quietly dropped half the history would be
+/// worse than one that said what it could not do.
+pub fn cmd_import_legacy(
+    store: &Path,
+    projects: Option<&Path>,
+    dry_run: bool,
+    clavus_root: &Path,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> anyhow::Result<()> {
+    use clavus_core::legacy::LegacyMigration;
+
+    if !store.exists() {
+        errln!(err, "Error: no old store at {}", store.display());
+        return Ok(());
+    }
+    if !store.join("index.json").exists()
+        && !store.join("index.json.bak").exists()
+        && !store.join("index.json.bak2").exists()
+        && !store.join("index.json.bak3").exists()
+    {
+        errln!(
+            err,
+            "Error: {} has no project index — it does not look like an old Clavus store",
+            store.display()
+        );
+        return Ok(());
+    }
+
+    let home = dirs::home_dir();
+    outln!(out, "Reading the old store at {}", store.display());
+    if dry_run {
+        outln!(out, "  (dry run — nothing will be written)");
+    }
+
+    let migration = LegacyMigration {
+        old_store: store,
+        new_store: clavus_root,
+        projects_root: projects,
+        home: home.as_deref(),
+        dry_run,
+    };
+    let report = migration.run()?;
+
+    if !report.imported.is_empty() {
+        outln!(out, "");
+        outln!(out, "Brought across:");
+        for project in &report.imported {
+            outln!(
+                out,
+                "  {} — {} snapshot(s), {} note(s)",
+                project.name, project.snapshots, project.cues
+            );
+            outln!(out, "      {}", project.project_path.display());
+        }
+    }
+
+    if !report.skipped.is_empty() {
+        outln!(out, "");
+        outln!(out, "Left behind:");
+        for project in &report.skipped {
+            outln!(out, "  {} — {}", project.name, project.reason);
+        }
+    }
+
+    if !report.unreadable_snapshots.is_empty() {
+        outln!(out, "");
+        outln!(out, "Snapshot records that could not be read:");
+        for path in &report.unreadable_snapshots {
+            outln!(out, "  {}", path);
+        }
+    }
+
+    if !report.unreadable_cues.is_empty() {
+        outln!(out, "");
+        outln!(out, "Notes that could not be read:");
+        for path in &report.unreadable_cues {
+            outln!(out, "  {}", path);
+        }
+    }
+
+    outln!(out, "");
+    if dry_run {
+        outln!(
+            out,
+            "{} — nothing was written",
+            report.summary().replace("blob(s) copied", "blob(s) would be copied")
+        );
+    } else {
+        outln!(out, "{}", report.summary());
+    }
+
+    if report.imported.is_empty() && !report.skipped.is_empty() {
+        errln!(
+            err,
+            "Error: nothing could be brought across — the old store's projects were not found"
+        );
+        return Ok(());
+    }
+    Ok(())
+}

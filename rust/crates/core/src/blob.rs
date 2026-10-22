@@ -433,6 +433,11 @@ impl BlobStore {
 
     // ─── Refs (HEAD, branches, tags) ─────────────────────────────────
 
+    /// The directory the content-addressed blobs live in.
+    pub fn objects_dir(&self) -> PathBuf {
+        self.objects_dir.clone()
+    }
+
     /// Write a named reference.
     pub fn update_ref(&self, name: &str, hash: &str) -> io::Result<()> {
         if !Self::is_valid_ref_name(name) {

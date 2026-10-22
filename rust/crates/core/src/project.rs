@@ -147,6 +147,14 @@ impl ProjectId {
     pub fn relay_key(&self) -> String {
         relay_key_for(&self.file_name, &self.folder_path)
     }
+
+    /// The ref that holds this project's HEAD.
+    ///
+    /// Every project has its own, so one project's chain can never be
+    /// shown as another's.
+    pub fn head_ref(&self) -> String {
+        format!("{}/HEAD", self.key)
+    }
 }
 
 /// The relay's key for a project: its file name and the folder it lives

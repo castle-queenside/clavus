@@ -1286,6 +1286,67 @@ du -sh ~/.clavus
 
 ---
 
+## Part 12: Coming from the Older Clavus
+
+If you used Clavus before this version, your library was in
+`~/Clavus/Projects` and your history was in `~/.clavus`. Both are still
+readable, and the history can be brought across rather than left
+behind.
+
+### 12.1 Seeing what would come across
+
+```bash
+clavus import-legacy --store ~/.clavus --projects ~/Clavus/Projects --dry-run
+```
+
+**Expected:** A list of the projects that would be brought across,
+with how many snapshots and how many notes each one has. Anything that
+could not be found is named, with the reason. Nothing is written.
+
+### 12.2 Bringing it across
+
+```bash
+clavus import-legacy --store ~/.clavus --projects ~/Clavus/Projects
+```
+
+**Expected:** The same list, and then the history is there:
+
+```bash
+clavus log "My Set.als"
+clavus cues "My Set.als"
+```
+
+**What to watch for:** The notes are the part that cannot be
+recreated. Check that every note you remember is there, with its text
+and its author. The old version wrote a note's status in lower case
+(`pending`); the current one writes `Pending`. Both are read.
+
+### 12.3 Where the sets are found
+
+If the library has moved since the old version, say where it is now
+with `--projects`. The old store names each project by its old path,
+and the part after `Clavus/Projects` is still true of the library, so
+the right file is found even when two files share a name.
+
+**What to watch for:** A project listed under *Left behind* means its
+file was not found. The reason says so; nothing was dropped in
+silence.
+
+### 12.4 The bytes
+
+A snapshot's project bytes and audio are brought across too, so a
+restore works:
+
+```bash
+clavus restore "My Set.als" HEAD
+```
+
+**What to watch for:** The imported files are ordinary files you own.
+They can be read, replaced and deleted. A backup's files are often
+read-only, and that must not follow the bytes into your store.
+
+---
+
 ## Open Questions
 
 If you run into behavior you can't explain, note it here:

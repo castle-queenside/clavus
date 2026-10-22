@@ -100,6 +100,29 @@ whole library. Without it, the standard places are searched, so
 be unique across every place searched: two sets of the same name in
 two folders are two projects, and neither is the one that was asked for.
 
+### Coming from the older Clavus
+The version before this one kept its library in `~/Clavus/Projects` and
+its history in `~/.clavus`. Both are still readable.
+
+```bash
+clavus import-legacy --store ~/.clavus --projects ~/Clavus/Projects
+```
+
+The old store's snapshot records carry the same fields this one's do,
+so the history comes across as history — the same chain, the same
+notes, the same bytes — rather than as a summary of itself. Each
+record is re-pointed at where the project lives now, because the old
+one named a path on the machine it was written on.
+
+The projects folder is how the sets are found. The old store names
+each project by its old path, and the part of that path after
+`Clavus/Projects` is still true of the library, so the file is found
+where the old store said it was. A project whose file cannot be found
+is named and left behind; a record that cannot be read is named too.
+Nothing is dropped in silence.
+
+`--dry-run` says what would happen and writes nothing at all.
+
 ### Content-addressed storage
 - Raw `.als` bytes are the blob. SHA256 = snapshot hash.
 - Duplicate saves detected automatically — same bytes = same hash.
@@ -261,7 +284,7 @@ git add -A && git commit && git push
 - A store that cannot be read is an error, never an empty history
 - The TUI survives any terminal size, shows its selection, and notices
   a relay that has gone away
-- 491 tests passing, clippy clean, CI green
+- 500 tests passing, clippy clean, CI green
 
 ### Blocked ⛔
 | Item | Blocker |

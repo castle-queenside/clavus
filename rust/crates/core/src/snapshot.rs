@@ -107,7 +107,7 @@ impl SnapshotStore {
     /// `log`, `push` and `restore` for one project showed another's
     /// history.
     pub fn head_ref(&self) -> String {
-        format!("{}/HEAD", self.project.key)
+        self.project.head_ref()
     }
 
     /// Read this project's HEAD.

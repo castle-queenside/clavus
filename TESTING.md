@@ -32,7 +32,7 @@
 | Core unit tests | `crates/core/src/**` | 33 | 🟢 |
 | Sync unit tests (blob transfer) | `crates/sync/src/**` | 10 | 🟢 |
 
-**491 tests passing, 0 failed, 0 ignored.**
+**500 tests passing, 0 failed, 0 ignored.**
 
 Legend: 🟢 good  🟡 partial  🟠 manual only  🔴 missing
 
@@ -188,6 +188,11 @@ real ones. Each now has a regression test:
 | The original Clavus library became invisible | The Python version kept its sets in `~/Clavus/Projects`. The rewrite scanned only `~/Music` and `~/Documents`, so a library that had been Clavus's own for years was gone | `~/Clavus/Projects` is a standard location again, for the CLI and the TUI |
 | A project could only be named from the folder it sat in | `clavus log "My Set.als"` worked only if the path existed as given, so it needed an absolute path or a `--dir` | The standard places are searched when no `--dir` is given, and the name must be unique across all of them |
 | The name lookup could walk forever | It had no depth cap and no guard against a folder that links to its own ancestor, and it now walks the whole library | The walk is capped and visits each directory once, as the project scan does |
+| An old Clavus store could not be brought across | The older version kept its library in `~/Clavus/Projects` and its history in `~/.clavus`. The rewrite had no way to read either, so a history years in the making was unreachable | `clavus import-legacy` reads the old store and writes the history, the notes and the bytes into the current one |
+| A migrated blob could not be replaced or deleted | The old store's files are often read-only, and a backup's access list can forbid deleting them. A plain copy keeps both, and a blob that cannot be replaced breaks the store the next time those bytes are written | The bytes are written to a fresh file, so the destination has the permissions and no access list |
+| A migrated note could not be read | The older version wrote `pending` in lower case; this one writes `Pending`, and the reader only knew one spelling | The spelling is matched without regard to case |
+| A dry run left a store behind | The store's directories were created before the migration knew whether it was a dry run | The store is opened for writing only when something is actually written |
+| The wrong file of two with the same name was used | A library can hold `Me And You/Me And You.als` and `Me And You/Me And You Project/Me And You.als`. The old store named the right one, and the part of its path after the library folder is still true | The old path is mapped onto where the sets live now, and the name is only a fallback |
 
 ---
 

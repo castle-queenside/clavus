@@ -27,6 +27,8 @@ pub mod sample;
 pub use sample::{audit_project, collect_samples, CollectReport};
 
 pub mod error;
+
+pub mod legacy;
 pub use error::ClavusResult;
 
 /// The name a note is signed with when the user does not give one.
