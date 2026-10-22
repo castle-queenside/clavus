@@ -16,6 +16,29 @@ use ratatui::{
 // ─── Entry point ─────────────────────────────────────────────────────
 
 pub fn render(frame: &mut Frame, app: &mut App) {
+    // A terminal that is too small to hold the interface is not a
+    // reason to die. The layout below subtracts and divides, and a
+    // window of two rows used to panic — silently, because the panic
+    // hook swallowed the message. The user is told the window is too
+    // small and the app keeps running.
+    let size = frame.size();
+    if size.width < 60 || size.height < 10 {
+        // The message is sized to fit: a very narrow window still gets
+        // a word, so the user is never left with a blank screen and no
+        // explanation.
+        let msg = if size.width < 20 {
+            "too small".to_string()
+        } else {
+            format!(
+                "  too small ({}x{}) — Clavus needs 60x10",
+                size.width, size.height
+            )
+        };
+        let area = Rect::new(size.x, size.y, size.width, 1);
+        frame.render_widget(Paragraph::new(msg).style(Style::new().fg(MUTED)), area);
+        return;
+    }
+
     match app.screen {
         Screen::ProjectList  => render_project_list(frame, app),
         Screen::ProjectDetail=> render_project_detail(frame, app),
@@ -76,6 +99,7 @@ fn render_project_list(frame: &mut Frame, app: &mut App) {
     let header_row = Row::new(vec![
         Span::raw("TYPE"),
         Span::raw("NAME"),
+        Span::raw("FOLDER"),
         Span::raw("SNAPS"),
         Span::raw("BPM"),
         Span::raw("TRACKS"),
@@ -109,6 +133,7 @@ fn render_project_list(frame: &mut Frame, app: &mut App) {
         Row::new(vec![
             Span::raw(type_badge),
             Span::raw(&p.name),
+            Span::raw(p.folder.clone()),
             Span::raw(snap_text).style(Style::new().fg(snap_fg)),
             Span::raw(format!("{:.0}", p.bpm)),
             Span::raw(p.track_count.to_string()),
@@ -120,7 +145,8 @@ fn render_project_list(frame: &mut Frame, app: &mut App) {
 
     let table = Table::new(rows, &[
         Constraint::Length(5),
-        Constraint::Min(20),
+        Constraint::Min(14),
+        Constraint::Length(18),
         Constraint::Length(12),
         Constraint::Length(5),
         Constraint::Length(6),
@@ -254,8 +280,13 @@ fn render_cue_list(frame: &mut Frame, app: &mut App) {
     render_footer(frame, footer, app);
 
     let filter = app.cue_filter.clone();
-    let filtered: Vec<_> = app.cues.iter()
-        .filter(|c| filter.is_none() || filter.as_ref().is_some_and(|f| c.status == *f))
+    // The rows are the filtered cues, but the selection is an index
+    // into the whole list, so the original index is kept with each row.
+    let filtered: Vec<(usize, &clavus_core::types::Cue)> = app
+        .cues
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| filter.is_none() || filter.as_ref().is_some_and(|f| c.status == *f))
         .collect();
 
     if filtered.is_empty() {
@@ -273,26 +304,36 @@ fn render_cue_list(frame: &mut Frame, app: &mut App) {
         frame.render_widget(line, filter_area);
     }
 
-    let cue_rows: Vec<ListItem<'_>> = filtered.iter().map(|c| {
-        let color = cue_status_color(&c.status);
-        let icon  = cue_status_icon(&c.status);
+    let cue_rows: Vec<ListItem<'_>> = filtered
+        .iter()
+        .map(|(index, c)| {
+            let color = cue_status_color(&c.status);
+            let icon = cue_status_icon(&c.status);
 
-        let line1 = Line::raw(format!(
-            "{} {}  {:12}  {}",
-            icon, c.status.as_str(), c.position, c.text,
-        ))
-        .style(Style::new().fg(color));
+            // The selected row is highlighted. The arrow keys moved a
+            // cursor that could not be seen, so the user did not know
+            // which note the keys acted on.
+            let selected = app.selected_cue == Some(*index);
+            let bg = if selected { ACCENT } else { PANEL_0 };
+            let fg = if selected { BG } else { color };
 
-        let line2 = Line::raw(format!(
-            "      {} · {} · {}",
-            c.track_name,
-            clavus_core::short(&c.id, 8),
-            c.author
-        ))
-            .style(Style::new().fg(MUTED));
+            let line1 = Line::raw(format!(
+                "{} {}  {:12}  {}",
+                icon, c.status.as_str(), c.position, c.text,
+            ))
+            .style(Style::new().fg(fg).bg(bg));
 
-        ListItem::new(vec![line1, line2])
-    }).collect();
+            let line2 = Line::raw(format!(
+                "      {} · {} · {}",
+                c.track_name,
+                clavus_core::short(&c.id, 8),
+                c.author
+            ))
+                .style(Style::new().fg(if selected { BG } else { MUTED }).bg(bg));
+
+            ListItem::new(vec![line1, line2])
+        })
+        .collect();
 
     let list = List::new(cue_rows)
         .block(Block::default()
@@ -363,7 +404,8 @@ fn render_cue_add(frame: &mut Frame, app: &mut App) {
         l("  TRACK", MUTED),
         l("  Arrangement", TEXT),
         l("", MUTED),
-        l("  author: tui", MUTED),
+        Line::raw(format!("  author: {}", clavus_core::default_author()))
+            .style(Style::new().fg(MUTED)),
     ];
 
     let form = Paragraph::new(form_lines)
@@ -403,19 +445,28 @@ fn render_snapshot_list(frame: &mut Frame, app: &mut App) {
     .style(h_style)
     .height(1);
 
-    let snap_rows: Vec<Row<'_>> = app.snapshots.iter().map(|s| {
-        let ts = unix_to_rel(s.timestamp as i64);
-        Row::new(vec![
-            Span::raw(clavus_core::short(&s.hash, 8)).style(Style::new().fg(WARM)),
-            Span::raw(s.message.replace('\n', " ")),
-            Span::raw(format!("{:.0}", s.bpm)),
-            Span::raw(s.track_count.to_string()),
-            Span::raw(s.sample_hashes.len().to_string()),
-            Span::raw(ts),
-        ])
-        .style(Style::new().fg(TEXT).bg(PANEL_0))
-        .height(1)
-    }).collect();
+    let snap_rows: Vec<Row<'_>> = app
+        .snapshots
+        .iter()
+        .enumerate()
+        .map(|(row, s)| {
+            let ts = unix_to_rel(s.timestamp as i64);
+            // The selected row is highlighted — see the cue list.
+            let selected = app.selected_snapshot == Some(row);
+            let bg = if selected { ACCENT } else { PANEL_0 };
+            let fg = if selected { BG } else { TEXT };
+            Row::new(vec![
+                Span::raw(clavus_core::short(&s.hash, 8)).style(Style::new().fg(if selected { BG } else { WARM })),
+                Span::raw(s.message.replace('\n', " ")),
+                Span::raw(format!("{:.0}", s.bpm)),
+                Span::raw(s.track_count.to_string()),
+                Span::raw(s.sample_hashes.len().to_string()),
+                Span::raw(ts),
+            ])
+            .style(Style::new().fg(fg).bg(bg))
+            .height(1)
+        })
+        .collect();
 
     let table = Table::new(snap_rows, &[
         Constraint::Length(8),
@@ -550,6 +601,9 @@ fn render_spectrum(app: &App) -> Vec<Line<'static>> {
 // ─── Title bar ───────────────────────────────────────────────────────
 
 fn render_title_bar(frame: &mut Frame, area: Rect, title: &str, app: &App) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
     frame.render_widget(Paragraph::new("").style(Style::new().bg(PANEL_0)), area);
 
     // Left: "clavus" in accent + title
@@ -572,12 +626,23 @@ fn render_title_bar(frame: &mut Frame, area: Rect, title: &str, app: &App) {
 
     // Bottom border
     let border = Paragraph::new("").style(Style::new().fg(LINE));
-    frame.render_widget(border, Rect::new(area.x, area.y + area.height - 1, area.width, 1));
+    frame.render_widget(
+        border,
+        Rect::new(
+            area.x,
+            area.y + area.height.saturating_sub(1),
+            area.width,
+            1,
+        ),
+    );
 }
 
 // ─── Footer / status bar ─────────────────────────────────────────────
 
 fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
     frame.render_widget(Paragraph::new("").style(Style::new().bg(PANEL_0)), area);
 
     let (content, color) = if let Some(e) = &app.error {

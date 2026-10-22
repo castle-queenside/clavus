@@ -150,10 +150,18 @@ fn run_tui(
         }
     }
 
-    // Restore terminal on panic
-    panic::set_hook(Box::new(|_| {
+    // Restore terminal on panic — and say what happened.
+    //
+    // The hook replaced the default one, and the default one is the
+    // hook that prints the panic message. A panic therefore killed the
+    // app with an exit code and no explanation at all: the user could
+    // not tell what had gone wrong. The default hook is called after
+    // the terminal is put back, so the message reaches the screen.
+    let default_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |info| {
         let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
         let _ = crossterm::terminal::disable_raw_mode();
+        default_hook(info);
     }));
 
     let backend = CrosstermBackend::new(std::io::stdout());

@@ -73,12 +73,20 @@ pub struct App {
     pub cue_step: CueStep,
     /// The relay the TUI talks to.
     pub relay_addr: String,
+    /// The screen the sync screen was opened from.
+    pub sync_opened_from: Option<Screen>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ProjectEntry {
     pub path: PathBuf,
     pub name: String,
+    /// The folder the project lives in, relative to the home directory.
+    ///
+    /// Two projects can share a file name, and the user has to be able
+    /// to tell them apart on screen — the list showed two rows both
+    /// named "Song" with nothing to tell them apart.
+    pub folder: String,
     pub project_type: String,
     pub head: Option<String>,
     /// Number of snapshots in the chain (0 if never snapshotted).
@@ -184,6 +192,7 @@ impl App {
             cue_message: String::new(),
             cue_step: CueStep::Message,
             relay_addr: "127.0.0.1:4477".to_string(),
+            sync_opened_from: None,
         }
     }
 
@@ -194,14 +203,28 @@ impl App {
     /// they were working on.
     pub fn previous_screen(&self) -> Screen {
         match self.screen {
-            Screen::CueAdd | Screen::RelayInput => match self.screen {
-                Screen::CueAdd => Screen::CueList,
-                _ => Screen::Sync,
-            },
-            Screen::CueList | Screen::SnapshotList | Screen::Sync => Screen::ProjectDetail,
+            Screen::CueAdd => Screen::CueList,
+            Screen::RelayInput => Screen::Sync,
+            // The sync screen was opened from wherever the user was, so
+            // Esc goes back there. It used to land on the project detail
+            // screen even when the user came from the project list —
+            // and that screen says "no project loaded", so the user
+            // had to press Esc twice to get back.
+            Screen::Sync => self.sync_opened_from.unwrap_or(Screen::ProjectDetail),
+            Screen::CueList | Screen::SnapshotList => Screen::ProjectDetail,
             Screen::ProjectDetail => Screen::ProjectList,
             Screen::ProjectList => Screen::ProjectList,
         }
+    }
+
+    /// Open the sync screen, remembering where the user came from.
+    pub fn open_sync(&mut self) {
+        self.sync_opened_from = Some(match self.screen {
+            Screen::ProjectList => Screen::ProjectList,
+            Screen::ProjectDetail => Screen::ProjectDetail,
+            other => other,
+        });
+        self.screen = Screen::Sync;
     }
 
     /// The relay address the TUI uses.
@@ -226,6 +249,11 @@ impl App {
             format!("Cannot read {}: {}", self.projects_dir.display(), e)
         })?;
 
+        // A Clavus data directory that cannot be read is an error too.
+        // The list would show every project with no snapshots, and the
+        // user would think their history was gone.
+        self.store_readable()?;
+
         let mut entries = Vec::new();
         self.scan_dir(&self.projects_dir, 0, &mut entries);
 
@@ -247,6 +275,19 @@ impl App {
         };
         for entry in read.flatten() {
             let path = entry.path();
+
+            // A directory is not a project, whatever it is called. A
+            // folder named `Folder.als` was listed as a project and
+            // then failed to open; the CLI never listed it.
+            if path.is_dir() {
+                // A symlink loop must not make the scan run forever.
+                let real = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+                if real.is_dir() {
+                    self.scan_dir(&path, depth + 1, out);
+                }
+                continue;
+            }
+
             let ext = path
                 .extension()
                 .and_then(|s| s.to_str())
@@ -256,12 +297,6 @@ impl App {
             if ext == "als" || ext == "bwproject" {
                 if let Some(project_entry) = self.project_entry(&path, &ext) {
                     out.push(project_entry);
-                }
-            } else if path.is_dir() {
-                // A symlink loop must not make the scan run forever.
-                let real = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-                if real.is_dir() {
-                    self.scan_dir(&path, depth + 1, out);
                 }
             }
         }
@@ -284,6 +319,12 @@ impl App {
 
         let project_type = if ext == "als" { "Ableton" } else { "Bitwig" };
 
+        // The folder the project lives in, so two projects that share
+        // a file name can be told apart on screen.
+        let folder = clavus_core::project::ProjectId::new(path)
+            .folder_path()
+            .to_string();
+
         // Check for existing snapshots
         let (head, snap_count) = Self::snap_info(&self.clavus_root, path);
 
@@ -298,6 +339,7 @@ impl App {
         Some(ProjectEntry {
             path: path.to_path_buf(),
             name,
+            folder,
             project_type: project_type.to_string(),
             head,
             snap_count,
@@ -569,7 +611,27 @@ impl App {
 
             let _ = result_tx.send(format!("connected to {}", addr_owned));
 
-            while let Ok(cmd) = cmd_rx.recv() {
+            // The command channel is waited on with a timeout, so the
+            // thread notices a relay that has gone away. A relay that
+            // died used to leave the sync screen saying "connected",
+            // and the user believed their work was synced when it was
+            // not.
+            loop {
+                let cmd = match cmd_rx.recv_timeout(std::time::Duration::from_secs(2)) {
+                    Ok(cmd) => cmd,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        // The client notices a dead socket when its
+                        // reader hits the end of the stream.
+                        if let Some(c) = client.as_ref() {
+                            if c.is_closed() {
+                                let _ = result_tx.send("connection lost".to_string());
+                                break;
+                            }
+                        }
+                        continue;
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                };
                 match cmd {
                     SyncCmd::Disconnect => {
                         if let Some(c) = client.take() {
@@ -773,6 +835,13 @@ impl App {
             } else if msg == "disconnected" {
                 self.sync_state.connected = false;
                 self.set_info("disconnected".into());
+            } else if msg == "connection lost" {
+                // The relay went away. The screen must not keep
+                // saying "connected" — the user would believe their
+                // work was synced when it was not.
+                self.sync_state.connected = false;
+                self.sync_state.cmd_tx = None;
+                self.set_error("the connection to the relay was lost".into());
             } else {
                 // A push or a pull that worked is worth remembering: the
                 // sync panel said "last sync never" even after a
@@ -824,6 +893,34 @@ impl App {
         let count = store.chain_length(None);
         (head, count)
     }
+
+    /// Refresh the snapshot counts and heads of the projects already in
+    /// the list.
+    ///
+    /// The list is not rebuilt — the projects on disk have not changed
+    /// while the TUI was open, only the history behind them has. A
+    /// snapshot taken elsewhere, in the CLI, was invisible in the TUI
+    /// until it was restarted, so the TUI and the CLI disagreed about
+    /// the same project.
+    pub fn refresh_project_counts(&mut self) {
+        let root = self.clavus_root.clone();
+        for entry in &mut self.projects {
+            let (head, count) = Self::snap_info(&root, &entry.path);
+            entry.head = head;
+            entry.snap_count = count;
+        }
+    }
+
+    /// Whether the Clavus data directory can be read.
+    ///
+    /// A store that cannot be read is not an empty store: the user
+    /// would be told their project has no snapshots when it has some.
+    pub fn store_readable(&self) -> Result<(), String> {
+        let blobs = BlobStore::open(self.clavus_root.join("blobs"));
+        blobs
+            .check_readable()
+            .map_err(|e| format!("cannot read the Clavus data directory: {}", e))
+    }
 }
 
 /// Whether the local store already has a blob.
@@ -857,6 +954,7 @@ pub fn store_pulled(
     if !snapshots.is_empty() {
         if let Ok(blobs) = BlobStore::new(clavus_root.join("blobs")) {
             let snap_store = SnapshotStore::new(blobs, project);
+            let local_head = snap_store.head().map(|h| h.hash);
             for snap in snapshots {
                 if snap_store.has(&snap.hash) {
                     continue;
@@ -871,10 +969,19 @@ pub fn store_pulled(
                     stored += 1;
                 }
             }
-            // Advance HEAD to the newest snapshot the relay sent. The
-            // list is not necessarily in chain order, so the newest is
-            // the one that is nobody's parent.
-            if let Some(newest) = clavus_core::snapshot::newest_in(snapshots) {
+            // Advance HEAD only when the pulled history *extends* ours.
+            // Moving the HEAD onto a different branch drops the user's
+            // own snapshot out of the chain — the TUI used to do that,
+            // and the CLI did not, so the same pull gave two different
+            // results depending on which tool ran it.
+            let candidates: Vec<String> = snapshots
+                .iter()
+                .map(|s| s.hash.clone())
+                .filter(|h| snap_store.has(h))
+                .collect();
+            if let Some(newest) =
+                clavus_core::snapshot::head_after_pull(&snap_store, local_head.as_deref(), &candidates)
+            {
                 let _ = snap_store.set_head(&newest, "pull");
             }
         }

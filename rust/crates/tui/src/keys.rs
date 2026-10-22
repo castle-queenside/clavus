@@ -66,6 +66,12 @@ pub fn handle_key(key: &KeyEvent, app: &mut App) -> bool {
             }
         }
         (KeyCode::Down, _) if app.screen == Screen::ProjectList => {
+            // The counts in the list are read from the store, and the
+            // store changes when the user works in the CLI. The list
+            // was only read once at start-up, so the TUI and the CLI
+            // disagreed about the same project until the TUI was
+            // restarted. It is refreshed as the user moves through it.
+            app.refresh_project_counts();
             if let Some(i) = app.selected_project {
                 if i + 1 < self_len(app) {
                     app.selected_project = Some(i + 1);
@@ -101,7 +107,7 @@ pub fn handle_key(key: &KeyEvent, app: &mut App) -> bool {
         (KeyCode::Char('s'), KeyModifiers::NONE)
             if app.screen == Screen::ProjectList || app.screen == Screen::ProjectDetail =>
         {
-            app.screen = Screen::Sync;
+            app.open_sync();
         }
 
         // ── Cue List ───────────────────────────────
@@ -161,20 +167,27 @@ pub fn handle_key(key: &KeyEvent, app: &mut App) -> bool {
             // 127.0.0.1:4477 and nothing else, so a collaborator on
             // another machine could not use the TUI at all.
             app.screen = Screen::RelayInput;
-            app.input_buf = app.relay_address().to_string();
+            // The field starts empty. It used to be prefilled with the
+            // old address, so typing a new one appended to it and the
+            // result was a nonsense address that could never connect.
+            app.input_buf.clear();
         }
         (KeyCode::Char('P'), KeyModifiers::NONE) if app.screen == Screen::Sync => {
             if app.sync_state.is_connected() {
-                // Push the selected project's local snapshot chain.
+                // Push the selected project's local snapshot chain and
+                // its notes.
                 let snapshots = app.selected_snapshots();
                 let n = snapshots.len();
-                if snapshots.is_empty() {
-                    app.set_info("no local snapshots to push".into());
+                // The cues travel with the snapshots — a collaborator's
+                // notes are the point of the cue system. A project with
+                // notes but no snapshot is still worth sharing: the CLI
+                // sends the notes on their own, and the TUI used to
+                // refuse, so a cue-only user could share nothing.
+                let cues = app.project_cues();
+                let c = cues.len();
+                if snapshots.is_empty() && cues.is_empty() {
+                    app.set_info("nothing to push — no local snapshots and no notes".into());
                 } else {
-                    // The cues travel with the snapshots — a collaborator's
-                    // notes are the point of the cue system.
-                    let cues = app.project_cues();
-                    let c = cues.len();
                     // The relay keys its storage by project, so the push
                     // has to say which project these belong to.
                     let project = app.selected_project_sync_name();
@@ -188,7 +201,11 @@ pub fn handle_key(key: &KeyEvent, app: &mut App) -> bool {
                         blobs,
                         project,
                     });
-                    app.set_info(format!("pushing {} snapshot(s), {} cue(s)...", n, c));
+                    if n == 0 {
+                        app.set_info(format!("pushing {} note(s) only...", c));
+                    } else {
+                        app.set_info(format!("pushing {} snapshot(s), {} cue(s)...", n, c));
+                    }
                 }
             } else {
                 app.set_info("press c to connect first".into());
@@ -334,7 +351,13 @@ fn save_cue(app: &mut App) {
         .map(|p| clavus_core::project::ProjectId::new(&p.path));
     if let Some(project) = project {
         match clavus_core::CueStore::new(&root, &project) {
-            Ok(store) => match store.add(&text, &position, "tui", "", "Arrangement") {
+            Ok(store) => match store.add(
+                &text,
+                &position,
+                &clavus_core::default_author(),
+                "",
+                "Arrangement",
+            ) {
                 Ok(_) => {
                     app.set_info("cue saved".into());
                     app.input_buf.clear();

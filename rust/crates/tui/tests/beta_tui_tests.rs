@@ -87,7 +87,10 @@ fn a_cue_typed_in_the_tui_carries_its_message() {
     assert_eq!(h.app.cues.len(), 1, "the cue must be stored");
     assert_eq!(h.app.cues[0].text, "bring the bass in");
     assert_eq!(h.app.cues[0].position, "5.1.1");
-    assert_eq!(h.app.cues[0].author, "tui");
+    // The note is signed with the user's own name, the same way the
+    // CLI signs it — a collaborator saw the same person as two
+    // different authors.
+    assert_eq!(h.app.cues[0].author, clavus_core::default_author());
 }
 
 // ─── A "q" can be typed in a text field ───────────────────────────────────
