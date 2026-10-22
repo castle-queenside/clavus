@@ -39,6 +39,13 @@ pub struct App {
     pub clavus_root: PathBuf,
     /// Projects directory.
     pub projects_dir: PathBuf,
+    /// Every directory the project list is drawn from.
+    ///
+    /// The CLI's `--dir` names one, and it is the only one. Without it,
+    /// the standard places are scanned — `~/Music`, `~/Documents`, and
+    /// `~/Clavus/Projects`, which is where Clavus itself used to keep
+    /// its sets.
+    pub project_dirs: Vec<PathBuf>,
     /// Discovered projects.
     pub projects: Vec<ProjectEntry>,
     /// Currently selected project.
@@ -168,12 +175,22 @@ impl SyncState {
 
 impl App {
     pub fn new(projects_dir: PathBuf) -> Self {
+        Self::with_dirs(vec![projects_dir])
+    }
+
+    /// An app that draws its project list from several directories.
+    pub fn with_dirs(project_dirs: Vec<PathBuf>) -> Self {
+        let projects_dir = project_dirs
+            .first()
+            .cloned()
+            .unwrap_or_else(|| PathBuf::from("."));
         let clavus_root = dirs::home_dir()
             .map(|h| h.join(".clavus"))
             .unwrap_or_else(|| PathBuf::from(".clavus"));
         Self {
             clavus_root: clavus_root.clone(),
             projects_dir,
+            project_dirs,
             projects: vec![],
             selected_project: None,
             project_detail: None,
@@ -245,9 +262,9 @@ impl App {
     pub fn refresh_projects(&mut self) -> Result<(), String> {
         // A projects directory that cannot be read is an error — the
         // user needs to know that the TUI is looking in the wrong place.
-        std::fs::read_dir(&self.projects_dir).map_err(|e| {
-            format!("Cannot read {}: {}", self.projects_dir.display(), e)
-        })?;
+        for dir in &self.project_dirs {
+            std::fs::read_dir(dir).map_err(|e| format!("Cannot read {}: {}", dir.display(), e))?;
+        }
 
         // A Clavus data directory that cannot be read is an error too.
         // The list would show every project with no snapshots, and the
@@ -255,7 +272,9 @@ impl App {
         self.store_readable()?;
 
         let mut entries = Vec::new();
-        self.scan_dir(&self.projects_dir, 0, &mut entries);
+        for dir in &self.project_dirs {
+            self.scan_dir(dir, 0, &mut entries);
+        }
 
         // Sort by modified time descending
         entries.sort_by_key(|a| std::cmp::Reverse(a.modified_secs));

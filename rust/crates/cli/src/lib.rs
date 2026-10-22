@@ -1648,15 +1648,38 @@ pub fn cmd_projects(
     Ok(())
 }
 
+/// The places a project is looked for when the user has not said where.
+///
+/// `~/Music` and `~/Documents` are where Ableton and most people keep
+/// their sets. `~/Clavus/Projects` is where **Clavus itself** kept them
+/// — the Python version's default — and a machine that was set up with
+/// it still has that folder. The rewrite stopped looking there, so a
+/// library that had been Clavus's own for years became invisible.
 pub fn standard_albeton_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Some(music) = dirs::audio_dir() {
-        dirs.push(music);
+    standard_albeton_dirs_in(dirs::audio_dir().as_deref(), dirs::home_dir().as_deref())
+}
+
+/// The standard places, given the music folder and the home folder.
+///
+/// The home folder is a parameter so the list can be tested without
+/// changing the environment of the machine running the test.
+pub fn standard_albeton_dirs_in(
+    music: Option<&Path>,
+    home: Option<&Path>,
+) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if let Some(music) = music {
+        dirs.push(music.to_path_buf());
     }
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = home {
         let documents = home.join("Documents");
         if documents.exists() {
             dirs.push(documents);
+        }
+        // The original Clavus library.
+        let clavus = home.join("Clavus").join("Projects");
+        if clavus.exists() {
+            dirs.push(clavus);
         }
     }
     dirs
@@ -1744,6 +1767,11 @@ pub fn projects_dir() -> PathBuf {
 /// exists is used exactly as it was given: the flag never overrides
 /// an explicit path.
 ///
+/// Without the flag, the standard places are searched, so
+/// `clavus log "My Set.als"` finds the set from anywhere. The flag, when
+/// it is given, is the only place searched — a user who named a
+/// directory did not ask for the whole library.
+///
 /// When several projects below the directory have the name, none of
 /// them is chosen. Guessing would open the wrong project, and the
 /// command says so instead.
@@ -1751,16 +1779,29 @@ pub fn resolve_project(project: &Path, dir: Option<&Path>) -> PathBuf {
     if project.exists() {
         return project.to_path_buf();
     }
-    if let Some(dir) = dir {
+    let dirs: Vec<PathBuf> = match dir {
+        Some(d) => vec![d.to_path_buf()],
+        None => standard_albeton_dirs(),
+    };
+    for dir in &dirs {
         let candidate = dir.join(project);
         if candidate.exists() {
             return candidate;
         }
-        if let Some(found) = find_unique_below(dir, project) {
-            return found;
+    }
+    // The name has to be unique across every place searched. Two sets
+    // of the same name in two different folders are two projects, and
+    // neither is the one that was asked for.
+    let mut found: Option<PathBuf> = None;
+    for dir in &dirs {
+        if let Some(p) = find_unique_below(dir, project) {
+            if found.is_some() {
+                return project.to_path_buf(); // ambiguous
+            }
+            found = Some(p);
         }
     }
-    project.to_path_buf()
+    found.unwrap_or_else(|| project.to_path_buf())
 }
 
 /// Find the one project below `dir` that answers to `name`.
@@ -1771,8 +1812,20 @@ pub fn resolve_project(project: &Path, dir: Option<&Path>) -> PathBuf {
 fn find_unique_below(dir: &Path, name: &Path) -> Option<PathBuf> {
     let wanted = name.file_name()?;
     let mut found: Option<PathBuf> = None;
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(current) = stack.pop() {
+    let mut stack = vec![(dir.to_path_buf(), 0usize)];
+    // A directory is visited at most once, and the walk has a depth
+    // cap. Without them a folder that links to its own ancestor would
+    // make this run forever, and a deep library would take minutes.
+    let mut visited: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
+    while let Some((current, depth)) = stack.pop() {
+        if depth > MAX_SCAN_DEPTH {
+            continue;
+        }
+        if let Ok(real) = current.canonicalize() {
+            if !visited.insert(real) {
+                continue;
+            }
+        }
         let entries = match std::fs::read_dir(&current) {
             Ok(entries) => entries,
             Err(_) => continue,
@@ -1790,7 +1843,7 @@ fn find_unique_below(dir: &Path, name: &Path) -> Option<PathBuf> {
                 if name.starts_with('.') {
                     continue;
                 }
-                stack.push(path);
+                stack.push((path, depth + 1));
                 continue;
             }
             let matches_name = path.file_name() == Some(wanted);
@@ -1799,6 +1852,11 @@ fn find_unique_below(dir: &Path, name: &Path) -> Option<PathBuf> {
                 Some("als") | Some("bwproject")
             );
             if matches_name && is_project {
+                // Live's own copies are not projects of their own, so
+                // they must not make a name look ambiguous.
+                if clavus_core::project::is_live_backup_copy(&path) {
+                    continue;
+                }
                 if found.is_some() {
                     // More than one — no choice is safe.
                     return None;

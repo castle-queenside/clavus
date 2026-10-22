@@ -32,7 +32,7 @@
 | Core unit tests | `crates/core/src/**` | 33 | 🟢 |
 | Sync unit tests (blob transfer) | `crates/sync/src/**` | 10 | 🟢 |
 
-**487 tests passing, 0 failed, 0 ignored.**
+**491 tests passing, 0 failed, 0 ignored.**
 
 Legend: 🟢 good  🟡 partial  🟠 manual only  🔴 missing
 
@@ -185,6 +185,9 @@ real ones. Each now has a regression test:
 | Live's own backup copies were listed as projects | Live keeps a `Backup/` and an `Autosave/` folder beside every set. A real drive held 2,690 `.als` files, of which 1,445 were these copies and 1,245 were the sets — so more than half the list was the same projects again under new names | A file inside a `Backup/` or `Autosave/` folder is a copy, not a project; the CLI and the TUI both skip them |
 | A user-folder sample was looked for at the root of the filesystem | A Live 9 set stores its sample path relative to the machine's *user folder*, and the chain begins with an empty element standing for that folder's root. Joined naively the path began with `//`, and `//` is absolute on Unix, so the sample was looked for at `/Samples/kick.wav` | The empty element is dropped, and the path is looked for beside the project and in the usual places a user folder lives |
 | Live's own factory library was reported as missing | 60 of the 200 missing references on a real drive were `Ableton Live 11 Suite.app`'s own drum kits. Calling those "missing" said the user's audio was lost and stopped the snapshot | A sample inside an application bundle is Live's own content: it is named, and it does not stop a snapshot |
+| The original Clavus library became invisible | The Python version kept its sets in `~/Clavus/Projects`. The rewrite scanned only `~/Music` and `~/Documents`, so a library that had been Clavus's own for years was gone | `~/Clavus/Projects` is a standard location again, for the CLI and the TUI |
+| A project could only be named from the folder it sat in | `clavus log "My Set.als"` worked only if the path existed as given, so it needed an absolute path or a `--dir` | The standard places are searched when no `--dir` is given, and the name must be unique across all of them |
+| The name lookup could walk forever | It had no depth cap and no guard against a folder that links to its own ancestor, and it now walks the whole library | The walk is capped and visits each directory once, as the project scan does |
 
 ---
 

@@ -57,7 +57,6 @@ streams rather than straight to stdout.
 ### A project is a pointer, not a copy
 This is the question every user asks first, so it is worth stating
 plainly.
-
 **Clavus never imports a project into a database.** There is no import
 command, and there is no project database. A project is identified by
 *where it is*: its file name, its folder, and a digest of its absolute
@@ -83,6 +82,23 @@ A corollary: **a set on an unmounted drive is unreachable**, and the
 project's identity includes its path, so renaming the drive gives the
 sets a new identity. The blob store keeps the bytes, but the *pointer*
 now names a path that is not there.
+
+### Where a project is looked for
+`~/Music`, `~/Documents`, and **`~/Clavus/Projects`**.
+
+The third one is not an invention of the rewrite. The Python version's
+default was `Path.home() / "Clavus" / "Projects"` — a library folder of
+its own, beside the sets, holding `Set Name/Set Name Project/Set
+Name.als`. A machine that was set up with it still has that folder, and
+the rewrite had stopped looking there, which made a library that had
+been Clavus's own for years invisible.
+
+`clavus --dir <path>` names one directory to work in, and it is the
+only place searched — a user who named a directory did not ask for the
+whole library. Without it, the standard places are searched, so
+`clavus log "My Set.als"` finds the set from anywhere. The name has to
+be unique across every place searched: two sets of the same name in
+two folders are two projects, and neither is the one that was asked for.
 
 ### Content-addressed storage
 - Raw `.als` bytes are the blob. SHA256 = snapshot hash.
@@ -245,7 +261,7 @@ git add -A && git commit && git push
 - A store that cannot be read is an error, never an empty history
 - The TUI survives any terminal size, shows its selection, and notices
   a relay that has gone away
-- 487 tests passing, clippy clean, CI green
+- 491 tests passing, clippy clean, CI green
 
 ### Blocked ⛔
 | Item | Blocker |

@@ -221,6 +221,33 @@ fn the_tui_does_not_list_live_s_own_backup_copies() {
     );
 }
 
+#[test]
+fn the_tui_finds_projects_in_every_directory_it_is_given() {
+    // The TUI draws a list, so it looks in every standard place rather
+    // than in one — `~/Music`, `~/Documents`, and `~/Clavus/Projects`,
+    // which is where the original Clavus kept its sets.
+    let tmp = TempDir::new().unwrap();
+    let music = tmp.path().join("music");
+    let legacy = tmp.path().join("Clavus").join("Projects");
+    let data = tmp.path().join("data");
+    std::fs::create_dir_all(&music).unwrap();
+    std::fs::create_dir_all(&legacy).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(music.join("Alpha.als"), MINIMAL_ALS).unwrap();
+    std::fs::write(legacy.join("Beta.als"), MINIMAL_ALS).unwrap();
+
+    let mut app = App::with_dirs(vec![music, legacy]);
+    app.clavus_root = data;
+    app.refresh_projects().unwrap();
+
+    assert_eq!(
+        app.projects.len(),
+        2,
+        "both directories are scanned: {:?}",
+        app.projects
+    );
+}
+
 // ─── The relay address can be changed ─────────────────────────────────────
 //
 // Regression: the TUI could only ever talk to 127.0.0.1:4477, so a

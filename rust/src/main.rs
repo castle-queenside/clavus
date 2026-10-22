@@ -6,7 +6,7 @@
 
 use clavus_cli::{cmd_audit, cmd_collect, cmd_cue, cmd_cues, cmd_log, cmd_projects,
                  cmd_pull, cmd_push, cmd_relay, cmd_restore, cmd_snapshot, cmd_status,
-                 clavus_root, projects_dir, resolve_project, Cli, Commands};
+                 clavus_root, resolve_project, standard_albeton_dirs, Cli, Commands};
 use clap::Parser;
 use clavus_tui::app::App;
 use clavus_tui::ui;
@@ -29,7 +29,13 @@ fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let projects_dir = cli.dir.clone().unwrap_or_else(projects_dir);
+    // The CLI's `--dir` names one directory to work in. The TUI, which
+    // only draws a list, is given every standard place when the user
+    // has not said otherwise.
+    let tui_dirs = match &cli.dir {
+        Some(d) => vec![d.clone()],
+        None => standard_albeton_dirs(),
+    };
     let clavus_root = cli
         .data
         .clone()
@@ -42,7 +48,7 @@ fn main() -> anyhow::Result<()> {
     let mut stderr = std::io::stderr();
 
     match cli.command.unwrap_or(Commands::Tui { relay: None }) {
-        Commands::Tui { relay } => run_tui(projects_dir, clavus_root, relay),
+        Commands::Tui { relay } => run_tui(tui_dirs, clavus_root, relay),
         Commands::Snapshot {
             project,
             message,
@@ -129,11 +135,11 @@ fn main() -> anyhow::Result<()> {
 // ─── TUI ─────────────────────────────────────────────────────────
 
 fn run_tui(
-    projects_dir: PathBuf,
+    project_dirs: Vec<PathBuf>,
     clavus_root: PathBuf,
     relay: Option<String>,
 ) -> anyhow::Result<()> {
-    let mut app = App::new(projects_dir);
+    let mut app = App::with_dirs(project_dirs);
     // Honour `--data` / `CLAVUS_DATA` for every read and write the TUI makes.
     app.clavus_root = clavus_root;
     if let Some(relay) = relay {

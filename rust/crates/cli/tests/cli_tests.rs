@@ -1037,6 +1037,67 @@ fn projects_does_not_hang_on_a_symlink_loop() {
 }
 
 #[test]
+fn the_standard_locations_include_the_original_clavus_library() {
+    // The Python version kept its sets in `~/Clavus/Projects`. The
+    // rewrite stopped looking there, so a library that had been
+    // Clavus's own for years became invisible.
+    let tmp = TempDir::new().unwrap();
+    let home = tmp.path().join("home");
+    let legacy = home.join("Clavus").join("Projects");
+    std::fs::create_dir_all(&legacy).unwrap();
+    std::fs::create_dir_all(home.join("Music")).unwrap();
+    std::fs::create_dir_all(home.join("Documents")).unwrap();
+    std::fs::write(legacy.join("Old.als"), gzip_als("old")).unwrap();
+
+    // The home folder is a parameter, so nothing in the environment is
+    // changed while the test runs.
+    let dirs = clavus_cli::standard_albeton_dirs_in(
+        Some(home.join("Music").as_path()),
+        Some(home.as_path()),
+    );
+
+    assert!(
+        dirs.iter().any(|d| d == &legacy),
+        "the original Clavus library must be scanned: {:?}",
+        dirs
+    );
+}
+
+#[test]
+fn a_project_is_found_by_name_without_a_directory() {
+    // `clavus log "My Set.als"` used to work only if the path existed as
+    // given, so a set could only be named from the folder it sat in.
+    // The standard places are searched when no `--dir` is given.
+    let tmp = TempDir::new().unwrap();
+    let scan = tmp.path().join("scan");
+    fs::create_dir_all(scan.join("nested")).unwrap();
+    fs::write(scan.join("nested").join("Deep.als"), gzip_als("deep")).unwrap();
+
+    let found = clavus_cli::resolve_project(Path::new("Deep.als"), Some(&scan));
+    assert_eq!(found, scan.join("nested").join("Deep.als"));
+}
+
+#[test]
+fn finding_a_project_by_name_does_not_hang_on_a_symlink_loop() {
+    // The name lookup walks the tree below the directory, so it needs
+    // the same guard the project scan has.
+    let tmp = TempDir::new().unwrap();
+    let scan = tmp.path().join("scan");
+    fs::create_dir_all(scan.join("inner")).unwrap();
+    fs::write(scan.join("One.als"), gzip_als("one")).unwrap();
+
+    #[cfg(unix)]
+    {
+        let loop_link = scan.join("inner").join("back");
+        std::os::unix::fs::symlink(&scan, &loop_link).unwrap();
+    }
+
+    // If the walk were unbounded this would not return.
+    let found = clavus_cli::resolve_project(Path::new("One.als"), Some(&scan));
+    assert_eq!(found, scan.join("One.als"));
+}
+
+#[test]
 fn projects_does_not_list_live_s_own_backup_copies() {
     // Live keeps a `Backup/` folder and an `Autosave/` folder beside
     // every set, holding copies of it. On a real drive of 2,690 `.als`
