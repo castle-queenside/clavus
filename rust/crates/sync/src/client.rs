@@ -57,6 +57,12 @@ pub enum SyncMsg {
     BlobDone { project: String, hash: String },
     /// The relay does not have those bytes.
     BlobMissing { project: String, hash: String },
+    /// The relay could not do what it was asked to, and says why.
+    ///
+    /// A relay that cannot write its state to disk must not acknowledge
+    /// a push: the history would be gone on the next restart. The
+    /// client is told, and the operation fails.
+    Error { message: String },
 }
 
 /// Events broadcast to subscribers.

@@ -25,6 +25,14 @@ pub enum SaveOutcome {
     /// The project's bytes are identical to a snapshot this project
     /// already has. Nothing was recorded and the message was not stored.
     Unchanged(Snapshot),
+    /// The project file is the same as an existing snapshot, but the
+    /// audio it points at is not.
+    ///
+    /// The snapshot's manifest describes audio that no longer exists,
+    /// so the record is refreshed: the new message, the new manifest
+    /// and the new audio are stored. The chain's node stays the same —
+    /// the project file is the same file.
+    Updated(Snapshot),
 }
 
 impl SaveOutcome {
@@ -33,6 +41,7 @@ impl SaveOutcome {
         match self {
             SaveOutcome::Created(s) => s,
             SaveOutcome::Unchanged(s) => s,
+            SaveOutcome::Updated(s) => s,
         }
     }
 
@@ -40,6 +49,22 @@ impl SaveOutcome {
     pub fn created(&self) -> bool {
         matches!(self, SaveOutcome::Created(_))
     }
+
+    /// Whether the audio changed under an unchanged project file.
+    pub fn audio_changed(&self) -> bool {
+        matches!(self, SaveOutcome::Updated(_))
+    }
+}
+
+/// What happened to the audio a snapshot recorded.
+#[derive(Debug, Default, Clone)]
+pub struct SampleRestore {
+    /// The samples that were written back.
+    pub restored: Vec<PathBuf>,
+    /// The samples the snapshot recorded, but whose bytes are not here.
+    pub missing: Vec<PathBuf>,
+    /// The samples that were left alone: the user has a file there.
+    pub kept: Vec<PathBuf>,
 }
 
 /// A save outcome reads like the snapshot it refers to, so callers that
@@ -177,14 +202,55 @@ impl SnapshotStore {
         self.store.put(&raw_bytes);
         debug!("Stored raw project blob: {}", &content_hash[..12]);
 
+        // 2b. Store the audio the project points at.
+        //
+        // A snapshot of a set is not the set alone: the audio it plays
+        // is part of what the snapshot is. The bytes are kept in the
+        // blob store under their own hash, so a restore can put them
+        // back where the project expects them.
+        self.capture_samples(project_path, &sample_paths);
+
         // 3. Does this project already have a snapshot with these bytes?
         if let Some(existing) = self.store.load_meta(&self.project.key, &content_hash) {
+            if existing.sample_paths == sample_paths {
+                info!(
+                    "Snapshot {} already exists for {} (unchanged file)",
+                    existing.short_hash(8),
+                    project_path.display()
+                );
+                return Ok(SaveOutcome::Unchanged(existing));
+            }
+            // The project file is the same, but the audio it points at
+            // is not. The snapshot's manifest now describes audio that
+            // no longer exists, so the record is refreshed: the new
+            // message, the new manifest, the new audio. The node in the
+            // chain stays where it is — it is the same file.
+            let updated = Snapshot {
+                hash: existing.hash.clone(),
+                parent: existing.parent.clone(),
+                timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or(0.0),
+                message: message.to_string(),
+                track_count,
+                bpm,
+                tags: existing.tags.clone(),
+                notes: existing.notes.clone(),
+                sample_hashes,
+                sample_paths,
+                project_path: existing.project_path.clone(),
+                project_folder: existing.project_folder.clone(),
+            };
+            self.store
+                .write_meta(&self.project.key, &updated)
+                .map_err(|e| ClavusError::IndexCorrupted(e.to_string()))?;
             info!(
-                "Snapshot {} already exists for {} (unchanged file)",
-                existing.short_hash(8),
+                "Refreshed snapshot {} for {} (the audio changed)",
+                updated.short_hash(8),
                 project_path.display()
             );
-            return Ok(SaveOutcome::Unchanged(existing));
+            return Ok(SaveOutcome::Updated(updated));
         }
 
         // 4. Create and write this project's snapshot record
@@ -358,12 +424,25 @@ impl SnapshotStore {
         }
 
         // Prefer a match on the current chain.
-        if let Some(s) = self
+        //
+        // A prefix that matches two snapshots of the chain is refused
+        // just like a prefix that matches two snapshots off it. Silently
+        // restoring one of them is how a user ends up with the wrong
+        // version of their project.
+        let mut chain_matches = self
             .walk_chain(None)
             .into_iter()
-            .find(|s| s.hash.starts_with(prefix))
-        {
-            return Ok(s.hash);
+            .filter(|s| s.hash.starts_with(prefix));
+        if let Some(first) = chain_matches.next() {
+            if let Some(second) = chain_matches.next() {
+                return Err(ClavusError::AmbiguousSnapshot(format!(
+                    "{} (matches {} and {})",
+                    prefix,
+                    crate::short(&first.hash, 8),
+                    crate::short(&second.hash, 8)
+                )));
+            }
+            return Ok(first.hash);
         }
 
         // Fall back to the other snapshots of *this* project.
@@ -483,11 +562,17 @@ impl SnapshotStore {
         }
 
         // atomic write: temp file → rename
-        let tmp = dest.with_extension("tmp");
+        //
+        // A project that is a symlink is written *through* the link. The
+        // rename would otherwise replace the link with a regular file: the
+        // file the user actually keeps would still hold the newer content,
+        // and the restore would report success while changing nothing.
+        let target = crate::sample::link_target_of(&dest);
+        let tmp = target.with_extension("tmp");
         std::fs::write(&tmp, &blob)
             .map_err(|e| ClavusError::ParseError(format!("write {}: {}", tmp.display(), e)))?;
-        std::fs::rename(&tmp, &dest)
-            .map_err(|e| ClavusError::ParseError(format!("rename {} → {}: {}", tmp.display(), dest.display(), e)))?;
+        std::fs::rename(&tmp, &target)
+            .map_err(|e| ClavusError::ParseError(format!("rename {} → {}: {}", tmp.display(), target.display(), e)))?;
 
         info!(
             "Restored {} from snapshot {} to {}",
@@ -502,6 +587,110 @@ impl SnapshotStore {
     pub fn project_path(&self) -> &PathBuf {
         &self.project.path
     }
+
+    /// Store the audio a snapshot records.
+    ///
+    /// The bytes of every sample the project points at are kept in the
+    /// blob store under their own hash, together with the path they
+    /// live at *inside the project*. The path is what a restore needs:
+    /// the same project on another machine keeps its audio in the same
+    /// place relative to itself.
+    ///
+    /// A sample that cannot be read is skipped. The snapshot still
+    /// records it, and the restore says the audio is missing.
+    fn capture_samples(
+        &self,
+        project_path: &Path,
+        sample_paths: &std::collections::HashMap<String, String>,
+    ) {
+        let root = project_path.parent().unwrap_or(Path::new("."));
+        for path in sample_paths.values() {
+            let recorded = Path::new(path);
+            // The manifest holds the path the sample has inside the
+            // project; an older snapshot holds an absolute path.
+            let file = if recorded.is_absolute() {
+                recorded.to_path_buf()
+            } else {
+                root.join(recorded)
+            };
+            let Some(relative) = relative_inside(root, &file) else {
+                // The sample lives outside the project. It is not the
+                // project's to keep.
+                continue;
+            };
+            if let Err(e) = self.store.store_sample(&file, &relative) {
+                warn!("Could not store the audio {}: {}", file.display(), e);
+            }
+        }
+    }
+
+    /// Put the audio a snapshot recorded back where the project expects it.
+    ///
+    /// The samples are written where the project says they are — the
+    /// path they had inside the project when the snapshot was taken.
+    /// A file that is already there is never overwritten: the user's
+    /// own audio is not the tool's to replace, and a different file
+    /// with the same name is left exactly as it is.
+    pub fn restore_samples(&self, snap: &Snapshot, project_path: &Path) -> SampleRestore {
+        let mut report = SampleRestore::default();
+        let root = project_path.parent().unwrap_or(Path::new("."));
+        for hash in snap.sample_hashes.iter() {
+            let Some(bytes) = self.store.get(hash) else {
+                // The audio was never captured, or it has not been
+                // fetched from the relay yet.
+                report.missing.push(PathBuf::from(hash));
+                continue;
+            };
+            let Some(relative) = self.store.sample_relpath(hash) else {
+                report.missing.push(PathBuf::from(hash));
+                continue;
+            };
+            let dest = root.join(&relative);
+            if dest.exists() {
+                // The user has a file there. It stays.
+                report.kept.push(dest);
+                continue;
+            }
+            if let Some(parent) = dest.parent() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    warn!("Could not create {}: {}", parent.display(), e);
+                    report.missing.push(dest);
+                    continue;
+                }
+            }
+            let tmp = dest.with_extension("clavus-tmp");
+            match std::fs::write(&tmp, &bytes).and_then(|_| std::fs::rename(&tmp, &dest)) {
+                Ok(()) => report.restored.push(dest),
+                Err(e) => {
+                    warn!("Could not restore the audio {}: {}", dest.display(), e);
+                    let _ = std::fs::remove_file(&tmp);
+                    report.missing.push(dest);
+                }
+            }
+        }
+        report
+    }
+}
+
+/// The path of `file` relative to `root`, if it is inside it.
+///
+/// A sample outside the project is not the project's to keep, and a
+/// path that climbs out of the project is refused rather than
+/// followed.
+pub fn relative_inside(root: &Path, file: &Path) -> Option<String> {
+    let relative = file.strip_prefix(root).ok()?;
+    let mut parts = Vec::new();
+    for component in relative.components() {
+        match component {
+            std::path::Component::Normal(part) => parts.push(part.to_string_lossy().to_string()),
+            std::path::Component::CurDir => {}
+            _ => return None,
+        }
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    Some(parts.join("/"))
 }
 
 /// The newest snapshot of a set.

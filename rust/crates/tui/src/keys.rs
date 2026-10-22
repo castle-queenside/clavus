@@ -43,14 +43,26 @@ pub fn handle_key(key: &KeyEvent, app: &mut App) -> bool {
         (KeyCode::Enter, _) | (KeyCode::Char('o'), KeyModifiers::NONE)
             if app.screen == Screen::ProjectList =>
         {
-            if let Some(idx) = app.selected_project {
-                match app.load_project(idx) {
-                    Ok(()) => app.screen = Screen::ProjectDetail,
-                    // A project that cannot be parsed used to do nothing
-                    // at all — no error, no message. The user could not
-                    // tell whether the key had been pressed.
-                    Err(e) => app.set_error(e),
+            // Enter with nothing selected used to do nothing at all:
+            // no redraw, no message. The footer says "Enter open", so
+            // the first project is selected and opened.
+            let idx = match app.selected_project {
+                Some(idx) => idx,
+                None if !app.projects.is_empty() => {
+                    app.selected_project = Some(0);
+                    0
                 }
+                None => {
+                    app.set_info("no projects to open".into());
+                    return false;
+                }
+            };
+            match app.load_project(idx) {
+                Ok(()) => app.screen = Screen::ProjectDetail,
+                // A project that cannot be parsed used to do nothing
+                // at all — no error, no message. The user could not
+                // tell whether the key had been pressed.
+                Err(e) => app.set_error(e),
             }
         }
         (KeyCode::Down, _) if app.screen == Screen::ProjectList => {

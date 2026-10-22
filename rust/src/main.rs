@@ -6,7 +6,7 @@
 
 use clavus_cli::{cmd_audit, cmd_collect, cmd_cue, cmd_cues, cmd_log, cmd_projects,
                  cmd_pull, cmd_push, cmd_relay, cmd_restore, cmd_snapshot, cmd_status,
-                 clavus_root, projects_dir, Cli, Commands};
+                 clavus_root, projects_dir, resolve_project, Cli, Commands};
 use clap::Parser;
 use clavus_tui::app::App;
 use clavus_tui::ui;
@@ -47,25 +47,35 @@ fn main() -> anyhow::Result<()> {
             project,
             message,
             collect,
-        } => cmd_snapshot(&project, &message, collect, &clavus_root, &mut stdout, &mut stderr),
-        Commands::Log { project } => cmd_log(&project, &clavus_root, &mut stdout, &mut stderr),
+        } => {
+            let project = resolve_project(&project, cli.dir.as_deref());
+            cmd_snapshot(&project, &message, collect, &clavus_root, &mut stdout, &mut stderr)
+        }
+        Commands::Log { project } => {
+            let project = resolve_project(&project, cli.dir.as_deref());
+            cmd_log(&project, &clavus_root, &mut stdout, &mut stderr)
+        }
         Commands::Cue {
             project,
             text,
             position,
             track,
             author,
-        } => cmd_cue(
-            &project,
-            &text,
-            &position,
-            track.as_deref(),
-            author.as_deref(),
-            &clavus_root,
-            &mut stdout,
-            &mut stderr,
-        ),
+        } => {
+            let project = resolve_project(&project, cli.dir.as_deref());
+            cmd_cue(
+                &project,
+                &text,
+                &position,
+                track.as_deref(),
+                author.as_deref(),
+                &clavus_root,
+                &mut stdout,
+                &mut stderr,
+            )
+        }
         Commands::Cues { project, status } => {
+            let project = resolve_project(&project, cli.dir.as_deref());
             cmd_cues(&project, status.as_deref(), &clavus_root, &mut stdout, &mut stderr)
         }
         Commands::Relay {
@@ -77,15 +87,19 @@ fn main() -> anyhow::Result<()> {
             cmd_relay(&bind, state_dir, &clavus_root, &mut stdout, &mut stderr)
         }
         Commands::Audit { project, strict } => {
+            let project = resolve_project(&project, cli.dir.as_deref());
             cmd_audit(&project, strict, &mut stdout, &mut stderr)
         }
         Commands::Collect { project } => {
+            let project = resolve_project(&project, cli.dir.as_deref());
             cmd_collect(&project, &clavus_root, &mut stdout, &mut stderr)
         }
         Commands::Push { relay, project } => {
+            let project = resolve_project(&project, cli.dir.as_deref());
             cmd_push(&relay, &project, &clavus_root, &mut stdout, &mut stderr)
         }
         Commands::Pull { relay, project } => {
+            let project = resolve_project(&project, cli.dir.as_deref());
             cmd_pull(&relay, &project, &clavus_root, &mut stdout, &mut stderr)
         }
         Commands::Projects { recursive } => {
@@ -93,12 +107,18 @@ fn main() -> anyhow::Result<()> {
             // directory; otherwise the standard locations are scanned.
             cmd_projects(recursive, cli.dir.as_deref(), &mut stdout, &mut stderr)
         }
-        Commands::Status { project } => cmd_status(&project, &clavus_root, &mut stdout, &mut stderr),
+        Commands::Status { project } => {
+            let project = resolve_project(&project, cli.dir.as_deref());
+            cmd_status(&project, &clavus_root, &mut stdout, &mut stderr)
+        }
         Commands::Restore { project, hash } => {
+            let project = resolve_project(&project, cli.dir.as_deref());
             cmd_restore(&project, &hash, &clavus_root, &mut stdout, &mut stderr)
         }
     }
 }
+
+// ─── Resolving the project argument ─────────────────────────────
 
 // ─── TUI ─────────────────────────────────────────────────────────
 
@@ -115,6 +135,20 @@ fn run_tui(
     }
     app.refresh_projects()
         .map_err(|e| anyhow::anyhow!("Failed to scan projects: {}", e))?;
+
+    // The TUI draws into the terminal. When the input or the output is
+    // not a terminal — a pipe, /dev/null, a job running in the
+    // background — there is nothing to draw in. The check happens
+    // before the alternate screen is entered, so a failure cannot
+    // leave the user's terminal in it.
+    {
+        use std::io::IsTerminal;
+        if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+            anyhow::bail!(
+                "stdin and stdout must be a terminal — Clavus draws in the terminal, and there is none here"
+            );
+        }
+    }
 
     // Restore terminal on panic
     panic::set_hook(Box::new(|_| {
@@ -143,9 +177,20 @@ fn run_tui(
         }
     }
 
+    // Entering the alternate screen and switching to raw mode are two
+    // steps that can fail on their own. When the second one fails,
+    // the first has to be undone — otherwise the terminal is left in
+    // the alternate screen with no way back but `reset`.
     crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
-    crossterm::terminal::enable_raw_mode()?;
-    terminal.clear()?;
+    if let Err(e) = crossterm::terminal::enable_raw_mode() {
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
+        anyhow::bail!("cannot switch the terminal to raw mode: {}", e);
+    }
+    if let Err(e) = terminal.clear() {
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
+        let _ = crossterm::terminal::disable_raw_mode();
+        anyhow::bail!("cannot clear the terminal: {}", e);
+    }
 
     loop {
         terminal.draw(|f| ui::render(f, &mut app))?;

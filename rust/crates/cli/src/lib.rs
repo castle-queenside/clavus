@@ -42,7 +42,7 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub dir: Option<PathBuf>,
 
-    /// Clavus data directory (default: ~/.clavus)
+    /// Clavus data directory (default: ~/.clavus, or $CLAVUS_DATA)
     #[arg(long, global = true)]
     pub data: Option<PathBuf>,
 
@@ -103,7 +103,8 @@ pub enum Commands {
     /// Audit audio sample references
     Audit {
         project: PathBuf,
-        /// Fail fast if any sample is missing
+        /// Exit with an error if any sample is missing or lies outside
+        /// the project folder. Without it the audit only reports.
         #[arg(short, long)]
         strict: bool,
     },
@@ -197,11 +198,23 @@ pub fn cmd_snapshot(
     let parent = snap_store.head().map(|s| s.hash);
 
     // Build sample info from audit (collected + outside_project, all with hashes)
+    //
+    // The path a sample is recorded under is the path it has *inside
+    // the project*, so the same record means the same thing on the
+    // machine that pulls it. A sample outside the project keeps its
+    // absolute path: it is not the project's to keep.
+    let project_dir = project.parent().unwrap_or(Path::new("."));
     let all_present: Vec<_> = report
         .collected
         .iter()
         .chain(report.outside_project.iter())
-        .filter_map(|s| s.hash.as_ref().map(|h| (h.clone(), s.path.to_string_lossy().to_string())))
+        .filter_map(|s| {
+            let hash = s.hash.clone()?;
+            let path = s.path.as_path();
+            let recorded = clavus_core::snapshot::relative_inside(project_dir, path)
+                .unwrap_or_else(|| path.to_string_lossy().to_string());
+            Some((hash, recorded))
+        })
         .collect::<Vec<_>>();
     let sample_hashes: Vec<_> = all_present.iter().map(|(h, _)| h.clone()).collect();
     let sample_paths: std::collections::HashMap<_, _> = all_present.into_iter().collect();
@@ -222,6 +235,21 @@ pub fn cmd_snapshot(
 
     let snapshot = match outcome {
         clavus_core::snapshot::SaveOutcome::Created(s) => s,
+        clavus_core::snapshot::SaveOutcome::Updated(s) => {
+            // The project file is the same, but the audio it points at
+            // is not. The snapshot's manifest described audio that no
+            // longer existed, so it was refreshed — with the new audio
+            // and the new message.
+            outln!(out,
+                "✓ snapshot {}  ·  {}  ·  {} tracks  ·  {:.0} BPM",
+                clavus_core::short(&s.hash, 8),
+                format_timestamp(s.timestamp),
+                s.track_count,
+                s.bpm,
+            );
+            outln!(out, "  the project file is unchanged — the audio it points at changed, and the snapshot now holds the new audio");
+            return Ok(());
+        }
         clavus_core::snapshot::SaveOutcome::Unchanged(s) => {
             // The project's bytes are identical to a snapshot this project
             // already has. Nothing was stored and the message was not
@@ -376,7 +404,7 @@ pub fn cmd_log(project: &Path, clavus_root: &Path,
             "  {}  {}  {}{}  [{} tracks · {:.0} BPM]",
             clavus_core::short(&s.hash, 8),
             ts,
-            s.message.replace('\n', " "),
+            one_line(&s.message),
             parent,
             s.track_count,
             s.bpm,
@@ -410,7 +438,7 @@ pub fn cmd_cue(
         &cue.id[..8.min(cue.id.len())],
         cue.position,
         cue.status.as_str());
-    outln!(out, "  {}", truncate(&cue.text, 60));
+    outln!(out, "  {}", truncate(&one_line(&cue.text), 60));
     Ok(())
 }
 
@@ -435,13 +463,16 @@ pub fn cmd_cues(project: &Path, status: Option<&str>, clavus_root: &Path,
         outln!(out, "No cues.");
     } else {
         for c in &cues {
-            let text = truncate(&c.text, 22);
+            // A note is one line, whatever the user typed. A newline
+            // in the text used to break the table apart, and an escape
+            // sequence was handed straight to the terminal.
+            let text = truncate(&one_line(&c.text), 22);
             // The track is part of the note: a note that says "drop the
             // bass here" is useless without knowing which track it is
             // on. The column is only shown when a note carries one, so
             // the common case stays quiet.
             let track = match c.track_name.as_str().trim() {
-                t if !t.is_empty() => Some(truncate(t, 14)),
+                t if !t.is_empty() => Some(truncate(&one_line(t), 14)),
                 _ => None,
             };
             match track {
@@ -452,7 +483,7 @@ pub fn cmd_cues(project: &Path, status: Option<&str>, clavus_root: &Path,
                     text,
                     c.position,
                     track,
-                    c.author
+                    one_line(&c.author)
                 ),
                 None => outln!(out,
                     "  {}  [{:9}]  {:22}  @ {:>8}  {}",
@@ -460,7 +491,7 @@ pub fn cmd_cues(project: &Path, status: Option<&str>, clavus_root: &Path,
                     c.status.as_str(),
                     text,
                     c.position,
-                    c.author
+                    one_line(&c.author)
                 ),
             }
         }
@@ -503,6 +534,39 @@ fn truncate(s: &str, max: usize) -> String {
         out.push('…');
         out
     }
+}
+
+/// Make a piece of user text safe to print in a table.
+///
+/// A note is one line, whatever the user typed. A newline in the text
+/// used to break the table apart — the second line looked like another
+/// row, and the columns no longer lined up — and an escape sequence
+/// was handed straight to the terminal, which drew whatever it said.
+fn one_line(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\u{1b}' => {
+                // An escape sequence: CSI sequences run until a letter,
+                // and the two-character ones stand on their own.
+                if chars.peek() == Some(&'[') {
+                    chars.next();
+                    for c in chars.by_ref() {
+                        if c.is_ascii_alphabetic() {
+                            break;
+                        }
+                    }
+                } else {
+                    chars.next();
+                }
+            }
+            '\n' | '\r' | '\t' => out.push(' '),
+            c if c.is_control() => out.push(' '),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Format a count with a correctly pluralised noun.
@@ -637,12 +701,32 @@ pub fn cmd_collect(project: &Path, _clavus_root: &Path,
             } else {
                 outln!(out, "\n✓ {} already inside the project bundle",
                     plural(collect.already_inside, "sample", "samples"));
-                outln!(out, "  Paths in the project archive already point at the copies inside it");
+                if collect.pointed_inside > 0 || collect.rewritten > 0 {
+                    // The samples were in the bundle already; the
+                    // references were not. Saying the paths "already
+                    // point at the copies" would contradict what the
+                    // command just did.
+                    outln!(out, "  Paths in the project archive rewritten to point at the copies inside it — reopen the project in Bitwig");
+                } else {
+                    outln!(out, "  Paths in the project archive already point at the copies inside it");
+                }
             }
         } else {
             outln!(out, "\n✓ Collected {} into project/Samples/",
                 plural(collect.copied.len(), "sample", "samples"));
-            outln!(out, "  Paths in .als rewritten — restart Ableton to reload");
+            if collect.rewritten == collect.copied.len() {
+                outln!(out, "  Paths in .als rewritten — restart Ableton to reload");
+            } else {
+                // Some references are still pointing outside the
+                // project. Saying the paths were rewritten would be a
+                // lie, and the user has to know which ones are still
+                // out there.
+                outln!(
+                    out,
+                    "  ⚠ {} could not be rewritten — the project still points at the outside file:",
+                    plural(collect.copied.len() - collect.rewritten, "reference", "references")
+                );
+            }
         }
     }
 
@@ -698,9 +782,25 @@ pub fn cmd_push(relay: &str, project: &Path, clavus_root: &Path,
     // early return below, because a collaborator who only leaves notes
     // and takes no snapshot still wants those notes to leave the
     // machine.
-    let push_cues = clavus_core::CueStore::open(clavus_root, &id)
-        .list(None)
-        .unwrap_or_default();
+    //
+    // A note that cannot be read is named, and the notes that *can* be
+    // read still go. Silently shipping nothing while printing "✓
+    // Pushed" would leave the user's notes on the machine and say
+    // nothing about it.
+    let (push_cues, broken_notes) = clavus_core::CueStore::open(clavus_root, &id)
+        .list_partial(None)
+        .map_err(|e| anyhow::anyhow!("Could not read the notes: {}", e))?;
+    if !broken_notes.is_empty() {
+        errln!(
+            err,
+            "⚠ {} could not be read and will not be sent:",
+            plural(broken_notes.len(), "note", "notes")
+        );
+        for reason in &broken_notes {
+            errln!(err, "  {}", reason);
+        }
+        errln!(err, "  The rest of the notes are still being sent.");
+    }
 
     if snapshots.is_empty() && push_cues.is_empty() {
         outln!(out, "Nothing to push for '{}' — no snapshots and no cues", name);
@@ -770,6 +870,35 @@ pub fn cmd_push(relay: &str, project: &Path, clavus_root: &Path,
         outln!(out, "  sent the project bytes ({})", human_size(pushed_bytes));
     }
 
+    // The audio travels too. A collaborator who receives only the
+    // project file has a set that points at files that are not there,
+    // and the restore cannot fix it.
+    let mut pushed_audio = 0usize;
+    let mut pushed_audio_count = 0usize;
+    for snap in &push_snaps {
+        for hash in snap.sample_hashes.iter() {
+            if !store.has(hash) {
+                continue;
+            }
+            let Some(bytes) = store.get(hash) else {
+                continue;
+            };
+            client
+                .push_blob(id.sync_name(), hash, &bytes)
+                .map_err(|e| anyhow::anyhow!("Could not send the audio: {}", e))?;
+            pushed_audio += bytes.len();
+            pushed_audio_count += 1;
+        }
+    }
+    if pushed_audio_count > 0 {
+        outln!(
+            out,
+            "  sent the audio for {} sample(s) ({})",
+            pushed_audio_count,
+            human_size(pushed_audio)
+        );
+    }
+
     let push_count = push_snaps.len();
     let push_cue_count = push_cues.len();
     // The count is the whole local chain, not the number of snapshots
@@ -811,6 +940,12 @@ pub fn cmd_push(relay: &str, project: &Path, clavus_root: &Path,
                 // The relay confirming that it has the bytes. Nothing to
                 // say — the user does not need the hash.
             }
+            Some(SyncMsg::Error { message }) => {
+                // The relay could not do what was asked. It did not
+                // acknowledge the push, so the push did not happen.
+                errln!(err, "✗ The relay reported a problem: {}", message);
+                anyhow::bail!("the relay reported a problem: {}", message);
+            }
             Some(msg) => {
                 outln!(out, "  relay: {:?}", msg);
             }
@@ -819,6 +954,16 @@ pub fn cmd_push(relay: &str, project: &Path, clavus_root: &Path,
                 anyhow::bail!("the relay did not acknowledge the push");
             }
         }
+    }
+
+    // The snapshots and the readable notes are on the relay. A note
+    // that could not be read is still on this machine, and a script
+    // that runs `clavus push` has to be able to tell that.
+    if !broken_notes.is_empty() {
+        anyhow::bail!(
+            "{} could not be read and were not sent",
+            plural(broken_notes.len(), "note", "notes")
+        );
     }
 
     Ok(())
@@ -846,6 +991,53 @@ fn fetch_blob(
             None
         }
     }
+}
+
+/// Fetch the audio a pulled snapshot recorded.
+///
+/// The bytes are stored under their own hash, together with the path
+/// the sample has inside the project, so a restore can put them back
+/// where the project expects them.
+fn pull_audio(
+    client: &SyncClient,
+    id: &clavus_core::project::ProjectId,
+    store: &clavus_core::blob::BlobStore,
+    snap: &clavus_core::types::Snapshot,
+    out: &mut dyn Write,
+) -> usize {
+    let mut fetched = 0usize;
+    for hash in snap.sample_hashes.iter() {
+        if store.has(hash) {
+            continue;
+        }
+        let Some(bytes) = fetch_blob(client, id, hash) else {
+            continue;
+        };
+        // The path the sample has inside the project. A path that is
+        // not a plain relative path is refused: it would write outside
+        // the project.
+        let relative = snap
+            .sample_paths
+            .get(hash)
+            .map(|p| p.replace('\\', "/"))
+            .filter(|p| {
+                !p.is_empty()
+                    && !p.starts_with('/')
+                    && !p.contains(':')
+                    && !p.split('/').any(|part| part == ".." || part.is_empty())
+            });
+        let filename = relative
+            .as_deref()
+            .and_then(|p| p.rsplit('/').next())
+            .unwrap_or("sample");
+        match store.put_sample_bytes(&bytes, filename, relative.as_deref().unwrap_or("")) {
+            Ok(_) => fetched += 1,
+            Err(e) => {
+                outln!(out, "    (could not store the audio {}: {})", hash, e);
+            }
+        }
+    }
+    fetched
 }
 
 pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
@@ -897,6 +1089,10 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
     let mut got_response = false;
     // A conflict is an answer, but not a successful pull.
     let mut saw_conflict = false;
+    // A relay that reports a problem is not a successful pull either.
+    let mut saw_error = false;
+    // The bytes of the newest snapshot that arrived, if any.
+    let mut project_bytes: Option<Vec<u8>> = None;
     loop {
         match client.recv_timeout(timeout) {
             Some(SyncMsg::Push { snapshots, cues }) => {
@@ -910,6 +1106,12 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
                             Some(data) => {
                                 store.put(&data);
                                 pulled_with_bytes += 1;
+                                // The bytes of the newest snapshot that
+                                // arrived. If the project file is not
+                                // here, this is the project — and it has
+                                // to be written, or the snapshot cannot
+                                // be restored on this machine.
+                                project_bytes = Some(data);
                             }
                             None => {
                                 pulled_without_bytes += 1;
@@ -919,6 +1121,9 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
                                 );
                             }
                         }
+                        // The audio the snapshot recorded comes too, so
+                        // the restored project plays.
+                        pull_audio(&client, &id, &store, snap, out);
                         // The snapshot now lives here, so it records
                         // the local path. A collaborator's machine has a
                         // different path for the same project, and the
@@ -1010,6 +1215,14 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
                 saw_conflict = true;
                 break;
             }
+            Some(SyncMsg::Error { message }) => {
+                // The relay could not do what was asked. It said so
+                // instead of sending a history, so nothing was pulled.
+                got_response = true;
+                errln!(err, "✗ The relay reported a problem: {}", message);
+                saw_error = true;
+                break;
+            }
             Some(msg) => {
                 // Some other message — a "synced", an acknowledgement.
                 // It says nothing about the project's history, so the
@@ -1035,14 +1248,55 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
         anyhow::bail!("the relay's history and yours have diverged");
     }
 
+    if saw_error {
+        // The relay could not do what was asked. Nothing was pulled,
+        // and saying "up to date" would hide the failure.
+        anyhow::bail!("the relay reported a problem");
+    }
+
     if pulled_count > 0 {
         outln!(out, "✓ Pulled {} new snapshot(s)", pulled_count);
         if pulled_with_bytes > 0 {
-            outln!(
-                out,
-                "  {} of them came with the project bytes — they can be restored here.",
-                pulled_with_bytes
-            );
+            // A snapshot can only be restored where the project file
+            // lives. When the project is not here yet, the bytes that
+            // arrived are the project — so they are written, and the
+            // claim below is true.
+            let written = match &project_bytes {
+                Some(bytes) if !project.exists() => {
+                    match std::fs::write(project, bytes) {
+                        Ok(()) => {
+                            outln!(
+                                out,
+                                "  Wrote the project file — it was not on this machine yet."
+                            );
+                            true
+                        }
+                        Err(e) => {
+                            errln!(
+                                err,
+                                "  ✗ Could not write the project file {}: {}",
+                                project.display(),
+                                e
+                            );
+                            false
+                        }
+                    }
+                }
+                _ => project.exists(),
+            };
+            if written {
+                outln!(
+                    out,
+                    "  {} of them came with the project bytes — they can be restored here.",
+                    pulled_with_bytes
+                );
+            } else {
+                outln!(
+                    out,
+                    "  {} of them came with the project bytes — they can be seen, but not restored until the project file exists.",
+                    pulled_with_bytes
+                );
+            }
         }
         if pulled_without_bytes > 0 {
             outln!(
@@ -1178,7 +1432,7 @@ fn import_cues(
 
 pub fn cmd_restore(project: &Path, hash_arg: &str, clavus_root: &Path,
     out: &mut dyn Write,
-    _err: &mut dyn Write,
+    err: &mut dyn Write,
 ) -> anyhow::Result<()> {
     use clavus_core::blob::BlobStore;
     use clavus_core::snapshot::SnapshotStore;
@@ -1221,6 +1475,42 @@ pub fn cmd_restore(project: &Path, hash_arg: &str, clavus_root: &Path,
     outln!(out, "  {}", restored.message);
     outln!(out, "  Restart Ableton/Bitwig to load the restored file.");
 
+    // The audio the snapshot recorded goes back where the project
+    // expects it. A file that is already there is left alone: the
+    // user's own audio is not the tool's to replace.
+    let audio = snap_store.restore_samples(&restored, project);
+    if !audio.restored.is_empty() {
+        outln!(
+            out,
+            "  ✓ Restored {} sample(s) the project points at.",
+            audio.restored.len()
+        );
+    }
+    if !audio.kept.is_empty() {
+        outln!(
+            out,
+            "  {} sample(s) were already on disk — they were left as they are.",
+            audio.kept.len()
+        );
+    }
+
+    // A snapshot that holds no audio cannot bring it back, and the
+    // user has to hear it from the tool rather than from Ableton
+    // refusing to play.
+    if !audio.missing.is_empty() {
+        errln!(
+            err,
+            "  ⚠ {} of the recorded sample(s) are not on disk — the audio was not captured with this snapshot:",
+            audio.missing.len()
+        );
+        for path in audio.missing.iter().take(5) {
+            errln!(err, "      {}", path.display());
+        }
+        if audio.missing.len() > 5 {
+            errln!(err, "      … and {} more", audio.missing.len() - 5);
+        }
+    }
+
     // Restoring an older version leaves the working file behind the
     // history. The newer snapshots are not lost — but the user has to
     // be told, because the file on disk and the head of the chain no
@@ -1255,11 +1545,15 @@ pub fn cmd_status(project: &Path, clavus_root: &Path,
         "Ableton Live"
     };
 
+    // ── Sample audit ──────────────────────────────────────────────
+    //
+    // The audit runs first: a report for a project that could not be
+    // read is a report about nothing.
+    let report = sample::audit_project(project)?;
+
     outln!(out, "{name}  ({project_type})");
     outln!(out, "{}", "─".repeat(50));
 
-    // ── Sample audit ──────────────────────────────────────────────
-    let report = sample::audit_project(project)?;
     if report.is_clean() {
         print_sample_summary(&report, out);
     } else {
@@ -1438,6 +1732,80 @@ pub fn projects_dir() -> PathBuf {
     dirs::audio_dir()
         .or_else(dirs::home_dir)
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Resolve a project argument against the projects directory.
+///
+/// The flag is called "projects directory", so a user who sets it
+/// expects `clavus --dir ~/projects log Alpha.als` to find the
+/// project — which usually lives in a folder below it. A path that
+/// exists is used exactly as it was given: the flag never overrides
+/// an explicit path.
+///
+/// When several projects below the directory have the name, none of
+/// them is chosen. Guessing would open the wrong project, and the
+/// command says so instead.
+pub fn resolve_project(project: &Path, dir: Option<&Path>) -> PathBuf {
+    if project.exists() {
+        return project.to_path_buf();
+    }
+    if let Some(dir) = dir {
+        let candidate = dir.join(project);
+        if candidate.exists() {
+            return candidate;
+        }
+        if let Some(found) = find_unique_below(dir, project) {
+            return found;
+        }
+    }
+    project.to_path_buf()
+}
+
+/// Find the one project below `dir` that answers to `name`.
+///
+/// Only `.als` and `.bwproject` files count, and the name has to match
+/// exactly. Several matches are no match: the caller is better off
+/// with an error than with the wrong project.
+fn find_unique_below(dir: &Path, name: &Path) -> Option<PathBuf> {
+    let wanted = name.file_name()?;
+    let mut found: Option<PathBuf> = None;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        let entries = match std::fs::read_dir(&current) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let file_type = match entry.file_type() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            if file_type.is_dir() {
+                // Do not walk into the data directory or into a folder
+                // of hidden files: they are not the user's projects.
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if name.starts_with('.') {
+                    continue;
+                }
+                stack.push(path);
+                continue;
+            }
+            let matches_name = path.file_name() == Some(wanted);
+            let is_project = matches!(
+                path.extension().and_then(|e| e.to_str()),
+                Some("als") | Some("bwproject")
+            );
+            if matches_name && is_project {
+                if found.is_some() {
+                    // More than one — no choice is safe.
+                    return None;
+                }
+                found = Some(path);
+            }
+        }
+    }
+    found
 }
 
 pub fn clavus_root() -> PathBuf {

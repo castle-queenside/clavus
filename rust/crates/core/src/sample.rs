@@ -260,7 +260,14 @@ fn extract_bitwig_sample_paths(project_path: &Path) -> Result<Vec<PathBuf>, Clav
         match reader.read_event_into(&mut buf) {
             Ok(quick_xml::events::Event::Start(e)) | Ok(quick_xml::events::Event::Empty(e)) => {
                 for attr in e.attributes().flatten() {
-                    let val = String::from_utf8_lossy(attr.value.as_ref()).to_string();
+                    // The XML holds the path escaped: a file called
+                    // `R&B/kick.wav` is written `R&amp;B/kick.wav`. The
+                    // Ableton parser decodes it, and the Bitwig parser
+                    // has to decode it too — otherwise a sample that is
+                    // really on disk is reported missing.
+                    let val = crate::als_refs::decode_xml_entities(
+                        &String::from_utf8_lossy(attr.value.as_ref()),
+                    );
                     if looks_like_audio_path(&val) {
                         refs.push(PathBuf::from(val));
                     }
@@ -590,9 +597,46 @@ fn is_free(candidate: &str, samples_dir: &Path, source: &Path) -> bool {
     // name is free — there is nothing to copy and nothing to lose.
     // Different bytes: the name is taken, and the sample gets a name
     // of its own. The user's file is never written over.
-    match (fs::read(&dest), fs::read(source)) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => false,
+    same_bytes(&dest, source)
+}
+
+/// Whether two files hold exactly the same bytes.
+///
+/// The files are compared in chunks. Reading them whole would cost the
+/// size of every sample in memory, and a project with a few large
+/// stems would take gigabytes to answer a question a stream answers
+/// in a moment.
+fn same_bytes(a: &Path, b: &Path) -> bool {
+    use std::io::Read;
+    let (Ok(mut fa), Ok(mut fb)) = (fs::File::open(a), fs::File::open(b)) else {
+        return false;
+    };
+    let (Ok(sa), Ok(sb)) = (fa.metadata(), fb.metadata()) else {
+        return false;
+    };
+    if sa.len() != sb.len() {
+        return false;
+    }
+    let mut ba = [0u8; 64 * 1024];
+    let mut bb = [0u8; 64 * 1024];
+    loop {
+        let ra = match fa.read(&mut ba) {
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        let rb = match fb.read(&mut bb) {
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        if ra != rb {
+            return false;
+        }
+        if ra == 0 {
+            return true;
+        }
+        if ba[..ra] != bb[..rb] {
+            return false;
+        }
     }
 }
 
@@ -704,6 +748,10 @@ pub fn collect_samples(
     // ones that were added to it.
     let mut already_inside = 0usize;
     let mut added_to_bundle = 0usize;
+    // The references that were pointed at the copy inside the bundle.
+    // The bundle already carried the sample; the project did not point
+    // at it. The report has to say which of the two happened.
+    let mut pointed_inside = 0usize;
     // Map: original path as stored in XML → new relative path (Unix-slash)
     let mut path_replacements: HashMap<String, String> = HashMap::new();
 
@@ -807,10 +855,7 @@ pub fn collect_samples(
             // sample the project already carries. It is not copied
             // over — the user's file stays exactly as it is — and the
             // reference simply points at it.
-            let already_there = match (fs::read(&dest), fs::read(resolved)) {
-                (Ok(a), Ok(b)) => a == b,
-                _ => false,
-            };
+            let already_there = same_bytes(&dest, resolved);
             let copied_result = if already_there {
                 info!("{} is already in the project", filename);
                 Ok(0)
@@ -857,6 +902,7 @@ pub fn collect_samples(
                         );
                         copied.push(project_path.to_path_buf());
                         already_inside += 1;
+                        pointed_inside += 1;
                     }
                     Ok(false) => {
                         // The reference was not found in the project
@@ -884,14 +930,39 @@ pub fn collect_samples(
     }
 
     // Rewrite project file sample paths
+    let mut rewritten = 0usize;
     if !path_replacements.is_empty() {
         if is_bitwig {
             // The reference lives inside the archive's project.xml.
             for (old, new) in &path_replacements {
-                crate::bitwig_archive::rewrite_sample_path(project_path, old, new)?;
+                if crate::bitwig_archive::rewrite_sample_path(project_path, old, new)? {
+                    rewritten += 1;
+                } else {
+                    error!(
+                        "The reference to {} was not found in the project description",
+                        old
+                    );
+                    failed.push((
+                        PathBuf::from(old),
+                        "the reference was not found in the project description".to_string(),
+                    ));
+                }
             }
         } else {
-            rewrite_project_sample_paths(project_path, path_replacements)?;
+            // A reference that cannot be rewritten is a failure, not a
+            // silent success: the sample is in the project now, but the
+            // project still points at the outside file.
+            let wanted = path_replacements.len();
+            let unmatched = rewrite_project_sample_paths(project_path, path_replacements)?;
+            rewritten = wanted - unmatched.len();
+            for old in unmatched {
+                error!("The reference to {} was not found in the project file", old);
+                failed.push((
+                    PathBuf::from(&old),
+                    "the reference could not be rewritten — the project still points at the outside file"
+                        .to_string(),
+                ));
+            }
         }
     }
 
@@ -900,6 +971,8 @@ pub fn collect_samples(
         failed,
         already_inside,
         added_to_bundle,
+        pointed_inside,
+        rewritten,
     })
 }
 
@@ -916,6 +989,19 @@ pub struct CollectReport {
     pub already_inside: usize,
     /// The samples that were added to the project bundle.
     pub added_to_bundle: usize,
+    /// The references that were pointed at the copy the bundle already
+    /// carried.
+    ///
+    /// The sample was inside the bundle; the project description still
+    /// pointed somewhere else. The bundle was repaired, and the report
+    /// has to say so rather than claim that nothing needed doing.
+    pub pointed_inside: usize,
+    /// The references that were rewritten to point at the collected
+    /// samples.
+    ///
+    /// Fewer than the number of collected samples means the project
+    /// still points at some of the outside files.
+    pub rewritten: usize,
 }
 
 /// Rewrite sample paths in an `.als` project file.
@@ -925,12 +1011,16 @@ pub struct CollectReport {
 ///
 /// **Atomic**: writes to a `.als.tmp` temp file first, then renames over the
 /// original. If the process crashes mid-write, the original `.als` is intact.
+///
+/// Returns the paths that could not be rewritten. A reference that is not
+/// found is not a success: the project still points at the outside file, and
+/// the caller has to say so.
 fn rewrite_project_sample_paths(
     project_path: &Path,
     replacements: HashMap<String, String>,
-) -> Result<(), ClavusError> {
+) -> Result<Vec<String>, ClavusError> {
     if replacements.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     // Read and decompress the .als
@@ -944,28 +1034,44 @@ fn rewrite_project_sample_paths(
         .map_err(ClavusError::from)?;
 
     // Replace old paths in Value="..." attributes of <Path> elements.
-    // Uses simple string replacement which is safe because:
-    // 1. Sample paths don't contain XML special characters
-    // 2. We only match exact Value="oldpath" strings
+    //
+    // The XML holds the path *escaped*: a file called `R&B/kick.wav` is
+    // written `R&amp;B/kick.wav`. Matching only the raw path changed
+    // nothing, and the tool still said the paths were rewritten — the
+    // project went on playing the outside file. Both forms are matched,
+    // and the new path is written escaped.
     let mut new_xml = xml.clone();
     let mut rewrite_count = 0;
+    let mut unmatched: Vec<String> = Vec::new();
 
     for (old, new) in &replacements {
         if old.is_empty() || old == new {
             continue;
         }
-        let attr = format!("Value=\"{}\"", old);
-        if new_xml.contains(&attr) {
-            let replacement = format!("Value=\"{}\"", new);
-            new_xml = new_xml.replace(&attr, &replacement);
+        let old_escaped = crate::als_refs::encode_xml_entities(old);
+        let new_escaped = crate::als_refs::encode_xml_entities(new);
+        let mut matched = false;
+        for (from, to) in [(&old_escaped, &new_escaped), (old, new)] {
+            let attr = format!("Value=\"{}\"", from);
+            if new_xml.contains(&attr) {
+                let replacement = format!("Value=\"{}\"", to);
+                new_xml = new_xml.replace(&attr, &replacement);
+                matched = true;
+                break;
+            }
+        }
+        if matched {
             rewrite_count += 1;
             debug!("Rewrote: {} → {}", old, new);
+        } else {
+            debug!("No reference to {} found in {}", old, project_path.display());
+            unmatched.push(old.clone());
         }
     }
 
     if rewrite_count == 0 {
         debug!("No path rewrites needed in {}", project_path.display());
-        return Ok(());
+        return Ok(unmatched);
     }
 
     info!("Rewrote {} sample paths in {}", rewrite_count, project_path.display());
@@ -1005,7 +1111,7 @@ fn rewrite_project_sample_paths(
     std::fs::rename(&tmp_path, &target)
         .map_err(|e| ClavusError::ParseError(format!("rename {} → {}: {}", tmp_path.display(), target.display(), e)))?;
 
-    Ok(())
+    Ok(unmatched)
 }
 
 /// The file a path really points at.

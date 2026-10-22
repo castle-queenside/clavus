@@ -327,6 +327,30 @@ pub fn decode_xml_entities(input: &str) -> String {
     out
 }
 
+/// Encode the characters that cannot appear raw in an XML attribute.
+///
+/// The inverse of `decode_xml_entities`. `&` is encoded first, so a
+/// file name that literally contains `&amp;` becomes `&amp;amp;` —
+/// which is exactly what the decoder turns back into `&amp;`.
+///
+/// A rewrite that writes a raw path back into the XML breaks the
+/// document: an unescaped `&` is not valid XML, and a path with a
+/// `<` in it truncates the attribute.
+pub fn encode_xml_entities(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for c in input.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// Decode `&#NN;` and `&#xNN;` entities.
 fn numeric_entity(entity: &str) -> Option<String> {
     let digits = entity.strip_prefix('#')?;

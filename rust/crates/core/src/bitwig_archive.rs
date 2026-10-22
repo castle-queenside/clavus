@@ -305,6 +305,19 @@ pub fn rewrite_sample_path(
 
     let old_attr = format!("\"{}\"", old_path);
     let new_attr = format!("\"{}\"", new_path);
+    if xml.contains(&old_attr) {
+        let new_xml = xml.replace(&old_attr, &new_attr);
+        replace_entry(project_path, &xml_name, new_xml.as_bytes())?;
+        return Ok(true);
+    }
+
+    // The XML holds the path escaped: a file called `R&B/kick.wav` is
+    // written `R&amp;B/kick.wav`. Matching only the raw path changed
+    // nothing, and the bundle went on pointing at the outside file.
+    let old_escaped = crate::als_refs::encode_xml_entities(old_path);
+    let new_escaped = crate::als_refs::encode_xml_entities(new_path);
+    let old_attr = format!("\"{}\"", old_escaped);
+    let new_attr = format!("\"{}\"", new_escaped);
     if !xml.contains(&old_attr) {
         return Ok(false);
     }

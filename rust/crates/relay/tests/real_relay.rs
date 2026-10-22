@@ -1048,3 +1048,52 @@ fn an_older_relay_keeps_its_history_after_the_upgrade() {
     assert_eq!(cues.len(), 1, "the notes must still be there");
     assert_eq!(cues[0].id, "old-cue");
 }
+
+// ─── Two projects side by side are two projects ──────────────────────────
+
+#[test]
+fn the_relay_does_not_serve_a_sibling_folder_the_same_bytes() {
+    // Regression: two projects that sit next to each other —
+    // `notes/p1/studio` and `notes/p2/studio` — holding the same file.
+    // The relay matched the file's hash and handed the first project's
+    // history and notes to the second one. A user's private notes went
+    // to the wrong project, and the second project got a history it
+    // never had.
+    let tmp = TempDir::new().unwrap();
+    let addr = start_real_relay(&tmp);
+    let hash = "a".repeat(64);
+
+    // The first project pushes.
+    let one = SyncClient::connect(&addr).expect("connect");
+    one.hello_in("Song.als", vec![], "notes/p1/studio", None)
+        .expect("hello");
+    let _ = one.recv_timeout(Duration::from_secs(2));
+    let mut snap = make_snap_for(&hash, None, "Song.als");
+    // The folder the project lives in — half of the project's identity.
+    snap.project_folder = "notes/p1/studio".to_string();
+    one.push(vec![snap], vec![]).expect("push");
+    let _ = one.recv_timeout(Duration::from_secs(2));
+
+    // The second project: the same bytes, the folder next door.
+    let two = SyncClient::connect(&addr).expect("connect");
+    two.hello_in("Song.als", vec![], "notes/p2/studio", Some(hash.clone()))
+        .expect("hello");
+    let msg = two.recv_timeout(Duration::from_secs(3));
+    match msg {
+        Some(SyncMsg::Push { snapshots, cues }) => {
+            assert!(
+                snapshots.is_empty(),
+                "a project next door must not be served the other project's history: {:?}",
+                snapshots
+            );
+            assert!(
+                cues.is_empty(),
+                "a project next door must not be served the other project's notes"
+            );
+        }
+        other => panic!("unexpected reply: {:?}", other),
+    }
+
+    one.close();
+    two.close();
+}

@@ -177,6 +177,29 @@ pub fn unescape_key_part(part: &str) -> String {
     part.replace("%3A", ":")
 }
 
+/// Whether two folder paths name two places in the same tree.
+///
+/// `notes/sep/p1/studio` and `notes/sep/p2/studio` are two folders in
+/// one tree: two projects a user keeps side by side. `Music/Album` and
+/// `Work/Album` are two trees on two machines: the same project, seen
+/// from two sides.
+///
+/// The relay uses this to tell a collaborator on another machine from
+/// the other project next door. Two projects that sit in the same tree
+/// are not the same project, however identical their bytes are, and
+/// serving one the other's history is a leak.
+pub fn folders_are_siblings(a: &str, b: &str) -> bool {
+    if a.is_empty() || b.is_empty() || a == b {
+        return false;
+    }
+    let shared = a
+        .split('/')
+        .zip(b.split('/'))
+        .take_while(|(x, y)| x == y)
+        .count();
+    shared > 0
+}
+
 /// The path made absolute, with `.` and `..` resolved.
 ///
 /// The path is not resolved through symlinks: a project's identity
@@ -221,15 +244,24 @@ pub fn folder_path_of(path: &Path, home: Option<&Path>) -> String {
         return ".".to_string();
     };
     // Under the home directory the folder path is the path below it.
-    let relative = home.and_then(|home| parent.strip_prefix(home).ok());
+    //
+    // The home directory itself is sometimes reached through a symlink
+    // — a home on another disk, a temporary directory, a mounted
+    // volume — and then the paths do not match even though the project
+    // is plainly inside the home. The comparison is tried a second time
+    // with both paths resolved, so the folder path stays the same
+    // wherever the home happens to live.
+    let relative: Option<Vec<String>> = home
+        .and_then(|home| parent.strip_prefix(home).ok())
+        .map(path_parts)
+        .or_else(|| {
+            let home = std::fs::canonicalize(home?).ok()?;
+            let canonical_parent = std::fs::canonicalize(parent).ok()?;
+            let relative = canonical_parent.strip_prefix(&home).ok()?;
+            Some(path_parts(relative))
+        });
     let mut parts: Vec<String> = match relative {
-        Some(relative) => relative
-            .components()
-            .filter_map(|c| match c {
-                std::path::Component::Normal(s) => Some(s.to_string_lossy().to_string()),
-                _ => None,
-            })
-            .collect(),
+        Some(parts) => parts,
         None => parent
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
@@ -242,6 +274,16 @@ pub fn folder_path_of(path: &Path, home: Option<&Path>) -> String {
         parts.push(".".to_string());
     }
     parts.join("/")
+}
+
+/// The normal components of a path, as plain names.
+fn path_parts(path: &Path) -> Vec<String> {
+    path.components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => Some(s.to_string_lossy().to_string()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Make a string safe to use as a single path component.

@@ -78,6 +78,13 @@ pub struct RelayState {
     /// A blob arrives in chunks, so the pieces are collected here until
     /// the last one turns up.
     incoming: HashMap<String, clavus_sync::blob_transfer::BlobAssembler>,
+    /// The last failure to write the state to disk.
+    ///
+    /// A relay that cannot persist what it accepts must not tell the
+    /// client the push worked: the history would be gone on the next
+    /// restart, and the client would never know. The failure is kept
+    /// so the connection handler can refuse the acknowledgement.
+    pub last_persist_error: Option<String>,
 }
 
 impl RelayState {
@@ -123,6 +130,7 @@ impl RelayState {
             clients: Vec::new(),
             state_dir,
             incoming: HashMap::new(),
+            last_persist_error: None,
         })
     }
 
@@ -352,6 +360,12 @@ impl RelayState {
             // points at exactly one. Two projects can hold the same
             // bytes — a copy of a set, a template — and then the hash
             // says nothing.
+            //
+            // And a project that sits in the same tree as the client's
+            // is not the client's project, however identical the bytes
+            // are: `notes/sep/p1/studio` and `notes/sep/p2/studio` are
+            // two projects side by side. The hash says nothing about
+            // those, so they are left out.
             let matching: Vec<&String> = lineages
                 .iter()
                 .filter(|lineage| {
@@ -359,6 +373,10 @@ impl RelayState {
                         .get(*lineage)
                         .map(|by_hash| by_hash.contains_key(hash))
                         .unwrap_or(false)
+                })
+                .filter(|lineage| {
+                    let candidate = folder_of_key(lineage);
+                    !clavus_core::project::folders_are_siblings(folder, &candidate)
                 })
                 .collect();
             match matching.as_slice() {
@@ -374,8 +392,31 @@ impl RelayState {
         }
 
         // The only project with that name.
-        if lineages.len() == 1 {
-            return Some(lineages[0].clone());
+        //
+        // The client named a folder and this project lives in another
+        // one. That is what a collaborator on another machine looks
+        // like — and it is also what two projects on one machine look
+        // like, and handing one project's history and notes to the
+        // other is a leak.
+        //
+        // The client's own file settles it. Its hash was matched
+        // against the project's snapshots above, and a match is proof.
+        // A hash that matches nothing is not proof either way — the
+        // file may simply have changed since the last push — so the
+        // safe answer is to serve nothing and say so. A client that
+        // cannot tell the relay what its file is (an old client, or a
+        // project file that has gone missing) gets the only project
+        // with that name: there is nothing to contradict.
+        if lineages.len() == 1 && content_hash.is_none() {
+            // The one project with that name is only this client's
+            // project when it does not sit next door to it. Two
+            // projects in the same tree are two projects, and the
+            // client could not tell them apart because its file was
+            // not there to be hashed.
+            let candidate = folder_of_key(&lineages[0]);
+            if !clavus_core::project::folders_are_siblings(folder, &candidate) {
+                return Some(lineages[0].clone());
+            }
         }
 
         // Several projects share the name and none of them can be
@@ -688,8 +729,17 @@ impl RelayState {
         }
 
         // Persist after every store to ensure durability
-        if let Err(e) = self.persist() {
-            warn!("Relay persist failed: {}", e);
+        match self.persist() {
+            Ok(()) => {
+                self.last_persist_error = None;
+            }
+            Err(e) => {
+                // The history is in memory but not on disk. The client
+                // is told, so it does not walk away believing the push
+                // was saved.
+                warn!("Relay persist failed: {}", e);
+                self.last_persist_error = Some(e.to_string());
+            }
         }
 
         conflicts
@@ -741,10 +791,17 @@ pub fn run_with_listener(
         listener.local_addr().map(|a| a.to_string()).unwrap_or_default()
     );
 
-    let state = Arc::new(Mutex::new(match RelayState::new(state_dir) {
+    let state = Arc::new(Mutex::new(match RelayState::new(state_dir.clone()) {
         Ok(s) => s,
         Err(e) => return Err(std::io::Error::other(format!("init relay state: {}", e))),
     }));
+
+    // A relay that cannot write its state directory must not start.
+    //
+    // It would accept pushes, tell the client they were saved, and lose
+    // all of it on the next restart. Refusing to start says the truth
+    // before any history is at stake.
+    check_state_dir_writable(&state_dir)?;
 
     for stream in listener.incoming() {
         match stream {
@@ -876,6 +933,13 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
                     Ok(false) => {}
                     Err(e) => {
                         warn!("Rejected blob chunk from {}: {}", addr, e);
+                        // The client is waiting for the relay to say it
+                        // has the bytes. Silence would leave it hanging
+                        // until the timeout; the truth is that the
+                        // bytes did not arrive.
+                        let _ = client.send(&SyncMsg::Error {
+                            message: format!("the relay could not store the project bytes: {}", e),
+                        });
                     }
                 }
             }
@@ -966,8 +1030,13 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
                 // The cues go beside the snapshots of the project the
                 // client introduced itself with.
                 let identity = (client.name.clone(), client.folder.clone());
-                let conflicts =
-                    state.lock().unwrap().store_for_client(snapshots, cues, Some(identity));
+                let (conflicts, persist_error) = {
+                    let mut state = state.lock().unwrap();
+                    let conflicts =
+                        state.store_for_client(snapshots, cues, Some(identity));
+                    let persist_error = state.last_persist_error.clone();
+                    (conflicts, persist_error)
+                };
                 // Send conflict notifications first (client can handle them before Synced)
                 for (project, relay_head, push_head) in &conflicts {
                     warn!(
@@ -980,11 +1049,33 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
                         push_head: push_head.clone(),
                     });
                 }
-                let _ = client.send(&SyncMsg::Synced);
+                // A relay that could not write the history to disk must
+                // not say the push worked. The client would walk away
+                // believing the history was safe, and the next restart
+                // would take it away.
+                if let Some(reason) = persist_error {
+                    error!(
+                        "The relay could not write its state to disk ({}): the push is not saved",
+                        reason
+                    );
+                    let _ = client.send(&SyncMsg::Error {
+                        message: format!(
+                            "the relay could not write its state to disk ({}): the push was not saved",
+                            reason
+                        ),
+                    });
+                } else {
+                    let _ = client.send(&SyncMsg::Synced);
+                }
             }
             SyncMsg::PullResp { snapshots, cues } => {
                 debug!("Client {} pushing {} snapshots, {} cues", addr, snapshots.len(), cues.len());
-                let conflicts = state.lock().unwrap().store(snapshots, cues);
+                let (conflicts, persist_error) = {
+                    let mut state = state.lock().unwrap();
+                    let conflicts = state.store(snapshots, cues);
+                    let persist_error = state.last_persist_error.clone();
+                    (conflicts, persist_error)
+                };
                 // Send conflict notifications first (client can handle them before Synced)
                 for (project, relay_head, push_head) in &conflicts {
                     warn!(
@@ -997,7 +1088,20 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
                         push_head: push_head.clone(),
                     });
                 }
-                let _ = client.send(&SyncMsg::Synced);
+                if let Some(reason) = persist_error {
+                    error!(
+                        "The relay could not write its state to disk ({}): the push is not saved",
+                        reason
+                    );
+                    let _ = client.send(&SyncMsg::Error {
+                        message: format!(
+                            "the relay could not write its state to disk ({}): the push was not saved",
+                            reason
+                        ),
+                    });
+                } else {
+                    let _ = client.send(&SyncMsg::Synced);
+                }
             }
             SyncMsg::Subscribe { project } => {
                 client.subscribed.push(project);
@@ -1008,6 +1112,29 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
 
     info!("Client disconnected: {}", addr);
     Ok(())
+}
+
+/// Check that the relay's state directory can actually be written.
+///
+/// The check writes a file and reads it back. A directory that exists
+/// but cannot hold a file — a read-only mount, a full disk — is caught
+/// here rather than after a client's history has been accepted.
+fn check_state_dir_writable(state_dir: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(state_dir)?;
+    let probe = state_dir.join(".clavus-write-probe");
+    std::fs::write(&probe, b"ok")?;
+    let read_back = std::fs::read(&probe);
+    let _ = std::fs::remove_file(&probe);
+    match read_back {
+        Ok(bytes) if bytes == b"ok" => Ok(()),
+        Ok(_) => Err(std::io::Error::other(
+            "the state directory did not keep what was written to it",
+        )),
+        Err(e) => Err(std::io::Error::other(format!(
+            "the state directory did not keep what was written to it: {}",
+            e
+        ))),
+    }
 }
 
 /// Order a project's snapshots oldest first, following the parent links.
@@ -1113,4 +1240,15 @@ fn wire_name_of(key: &str) -> String {
     // the first separator is the real one.
     let name = key.split("::").next().unwrap_or(key);
     clavus_core::project::unescape_key_part(name)
+}
+
+/// The folder a project lives in, from its key.
+///
+/// The key is `file name::folder`, and both parts are escaped, so the
+/// first separator is the real one.
+fn folder_of_key(key: &str) -> String {
+    let mut parts = key.splitn(2, "::");
+    let _name = parts.next().unwrap_or(key);
+    let folder = parts.next().unwrap_or("");
+    clavus_core::project::unescape_key_part(folder)
 }

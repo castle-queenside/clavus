@@ -139,6 +139,7 @@ fn the_tui_pulls_the_project_bytes_and_can_restore_them() {
         let hash = match outcome {
             clavus_core::snapshot::SaveOutcome::Created(s) => s.hash,
             clavus_core::snapshot::SaveOutcome::Unchanged(s) => s.hash,
+            clavus_core::snapshot::SaveOutcome::Updated(s) => s.hash,
         };
         assert!(snap_store.has(&hash));
     }

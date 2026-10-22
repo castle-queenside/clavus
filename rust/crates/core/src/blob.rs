@@ -357,6 +357,38 @@ impl BlobStore {
         Ok((hash, filename))
     }
 
+    /// Store the bytes of a sample that arrived from somewhere else.
+    ///
+    /// A collaborator's audio comes over the wire, so there is no file
+    /// to read: the bytes are stored under their own hash, together
+    /// with the path the sample has inside the project.
+    pub fn put_sample_bytes(
+        &self,
+        data: &[u8],
+        filename: &str,
+        relative_path: &str,
+    ) -> io::Result<String> {
+        let hash = Self::sha256(data);
+        let path = self
+            .blob_path(&hash)
+            .ok_or_else(|| invalid_hash(&hash))?;
+        let meta_path = self
+            .sample_meta_path(&hash)
+            .ok_or_else(|| invalid_hash(&hash))?;
+        if let Some(parent) = meta_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let meta = format!("{}\n{}\n", filename, relative_path.replace('\\', "/"));
+        fs::write(&meta_path, meta)?;
+        if !path.exists() {
+            if let Some(parent) = path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            atomic_write(&path, data)?;
+        }
+        Ok(hash)
+    }
+
     /// Get the original filename for a stored sample.
     pub fn sample_filename(&self, hash: &str) -> Option<String> {
         let meta = fs::read_to_string(self.sample_meta_path(hash)?).ok()?;

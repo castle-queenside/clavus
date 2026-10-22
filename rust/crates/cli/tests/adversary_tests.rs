@@ -309,6 +309,7 @@ fn a_corrupt_snapshot_record_is_reported_as_corrupt() {
     let hash = match outcome {
         clavus_core::snapshot::SaveOutcome::Created(s) => s.hash,
         clavus_core::snapshot::SaveOutcome::Unchanged(s) => s.hash,
+        clavus_core::snapshot::SaveOutcome::Updated(s) => s.hash,
     };
 
     // Damage the record.

@@ -285,7 +285,27 @@ impl CueStore {
     }
 
     /// List all cues, optionally filtered by status.
+    ///
+    /// A note that cannot be read makes the whole list an error: the
+    /// user has to know that something is broken rather than see a
+    /// list that quietly leaves their notes out.
     pub fn list(&self, filter: Option<&str>) -> Result<Vec<Cue>, ClavusError> {
+        let (cues, broken) = self.list_partial(filter)?;
+        if !broken.is_empty() {
+            return Err(ClavusError::IndexCorrupted(broken.join("; ")));
+        }
+        Ok(cues)
+    }
+
+    /// The cues of this project, and the notes that could not be read.
+    ///
+    /// A broken note must not swallow the good ones. A push that
+    /// reports "no notes" because one file is corrupt leaves the
+    /// user's other notes on the machine and says nothing about it.
+    pub fn list_partial(
+        &self,
+        filter: Option<&str>,
+    ) -> Result<(Vec<Cue>, Vec<String>), ClavusError> {
         // An unrecognised status must not silently match nothing — the
         // user would see "No cues." and think they have none.
         if let Some(status) = filter {
@@ -298,6 +318,7 @@ impl CueStore {
             }
         }
         let mut cues = Vec::new();
+        let mut broken = Vec::new();
 
         if let Ok(entries) = fs::read_dir(&self.cues_dir) {
             for entry in entries.flatten() {
@@ -305,17 +326,29 @@ impl CueStore {
                 if !name.ends_with(".json") {
                     continue;
                 }
-                let data = fs::read_to_string(entry.path())
-                    .map_err(|e| ClavusError::IndexCorrupted(e.to_string()))?;
+                let data = match fs::read_to_string(entry.path()) {
+                    Ok(data) => data,
+                    Err(e) => {
+                        broken.push(format!(
+                            "the note '{}' could not be read: {}",
+                            name, e
+                        ));
+                        continue;
+                    }
+                };
                 // A note that cannot be read is a broken note, not a
                 // missing one. Swallowing it would show the user an
                 // empty list while their notes are still on disk.
-                let cue: Cue = serde_json::from_str(&data).map_err(|e| {
-                    ClavusError::IndexCorrupted(format!(
-                        "the note '{}' is corrupt and cannot be read: {}",
-                        name, e
-                    ))
-                })?;
+                let cue: Cue = match serde_json::from_str(&data) {
+                    Ok(cue) => cue,
+                    Err(e) => {
+                        broken.push(format!(
+                            "the note '{}' is corrupt and cannot be read: {}",
+                            name, e
+                        ));
+                        continue;
+                    }
+                };
                 if let Some(status) = filter {
                     if cue.status.as_str() != status {
                         continue;
@@ -329,7 +362,7 @@ impl CueStore {
         cues.sort_by(|a, b| {
             a.timestamp.partial_cmp(&b.timestamp).unwrap_or(std::cmp::Ordering::Equal)
         });
-        Ok(cues)
+        Ok((cues, broken))
     }
 
     /// Count pending/open cues.

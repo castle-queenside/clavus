@@ -159,8 +159,20 @@ fn enter_opens_project_detail() {
 }
 
 #[test]
-fn enter_without_selection_stays_on_list() {
+fn enter_without_a_selection_opens_the_first_project() {
+    // The footer says "Enter open", and a list with nothing selected
+    // used to swallow the key: no redraw, no message, no project. The
+    // first project is selected and opened.
     let mut h = Harness::with_project();
+    press(&mut h.app, KeyCode::Enter);
+    assert_eq!(h.app.selected_project, Some(0));
+    assert_eq!(h.app.screen, Screen::ProjectDetail);
+    assert!(h.app.project_detail.is_some());
+}
+
+#[test]
+fn enter_on_an_empty_list_says_so() {
+    let mut h = Harness::empty();
     press(&mut h.app, KeyCode::Enter);
     assert_eq!(h.app.screen, Screen::ProjectList);
     assert!(h.app.project_detail.is_none());
