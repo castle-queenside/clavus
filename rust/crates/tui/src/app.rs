@@ -111,7 +111,7 @@ pub enum SyncCmd {
     },
     Disconnect,
     /// Tell the relay which project we are working on.
-    SetProject(String, String),
+    SetProject(String, String, Option<String>),
     /// Push the given local snapshots and cues to the relay.
     Push {
         snapshots: Vec<clavus_core::types::Snapshot>,
@@ -346,8 +346,11 @@ impl App {
         // right history and stores our pushes under the right name.
         let name = self.selected_project_sync_name();
         let folder = self.selected_project_folder().unwrap_or_default();
+        let hash = self
+            .selected_entry()
+            .and_then(|e| clavus_core::blob::BlobStore::content_hash_of_file(&e.path));
         if let (Some(name), Some(tx)) = (name, self.sync_state.cmd_tx.as_ref()) {
-            let _ = tx.send(SyncCmd::SetProject(name, folder));
+            let _ = tx.send(SyncCmd::SetProject(name, folder, hash));
         }
         Ok(())
     }
@@ -523,6 +526,12 @@ impl App {
         // right history.
         let initial_project = self.selected_project_sync_name();
         let initial_folder = self.selected_project_folder();
+        // The hash of the project file. It is the hash of a snapshot of
+        // it, so the relay can tell which project this is even when
+        // the file sits in a different folder on another machine.
+        let initial_hash = self
+            .selected_entry()
+            .and_then(|e| clavus_core::blob::BlobStore::content_hash_of_file(&e.path));
 
         // Spawn the background sync thread.
         thread::spawn(move || {
@@ -535,6 +544,7 @@ impl App {
             // apart, so the relay never serves one project's history to
             // the other.
             let mut folder: Option<String> = initial_folder.clone();
+            let mut content_hash: Option<String> = initial_hash.clone();
 
             // Use Option to allow re-binding client on reconnect.
             let mut client: Option<SyncClient> = match SyncClient::connect(&addr_owned) {
@@ -550,6 +560,7 @@ impl App {
                     project.as_deref().unwrap_or("clavus-tui"),
                     vec![],
                     folder.as_deref().unwrap_or(""),
+                    content_hash.clone(),
                 ) {
                     let _ = result_tx.send(format!("hello failed: {}", e));
                     return;
@@ -567,9 +578,10 @@ impl App {
                         let _ = result_tx.send("disconnected".to_string());
                         break;
                     }
-                    SyncCmd::SetProject(name, new_folder) => {
+                    SyncCmd::SetProject(name, new_folder, new_hash) => {
                         project = Some(name.clone());
                         folder = Some(new_folder.clone());
+                        content_hash = new_hash.clone();
                         // Re-introduce ourselves so the relay serves the
                         // new project's history from now on.
                         if let Some(ref c) = client {
@@ -577,6 +589,7 @@ impl App {
                                 project.as_deref().unwrap_or("clavus-tui"),
                                 vec![],
                                 folder.as_deref().unwrap_or(""),
+                                content_hash.clone(),
                             );
                         }
                     }
@@ -643,6 +656,7 @@ impl App {
                                 pull_name.as_str(),
                                 known_heads,
                                 project_id.folder(),
+                                clavus_core::blob::BlobStore::content_hash_of_file(&project_path),
                             ) {
                                 let _ = result_tx.send(format!("pull failed: {}", e));
                                 continue;
@@ -709,6 +723,7 @@ impl App {
                                     project.as_deref().unwrap_or("clavus-tui"),
                                     vec![],
                                     folder.as_deref().unwrap_or(""),
+                                    content_hash.clone(),
                                 );
                                 let _ = result_tx.send(format!("connected to {}", new_addr));
                                 Some(c)
@@ -846,7 +861,13 @@ pub fn store_pulled(
                 if snap_store.has(&snap.hash) {
                     continue;
                 }
-                if snap_store.save_raw(snap.clone()).is_ok() {
+                // The snapshot now lives here, so it records the local
+                // path. A collaborator's machine has a different path
+                // for the same project, and the restore has to work on
+                // this one.
+                let mut local = snap.clone();
+                local.project_path = project.path.to_string_lossy().to_string();
+                if snap_store.save_raw(local).is_ok() {
                     stored += 1;
                 }
             }

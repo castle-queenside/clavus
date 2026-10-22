@@ -108,6 +108,21 @@ impl SnapshotStore {
         None
     }
 
+    /// The snapshot records that cannot be read.
+    ///
+    /// A record that exists on disk but cannot be parsed is a broken
+    /// record, not a missing one. Reporting it as "no snapshots" would
+    /// hide a damaged history behind a clean bill of health.
+    pub fn corrupt_records(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for hash in self.store.list_meta_hashes(&self.project.key) {
+            if self.store.load_meta(&self.project.key, &hash).is_none() {
+                out.push(hash);
+            }
+        }
+        out
+    }
+
     /// Whether a snapshot was taken from the given project.
     ///
     /// The project folder and the file name must both match: a snapshot

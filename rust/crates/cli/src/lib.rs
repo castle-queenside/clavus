@@ -325,6 +325,16 @@ pub fn cmd_log(project: &Path, clavus_root: &Path,
     let store = BlobStore::open(clavus_root.join("blobs"));
     let snap_store = SnapshotStore::new(store, &id);
 
+    // A record that exists but cannot be read is a broken history, not
+    // an empty one. Saying "no snapshots" would hide the damage.
+    let corrupt = snap_store.corrupt_records();
+    if !corrupt.is_empty() {
+        anyhow::bail!(
+            "the snapshot record for {} is corrupt and cannot be read — the history of this project cannot be shown until it is repaired",
+            clavus_core::short(&corrupt[0], 8)
+        );
+    }
+
     let head = match snap_store.head() {
         Some(h) => h,
         None => {
@@ -656,8 +666,13 @@ pub fn cmd_push(relay: &str, project: &Path, clavus_root: &Path,
         .map_err(|e| anyhow::anyhow!("Failed to connect to {}: {}", relay, e))?;
 
     // Say hello with empty known_heads so relay sends us everything
-    client.hello_in(id.sync_name(), vec![], id.folder())
-        .map_err(|e| anyhow::anyhow!("Hello: {}", e))?;
+    client.hello_in(
+        id.sync_name(),
+        vec![],
+        id.folder(),
+        clavus_core::blob::BlobStore::content_hash_of_file(project),
+    )
+    .map_err(|e| anyhow::anyhow!("Hello: {}", e))?;
 
     // Receive relay's state
     let resp = client.recv_timeout(std::time::Duration::from_secs(5));
@@ -813,8 +828,13 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
         .map_err(|e| anyhow::anyhow!("Failed to connect to {}: {}", relay, e))?;
 
     // Announce what we know
-    client.hello_in(id.sync_name(), known_heads, id.folder())
-        .map_err(|e| anyhow::anyhow!("Hello: {}", e))?;
+    client.hello_in(
+        id.sync_name(),
+        known_heads,
+        id.folder(),
+        clavus_core::blob::BlobStore::content_hash_of_file(project),
+    )
+    .map_err(|e| anyhow::anyhow!("Hello: {}", e))?;
 
     // Receive relay's response (Push with missing snapshots)
     let timeout = std::time::Duration::from_secs(10);
@@ -825,6 +845,8 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
     let mut pulled_without_bytes = 0;
     // A pull that never got an answer is a failure, not a success.
     let mut got_response = false;
+    // A conflict is an answer, but not a successful pull.
+    let mut saw_conflict = false;
     loop {
         match client.recv_timeout(timeout) {
             Some(SyncMsg::Push { snapshots, cues }) => {
@@ -847,7 +869,13 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
                                 );
                             }
                         }
-                        snap_store.save_raw(snap.clone())?;
+                        // The snapshot now lives here, so it records
+                        // the local path. A collaborator's machine has a
+                        // different path for the same project, and the
+                        // restore has to work on this one.
+                        let mut local = snap.clone();
+                        local.project_path = id.path.to_string_lossy().to_string();
+                        snap_store.save_raw(local)?;
                         outln!(
                         out,
                         "  ↳ {}  {}",
@@ -908,10 +936,15 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
                 outln!(out, "  relay HEAD: {}  your HEAD: {}",
                     clavus_core::short(&relay_head, 8),
             clavus_core::short(&push_head, 8));
+                // The relay's history and ours have diverged. Nothing
+                // was pulled, and saying "up to date" would be a lie.
+                saw_conflict = true;
                 break;
             }
             Some(msg) => {
-                got_response = true;
+                // Some other message — a "synced", an acknowledgement.
+                // It says nothing about the project's history, so the
+                // pull keeps waiting for the real answer.
                 outln!(out, "  relay: {:?}", msg);
             }
             None => {
@@ -925,6 +958,12 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
         // The user is not up to date — nothing was even checked. Saying
         // otherwise is a lie that hides a broken connection.
         anyhow::bail!("the relay did not answer");
+    }
+
+    if saw_conflict {
+        // The histories have diverged. The pull brought nothing, and
+        // the user has to merge before anything can be pushed.
+        anyhow::bail!("the relay's history and yours have diverged");
     }
 
     if pulled_count > 0 {
@@ -1159,7 +1198,22 @@ pub fn cmd_status(project: &Path, clavus_root: &Path,
 
     let head = snap_store.head();
     let count = snap_store.chain_length(None);
-    if count == 0 {
+    // A record that exists but cannot be read is a broken history. It
+    // is reported as such — the same way `clavus log` reports it — and
+    // not as a clean count.
+    let corrupt = snap_store.corrupt_records();
+    if !corrupt.is_empty() {
+        outln!(
+            out,
+            "📷  ⚠ {} snapshot record(s) are corrupt and cannot be read",
+            corrupt.len()
+        );
+        outln!(
+            out,
+            "     the first is {} — the history of this project is damaged",
+            clavus_core::short(&corrupt[0], 8)
+        );
+    } else if count == 0 {
         outln!(out, "📷  No snapshots yet — run `clavus snapshot`");
     } else {
         let h = head.as_ref().map(|s| s.short_hash(8)).unwrap_or_default();

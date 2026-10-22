@@ -10,7 +10,7 @@ use std::process::Command;
 
 use clavus_cli::{
     cmd_audit, cmd_collect, cmd_cue, cmd_cues, cmd_log, cmd_projects, cmd_pull, cmd_push,
-    cmd_relay, cmd_restore, cmd_snapshot, cmd_status,
+    cmd_restore, cmd_snapshot, cmd_status,
 };
 use tempfile::TempDir;
 

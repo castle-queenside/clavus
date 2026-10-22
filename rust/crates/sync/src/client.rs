@@ -24,6 +24,13 @@ pub enum SyncMsg {
         /// top of a directory.
         #[serde(default)]
         folder: String,
+        /// The hash of the client's project file.
+        ///
+        /// It is the hash a snapshot of that file carries, so the relay
+        /// can tell which project the client means even when the file
+        /// sits in a different folder on another machine.
+        #[serde(default)]
+        content_hash: Option<String>,
     },
     Push { snapshots: Vec<Snapshot>, cues: Vec<Cue> },
     Pull { missing: Vec<String> },
@@ -190,7 +197,7 @@ impl SyncClient {
 
     /// Send a Hello message and announce the client's known snapshot heads.
     pub fn hello(&self, client_name: &str, known_heads: Vec<String>) -> Result<()> {
-        self.hello_in(client_name, known_heads, "")
+        self.hello_in(client_name, known_heads, "", None)
     }
 
     /// Say hello, saying which folder the project lives in.
@@ -202,11 +209,13 @@ impl SyncClient {
         client_name: &str,
         known_heads: Vec<String>,
         folder: &str,
+        content_hash: Option<String>,
     ) -> Result<()> {
         self.send(SyncMsg::Hello {
             client_name: client_name.to_string(),
             known_heads,
             folder: folder.to_string(),
+            content_hash,
         })
     }
 

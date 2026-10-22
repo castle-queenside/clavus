@@ -163,7 +163,7 @@ git add -A && git commit && git push
   so two same-named projects never mix
 - Blob transfer: the project bytes travel with the snapshots, hash-verified,
   so a pulled snapshot can be restored on the other machine
-- 409 tests passing, clippy clean, CI green
+- 417 tests passing, clippy clean, CI green
 
 ### Blocked ⛔
 | Item | Blocker |

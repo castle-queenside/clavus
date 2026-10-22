@@ -148,6 +148,16 @@ impl BlobStore {
         format!("{:064x}", Sha256::digest(data))
     }
 
+    /// The hash of a project file's bytes.
+    ///
+    /// It is the same hash a snapshot of that file carries, so it can
+    /// be used to ask a relay which project a file belongs to — even
+    /// when the file sits in a different folder on another machine.
+    pub fn content_hash_of_file(path: &std::path::Path) -> Option<String> {
+        let data = std::fs::read(path).ok()?;
+        Some(Self::sha256(&data))
+    }
+
     // ─── Path helpers ────────────────────────────────────────────────
 
     fn blob_path(&self, hash: &str) -> Option<PathBuf> {

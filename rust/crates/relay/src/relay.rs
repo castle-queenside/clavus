@@ -18,6 +18,8 @@ pub struct Client {
     name: String,
     /// The name of the folder the project lives in.
     folder: String,
+    /// The hash of the client's project file.
+    content_hash: Option<String>,
     known_heads: Vec<String>,
     stream: Arc<Mutex<TcpStream>>,
     subscribed: Vec<String>,
@@ -30,6 +32,7 @@ impl Client {
             addr,
             name: String::new(),
             folder: String::new(),
+            content_hash: None,
             known_heads: vec![],
             stream: Arc::new(Mutex::new(stream)),
             subscribed: vec![],
@@ -309,16 +312,11 @@ impl RelayState {
         wire_name: &str,
         folder: &str,
         known: &[String],
+        content_hash: Option<&str>,
     ) -> Option<String> {
         let lineages = self.lineages_of(wire_name);
         if lineages.is_empty() {
             return None;
-        }
-
-        // The project in the client's own folder.
-        let wanted = format!("{}::{}", wire_name, folder);
-        if lineages.contains(&wanted) {
-            return Some(wanted);
         }
 
         // A project the client already has history from.
@@ -333,6 +331,43 @@ impl RelayState {
             }
         }
 
+        // A project whose snapshots include the client's file. The hash
+        // of the file is the hash of a snapshot of it, so this finds the
+        // project even when the file sits in a different folder on
+        // another machine — which is the normal case for a
+        // collaborator.
+        // The project in the client's own folder.
+        let wanted = format!("{}::{}", wire_name, folder);
+        if lineages.contains(&wanted) {
+            return Some(wanted);
+        }
+
+        if let Some(hash) = content_hash {
+            // The hash of the file points at a project only when it
+            // points at exactly one. Two projects can hold the same
+            // bytes — a copy of a set, a template — and then the hash
+            // says nothing.
+            let matching: Vec<&String> = lineages
+                .iter()
+                .filter(|lineage| {
+                    self.snapshots
+                        .get(*lineage)
+                        .map(|by_hash| by_hash.contains_key(hash))
+                        .unwrap_or(false)
+                })
+                .collect();
+            match matching.as_slice() {
+                [only] => return Some((*only).clone()),
+                [] => {}
+                _ => {
+                    warn!(
+                        "The relay holds {} projects with the same bytes — the file's hash tells them apart not at all",
+                        matching.len()
+                    );
+                }
+            }
+        }
+
         // The only project with that name.
         if lineages.len() == 1 {
             return Some(lineages[0].clone());
@@ -340,6 +375,32 @@ impl RelayState {
 
         // Several projects share the name and none of them can be
         // told apart. Serving nothing is the safe answer.
+        None
+    }
+
+    /// The project a snapshot belongs to.
+    ///
+    /// A snapshot that continues a chain the relay already holds
+    /// belongs to that chain's project, whatever folder it was taken
+    /// in. A project is a history, not a file name.
+    ///
+    /// The folder the snapshot was taken in wins over the chain, so
+    /// two projects that hold the same bytes — a copy of a set, a
+    /// template — stay two projects.
+    pub fn lineage_of_snapshot(&self, snap: &Snapshot) -> Option<String> {
+        let path_key = relay_key_from_path(&snap.project_path);
+        // The project in that folder is already known.
+        if self.snapshots.contains_key(&path_key) {
+            return Some(path_key);
+        }
+        // Its parent is known: the snapshot continues that history.
+        if let Some(parent) = snap.parent.as_deref() {
+            for (lineage, by_hash) in &self.snapshots {
+                if by_hash.contains_key(parent) {
+                    return Some(lineage.clone());
+                }
+            }
+        }
         None
     }
 
@@ -470,7 +531,12 @@ impl RelayState {
             // Extract fields before moving the snapshot
             let snap_hash = snap.hash.clone();
             let snap_parent = snap.parent.clone();
-            let project_name = relay_key_from_path(&snap.project_path);
+            // A snapshot that continues a chain the relay already holds
+            // belongs to that chain's project, whatever folder it was
+            // taken in. A project is a history, not a file name.
+            let project_name = self
+                .lineage_of_snapshot(&snap)
+                .unwrap_or_else(|| relay_key_from_path(&snap.project_path));
 
             // Detect HEAD divergence per project
             if let Some(existing_head) = self.heads.get(&project_name) {
@@ -536,7 +602,7 @@ impl RelayState {
                 .iter()
                 .find(|k| wire_name_of(k) == name.as_str())
                 .cloned()
-                .or_else(|| self.resolve_lineage(name, folder, &[]))
+                .or_else(|| self.resolve_lineage(name, folder, &[], None))
                 .or_else(|| Some(name.clone()))
         });
 
@@ -718,18 +784,25 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
                 client_name,
                 known_heads,
                 folder,
+                content_hash,
             } => {
                 info!("Client {} (name={}) hello, {} known heads", addr, client_name, known_heads.len());
                 client.name = client_name.clone();
                 client.known_heads = known_heads.clone();
                 client.folder = folder.clone();
+                client.content_hash = content_hash.clone();
 
                 let resp = {
                     let s = state.lock().unwrap();
                     // Which project does the client mean? Two projects
                     // can share a file name, and they must not be mixed
                     // up.
-                    let lineage = s.resolve_lineage(&client_name, &folder, &known_heads);
+                    let lineage = s.resolve_lineage(
+                        &client_name,
+                        &folder,
+                        &known_heads,
+                        content_hash.as_deref(),
+                    );
                     let (snaps, cues) = match &lineage {
                         Some(key) => (
                             s.find_missing(key, &known_heads),
@@ -830,8 +903,12 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
                     // Which project does the client mean? The client's
                     // name is the wire name; the folder tells two
                     // projects that share a file name apart.
-                    let lineage = s
-                        .resolve_lineage(&client.name, &client.folder, &client.known_heads);
+                    let lineage = s.resolve_lineage(
+                        &client.name,
+                        &client.folder,
+                        &client.known_heads,
+                        client.content_hash.as_deref(),
+                    );
                     match lineage {
                         Some(key) => {
                             // Only the client's own project's snapshots

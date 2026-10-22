@@ -200,6 +200,21 @@ clavus audit "/path/to/project.als"
 
 Running collect twice on a clean project should be a no-op.
 
+### 3.2b Collect Must Never Overwrite Your Own Files
+
+**Setup:** a project with a sample in `Samples/` that has the same file
+name as a sample somewhere else on disk.
+
+**Test:** run `clavus collect` on it.
+
+**Expected:** the file in `Samples/` is **untouched**. The collected
+sample gets a name of its own (`lib_kick.wav`), and the project points at
+the new file. Two tracks must never end up sharing one file, and your
+own audio must never be overwritten.
+
+**What to watch for:** the bytes of the file that was already in the
+project. If they changed, the tool destroyed your audio — report it.
+
 ### 3.3 Collect a Project with Missing Samples
 
 **Setup:** A project where some referenced samples no longer exist on disk.
@@ -317,6 +332,17 @@ work it did not store:
 
 **What to watch for:** A "✓" for a snapshot that does not appear in
 `clavus log` is a false success. Report it.
+
+### 4.4b A Damaged Snapshot History
+
+**Setup:** take a snapshot, then damage the record on disk
+(`truncate` the `.json` file in the data directory).
+
+**Test:** run `clavus log` and `clavus status`.
+
+**Expected:** both say the history is damaged. Neither may say "No
+snapshots yet", and `status` may not print a snapshot count next to an
+empty HEAD.
 
 ### 4.5 View Snapshot Log
 
@@ -533,7 +559,9 @@ Connecting to 192.168.1.X:4477...
   the oldest. Check `clavus log` — every snapshot of the chain must be
   there, and the newest one must be the head.
 - A pull against a relay that does not answer must **fail**, not print
-  "✓ up to date".
+  "✓ up to date". The same goes for a relay that answers with something
+  that is not the project's history: nothing was checked, so the pull
+  must fail and say so.
 - The relay must not hand you another project's snapshots or cues.
 - **Every** pulled snapshot must bring its own bytes. A pull that says
   "the relay has no bytes for this snapshot" for a snapshot the relay

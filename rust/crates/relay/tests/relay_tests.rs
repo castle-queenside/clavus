@@ -169,7 +169,7 @@ fn test_conflict_message_deserialization() {
 #[test]
 fn test_all_syncmsg_variants_serialize_deserialize() {
     let variants = vec![
-        SyncMsg::Hello { client_name: "test".into(), known_heads: vec!["abc".into()], folder: String::new() },
+        SyncMsg::Hello { client_name: "test".into(), known_heads: vec!["abc".into()], folder: String::new(), content_hash: None },
         SyncMsg::Push { snapshots: vec![], cues: vec![] },
         SyncMsg::Pull { missing: vec!["def".into()] },
         SyncMsg::PullResp { snapshots: vec![], cues: vec![] },

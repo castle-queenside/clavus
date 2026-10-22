@@ -307,14 +307,21 @@ impl CueStore {
                 }
                 let data = fs::read_to_string(entry.path())
                     .map_err(|e| ClavusError::IndexCorrupted(e.to_string()))?;
-                if let Ok(cue) = serde_json::from_str::<Cue>(&data) {
-                    if let Some(status) = filter {
-                        if cue.status.as_str() != status {
-                            continue;
-                        }
+                // A note that cannot be read is a broken note, not a
+                // missing one. Swallowing it would show the user an
+                // empty list while their notes are still on disk.
+                let cue: Cue = serde_json::from_str(&data).map_err(|e| {
+                    ClavusError::IndexCorrupted(format!(
+                        "the note '{}' is corrupt and cannot be read: {}",
+                        name, e
+                    ))
+                })?;
+                if let Some(status) = filter {
+                    if cue.status.as_str() != status {
+                        continue;
                     }
-                    cues.push(cue);
                 }
+                cues.push(cue);
             }
         }
 

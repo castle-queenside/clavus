@@ -23,10 +23,11 @@
 | TUI (sync round trip) | `crates/tui/tests/sync_blob_tests.rs` | 1 | 🟢 |
 | CLI commands | `crates/cli/tests/cli_tests.rs` | 54 | 🟢 |
 | CLI (beta regressions) | `crates/cli/tests/beta_cli_tests.rs` | 17 | 🟢 |
-| CLI (second beta wave) | `crates/cli/tests/wave2_tests.rs` | 4 | 🟢 |
+| CLI (second beta wave) | `crates/cli/tests/wave2_tests.rs` | 6 | 🟢 |
+| CLI (adversary findings) | `crates/cli/tests/adversary_tests.rs` | 5 | 🟢 |
 | Core unit tests | `crates/core/src/**` | 35 | 🟢 |
 
-**409 tests passing, 0 failed, 0 ignored.**
+**417 tests passing, 0 failed, 0 ignored.**
 
 Legend: 🟢 good  🟡 partial  🟠 manual only  🔴 missing
 
@@ -268,6 +269,23 @@ the relay file bytes under someone else's name. The CLI sends the bytes
 it learns about the snapshot. The pull fetches the bytes before it saves
 the metadata, and says which of the pulled snapshots can be restored here
 and which cannot.
+
+---
+
+## The Adversary's Findings
+
+The adversary persona of the second wave looks for data loss, crashes
+and anything that writes outside the directory it should. It found
+three real defects, each reproduced by hand before it was fixed.
+
+| Finding | Symptom | Fix | Test |
+|---------|---------|-----|------|
+| A1 | `collect` overwrote a sample that was already in the project, destroying the user's own audio and leaving two tracks sharing one file | A name that is already taken in the project is not written over. The sample gets a name of its own, and a file with the very same bytes is reused rather than copied | `cli/tests/adversary_tests.rs` |
+| A2 | A pull against a relay that only acknowledged printed both "✗ nothing was checked" and "✓ up to date", and exited 0 | Only an answer that carries the project's history counts as an answer. Anything else leaves the pull waiting, and a pull that checked nothing fails | `cli/tests/adversary_tests.rs` |
+| A3 | A snapshot record that could not be parsed made `log` say "No snapshots yet" and `status` say "1 snapshot(s) (HEAD: )" | A record that exists but cannot be read is reported as corrupt, by both commands | `cli/tests/adversary_tests.rs` |
+
+A corrupt note is reported the same way: `clavus cues` says the note is
+corrupt instead of showing an empty list.
 
 ### The Beta Harness
 

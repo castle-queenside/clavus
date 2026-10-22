@@ -389,7 +389,7 @@ fn relay_state_lists_stored_snapshots() {
     // The client says which file it is working on, and the relay works
     // out which project that is.
     assert_eq!(
-        state.resolve_lineage("test.als", "tmp", &[]),
+        state.resolve_lineage("test.als", "tmp", &[], None),
         Some("test.als::tmp".to_string())
     );
 }
@@ -826,7 +826,7 @@ fn the_relay_keeps_same_named_projects_apart() {
     // The first client works on the first project.
     let client = SyncClient::connect(&addr).expect("connect");
     client
-        .hello_in("Track.als", vec![], "Album1")
+        .hello_in("Track.als", vec![], "Album1", None)
         .expect("hello");
     let _ = client.recv_timeout(Duration::from_secs(3));
     client
@@ -839,7 +839,7 @@ fn the_relay_keeps_same_named_projects_apart() {
     // The second client works on the second project.
     let client2 = SyncClient::connect(&addr).expect("connect");
     client2
-        .hello_in("Track.als", vec![], "Album2")
+        .hello_in("Track.als", vec![], "Album2", None)
         .expect("hello");
     let _ = client2.recv_timeout(Duration::from_secs(3));
     client2
@@ -853,7 +853,7 @@ fn the_relay_keeps_same_named_projects_apart() {
     // project.
     let client3 = SyncClient::connect(&addr).expect("connect");
     client3
-        .hello_in("Track.als", vec![], "Album1")
+        .hello_in("Track.als", vec![], "Album1", None)
         .expect("hello");
     let reply = client3
         .recv_timeout(Duration::from_secs(3))
@@ -871,7 +871,7 @@ fn the_relay_keeps_same_named_projects_apart() {
     // And a client in the second folder only the second project.
     let client4 = SyncClient::connect(&addr).expect("connect");
     client4
-        .hello_in("Track.als", vec![], "Album2")
+        .hello_in("Track.als", vec![], "Album2", None)
         .expect("hello");
     let reply = client4
         .recv_timeout(Duration::from_secs(3))
@@ -900,7 +900,7 @@ fn an_ambiguous_name_is_served_to_nobody() {
     // Two projects share a file name.
     let client = SyncClient::connect(&addr).expect("connect");
     client
-        .hello_in("Track.als", vec![], "Album1")
+        .hello_in("Track.als", vec![], "Album1", None)
         .expect("hello");
     let _ = client.recv_timeout(Duration::from_secs(3));
     client
@@ -912,7 +912,7 @@ fn an_ambiguous_name_is_served_to_nobody() {
 
     let client2 = SyncClient::connect(&addr).expect("connect");
     client2
-        .hello_in("Track.als", vec![], "Album2")
+        .hello_in("Track.als", vec![], "Album2", None)
         .expect("hello");
     let _ = client2.recv_timeout(Duration::from_secs(3));
     client2
@@ -926,7 +926,7 @@ fn an_ambiguous_name_is_served_to_nobody() {
     // told apart from the two. It gets nothing rather than the wrong
     // project's history.
     let client3 = SyncClient::connect(&addr).expect("connect");
-    client3.hello_in("Track.als", vec![], "").expect("hello");
+    client3.hello_in("Track.als", vec![], "", None).expect("hello");
     let reply = client3
         .recv_timeout(Duration::from_secs(3))
         .expect("the relay must answer");
@@ -950,7 +950,7 @@ fn a_refused_push_is_not_stored_by_the_relay() {
 
     // The first chain is accepted.
     let client = SyncClient::connect(&addr).expect("connect");
-    client.hello_in("Split.als", vec![], "Album").expect("hello");
+    client.hello_in("Split.als", vec![], "Album", None).expect("hello");
     let _ = client.recv_timeout(Duration::from_secs(3));
     client
         .send(SyncMsg::Push {
@@ -962,7 +962,7 @@ fn a_refused_push_is_not_stored_by_the_relay() {
 
     // A different chain with the same parent is refused.
     let client2 = SyncClient::connect(&addr).expect("connect");
-    client2.hello_in("Split.als", vec![], "Album").expect("hello");
+    client2.hello_in("Split.als", vec![], "Album", None).expect("hello");
     let _ = client2.recv_timeout(Duration::from_secs(3));
     client2
         .send(SyncMsg::Push {
@@ -1039,7 +1039,7 @@ fn an_older_relay_keeps_its_history_after_the_upgrade() {
 
     // The relay must still serve the history and the notes.
     let state = clavus_relay::relay::RelayState::new(tmp.path().to_path_buf()).expect("state");
-    let lineage = state.resolve_lineage("Track.als", "Album1", &[]);
+    let lineage = state.resolve_lineage("Track.als", "Album1", &[], None);
     assert_eq!(
         lineage,
         Some("Track.als::Album1".to_string()),

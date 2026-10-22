@@ -570,6 +570,32 @@ fn audit_sample_refs(
 
 // ─── Collection ───────────────────────────────────────────────────────────────
 
+/// Whether a name is free for a source.
+///
+/// A name is taken when another source in this run claimed it, or when
+/// a file with that name is already in the project. A file that is
+/// already there with the very same bytes is not a clash: it is the
+/// sample the project already carries, and copying over it would be a
+/// no-op.
+fn is_free(candidate: &str, samples_dir: &Path, source: &Path) -> bool {
+    let dest = samples_dir.join(candidate);
+    if !dest.exists() {
+        return true;
+    }
+    // The same file collected twice is the same file.
+    if dest == source {
+        return true;
+    }
+    // The same bytes: the project already carries this sample, so the
+    // name is free — there is nothing to copy and nothing to lose.
+    // Different bytes: the name is taken, and the sample gets a name
+    // of its own. The user's file is never written over.
+    match (fs::read(&dest), fs::read(source)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
 /// Claim a unique destination file name for a sample.
 ///
 /// Two samples can share a file name — `a/loop.wav` and `b/loop.wav` are
@@ -577,8 +603,12 @@ fn audit_sample_refs(
 /// track played the other's audio, so a clash is given a name of its own:
 /// `a_loop.wav`, then `b_loop.wav`, and finally a name carrying a short
 /// digest of the source path.
+///
+/// A file that is already in the project is a clash too, unless it holds
+/// the very same audio. The user's own sample is never written over.
 fn unique_destination(
     claimed: &mut HashMap<String, PathBuf>,
+    samples_dir: &Path,
     filename: &str,
     source: &Path,
 ) -> String {
@@ -590,7 +620,7 @@ fn unique_destination(
     }
 
     let mut candidate = filename.to_string();
-    if !claimed.contains_key(&candidate) {
+    if !claimed.contains_key(&candidate) && is_free(&candidate, samples_dir, source) {
         claimed.insert(candidate.clone(), source.to_path_buf());
         return candidate;
     }
@@ -612,7 +642,7 @@ fn unique_destination(
 
     if !parent.is_empty() {
         candidate = format!("{}_{}{}", parent, stem, ext);
-        if !claimed.contains_key(&candidate) {
+        if !claimed.contains_key(&candidate) && is_free(&candidate, samples_dir, source) {
             claimed.insert(candidate.clone(), source.to_path_buf());
             return candidate;
         }
@@ -676,14 +706,29 @@ pub fn collect_samples(
 
     for ref_ in candidates {
         if let Some(ref resolved) = ref_.resolved_path {
-            let filename = unique_destination(&mut claimed, &ref_.filename, resolved);
+            let filename =
+                unique_destination(&mut claimed, &samples_dir, &ref_.filename, resolved);
             let dest = samples_dir.join(&filename);
             if let Err(e) = fs::create_dir_all(&samples_dir) {
                 error!("Failed to create {}: {}", samples_dir.display(), e);
                 failed.push((ref_.path.clone(), e.to_string()));
                 continue;
             }
-            match fs::copy(resolved, &dest) {
+            // A file that is already there with the same bytes is the
+            // sample the project already carries. It is not copied
+            // over — the user's file stays exactly as it is — and the
+            // reference simply points at it.
+            let already_there = match (fs::read(&dest), fs::read(resolved)) {
+                (Ok(a), Ok(b)) => a == b,
+                _ => false,
+            };
+            let copied_result = if already_there {
+                info!("{} is already in the project", filename);
+                Ok(0)
+            } else {
+                fs::copy(resolved, &dest)
+            };
+            match copied_result {
                 Ok(bytes) => {
                     info!("Collected: {} ({} bytes)", filename, bytes);
                     copied.push(dest.clone());

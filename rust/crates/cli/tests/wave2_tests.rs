@@ -153,6 +153,9 @@ fn two_projects_with_the_same_file_name_do_not_mix() {
     let ws_a = Workspace::new();
     let album1 = ws_a.als_in("Album1", "Track.als");
     let album2 = ws_a.als_in("Album2", "Track.als");
+    // The two albums hold different music — they are two projects,
+    // not two copies of one.
+    ws_a.revise(&album2, 140);
 
     let (out, result) = run(|o, e| {
         cmd_snapshot(&album1, &Some("album one v1".to_string()), false, &ws_a.root, o, e)
@@ -410,6 +413,104 @@ fn a_refused_push_is_not_stored_by_the_relay() {
         .map(|o| o.values().filter_map(|v| v.as_str()).map(String::from).collect())
         .unwrap_or_default();
     assert_eq!(head_values.len(), 1, "one head: {:?}", head_values);
+
+    drop(relay);
+}
+
+// ─── A collaborator in another folder finds the right project ────────────
+//
+// The folder tells two projects that share a file name apart, but a
+// collaborator usually keeps the project in a folder of their own. The
+// hash of the file says which project it is, so the pull finds the
+// right history.
+
+#[test]
+fn a_collaborator_in_another_folder_pulls_the_right_project() {
+    let (addr, _dir, relay) = start_relay();
+
+    // ── Machine A: one project, in a folder of its own ──
+    let ws_a = Workspace::new();
+    let als_a = ws_a.als_in("Album2", "Track.als");
+    ws_a.revise(&als_a, 140);
+
+    let (out, result) = run(|o, e| {
+        cmd_snapshot(&als_a, &Some("album two v1".to_string()), false, &ws_a.root, o, e)
+    });
+    assert!(result.is_ok(), "snapshot: {}", out.all());
+    let (out, result) = run(|o, e| cmd_push(&addr, &als_a, &ws_a.root, o, e));
+    assert!(result.is_ok(), "push: {}", out.all());
+
+    // ── Machine B: the same file, in a folder of its own ──
+    let ws_b = Workspace::new();
+    let als_b = ws_b.als_in("MyMusic", "Track.als");
+    ws_b.revise(&als_b, 140);
+
+    let (out, result) = run(|o, e| cmd_pull(&addr, &als_b, &ws_b.root, o, e));
+    assert!(result.is_ok(), "pull: {}", out.all());
+    assert!(
+        out.all().contains("album two v1"),
+        "the collaborator must find the project: {}",
+        out.all()
+    );
+
+    // And the bytes must come too, so the snapshot can be restored.
+    let (out, result) = run(|o, e| cmd_restore(&als_b, "HEAD", &ws_b.root, o, e));
+    assert!(result.is_ok(), "restore: {}", out.all());
+    let restored = fs::read(&als_b).expect("the restored file");
+    let original = fs::read(&als_a).expect("the original file");
+    assert_eq!(
+        restored, original,
+        "the restored project must be the collaborator's file"
+    );
+}
+
+// ─── The same bytes in two folders are still two projects ────────────────
+//
+// Two folders can hold the very same file. The relay must not treat
+// them as one project, or one of them would get the other's history.
+
+#[test]
+fn the_same_bytes_in_two_folders_are_two_projects() {
+    let (addr, _dir, relay) = start_relay();
+
+    // ── Machine A: two folders with the same file in them ──
+    let ws_a = Workspace::new();
+    let one = ws_a.als_in("Album1", "Track.als");
+    let two = ws_a.als_in("Album2", "Track.als");
+
+    let (out, result) = run(|o, e| {
+        cmd_snapshot(&one, &Some("first copy".to_string()), false, &ws_a.root, o, e)
+    });
+    assert!(result.is_ok(), "snapshot: {}", out.all());
+    let (out, result) = run(|o, e| {
+        cmd_snapshot(&two, &Some("second copy".to_string()), false, &ws_a.root, o, e)
+    });
+    assert!(result.is_ok(), "snapshot: {}", out.all());
+
+    let (out, result) = run(|o, e| cmd_push(&addr, &one, &ws_a.root, o, e));
+    assert!(result.is_ok(), "push one: {}", out.all());
+    let (out, result) = run(|o, e| cmd_push(&addr, &two, &ws_a.root, o, e));
+    assert!(result.is_ok(), "push two: {}", out.all());
+
+    // ── Machine B: the same two folders ──
+    let ws_b = Workspace::new();
+    let b_one = ws_b.als_in("Album1", "Track.als");
+    let b_two = ws_b.als_in("Album2", "Track.als");
+
+    let (out, result) = run(|o, e| cmd_pull(&addr, &b_two, &ws_b.root, o, e));
+    assert!(result.is_ok(), "pull: {}", out.all());
+    let (out, result) = run(|o, e| cmd_log(&b_two, &ws_b.root, o, e));
+    assert!(result.is_ok(), "log: {}", out.all());
+    assert!(
+        !out.all().contains("first copy"),
+        "the other folder's snapshot must not turn up here: {}",
+        out.all()
+    );
+    assert!(
+        out.all().contains("second copy"),
+        "this folder's snapshot must be here: {}",
+        out.all()
+    );
 
     drop(relay);
 }
