@@ -167,15 +167,119 @@ pub fn replace_entry(
         .map_err(|e| ClavusError::ParseError(format!("zip finish: {}", e)))?;
 
     // Atomic write: temp file → rename
-    let tmp_path = project_path.with_extension("bwproject.tmp");
+    //
+    // A project that is a symlink is written *through* the link: the
+    // rename would otherwise replace the link with a regular file.
+    let target = crate::sample::link_target_of(project_path);
+    let tmp_path = target.with_extension("bwproject.tmp");
     fs::write(&tmp_path, cursor.into_inner())
         .map_err(|e| ClavusError::ParseError(format!("write temp {}: {}", tmp_path.display(), e)))?;
-    fs::rename(&tmp_path, project_path).map_err(|e| {
+    fs::rename(&tmp_path, &target).map_err(|e| {
         let _ = fs::remove_file(&tmp_path);
-        ClavusError::ParseError(format!("rename {}: {}", project_path.display(), e))
+        ClavusError::ParseError(format!("rename {}: {}", target.display(), e))
     })?;
 
     Ok(())
+}
+
+/// Add a file to the archive, keeping every other entry.
+///
+/// An entry that is already there is replaced, so a sample is never
+/// stored twice. The archive is written to a temporary file and renamed
+/// over the original, so a failure cannot leave a half-written project
+/// behind.
+pub fn add_entry(
+    project_path: &Path,
+    name: &str,
+    contents: &[u8],
+) -> Result<(), ClavusError> {
+    let file = fs::File::open(project_path)
+        .map_err(|e| ClavusError::ParseError(format!("open {}: {}", project_path.display(), e)))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| ClavusError::ParseError(format!("zip open: {}", e)))?;
+
+    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| ClavusError::ParseError(format!("zip entry: {}", e)))?;
+        let entry_name = entry.name().to_string();
+        let is_dir = entry.is_dir();
+
+        let options = entry
+            .last_modified()
+            .and_then(|t| {
+                zip::DateTime::from_date_and_time(
+                    t.year().max(1980),
+                    t.month().max(1),
+                    t.day().max(1),
+                    t.hour(),
+                    t.minute(),
+                    t.second(),
+                )
+                .ok()
+            })
+            .map(|dt| zip::write::SimpleFileOptions::default().last_modified_time(dt))
+            .unwrap_or_default();
+
+        if entry_name == name {
+            out.start_file(&entry_name, options)
+                .map_err(|e| ClavusError::ParseError(format!("zip write: {}", e)))?;
+            out.write_all(contents)
+                .map_err(|e| ClavusError::ParseError(format!("zip write: {}", e)))?;
+        } else if is_dir {
+            out.add_directory(&entry_name, options)
+                .map_err(|e| ClavusError::ParseError(format!("zip write: {}", e)))?;
+        } else {
+            let mut buf = Vec::new();
+            entry
+                .read_to_end(&mut buf)
+                .map_err(|e| ClavusError::ParseError(format!("read {}: {}", entry_name, e)))?;
+            out.start_file(&entry_name, options)
+                .map_err(|e| ClavusError::ParseError(format!("zip write: {}", e)))?;
+            out.write_all(&buf)
+                .map_err(|e| ClavusError::ParseError(format!("zip write: {}", e)))?;
+        }
+    }
+
+    // The entry is new: it is written after everything that was there.
+    if !archive_names(&mut archive).iter().any(|n| n == name) {
+        out.start_file(name, zip::write::SimpleFileOptions::default())
+            .map_err(|e| ClavusError::ParseError(format!("zip write: {}", e)))?;
+        out.write_all(contents)
+            .map_err(|e| ClavusError::ParseError(format!("zip write: {}", e)))?;
+    }
+
+    let cursor = out
+        .finish()
+        .map_err(|e| ClavusError::ParseError(format!("zip finish: {}", e)))?;
+
+    // Atomic write: temp file → rename
+    //
+    // A project that is a symlink is written *through* the link: the
+    // rename would otherwise replace the link with a regular file.
+    let target = crate::sample::link_target_of(project_path);
+    let tmp_path = target.with_extension("bwproject.tmp");
+    fs::write(&tmp_path, cursor.into_inner())
+        .map_err(|e| ClavusError::ParseError(format!("write temp {}: {}", tmp_path.display(), e)))?;
+    fs::rename(&tmp_path, &target).map_err(|e| {
+        let _ = fs::remove_file(&tmp_path);
+        ClavusError::ParseError(format!("rename {}: {}", target.display(), e))
+    })?;
+
+    Ok(())
+}
+
+/// The names of the entries in an open archive.
+fn archive_names<R: std::io::Read + std::io::Seek>(archive: &mut zip::ZipArchive<R>) -> Vec<String> {
+    let mut names = Vec::new();
+    for i in 0..archive.len() {
+        if let Ok(entry) = archive.by_index(i) {
+            names.push(entry.name().to_string());
+        }
+    }
+    names
 }
 
 /// Rewrite a sample path inside the archive's project description.

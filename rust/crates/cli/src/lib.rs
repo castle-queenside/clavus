@@ -583,16 +583,28 @@ pub fn cmd_collect(project: &Path, _clavus_root: &Path,
     let collect = sample::collect_samples(project, &report)?;
 
     if !collect.copied.is_empty() {
-        outln!(out, "\n✓ Collected {} into project/Samples/",
-            plural(collect.copied.len(), "sample", "samples"));
         let is_bitwig = project
             .extension()
             .and_then(|s| s.to_str())
             .map(|e| e.eq_ignore_ascii_case("bwproject"))
             .unwrap_or(false);
         if is_bitwig {
-            outln!(out, "  Paths in the project archive rewritten — reopen the project in Bitwig");
+            // The bundle is the project: the samples went into it, or
+            // they were in it already. Saying that a folder next to the
+            // bundle was filled would be a lie — there is no such
+            // folder.
+            if collect.added_to_bundle > 0 {
+                outln!(out, "\n✓ Collected {} into the project bundle",
+                    plural(collect.added_to_bundle, "sample", "samples"));
+                outln!(out, "  Paths in the project archive rewritten — reopen the project in Bitwig");
+            } else {
+                outln!(out, "\n✓ {} already inside the project bundle",
+                    plural(collect.already_inside, "sample", "samples"));
+                outln!(out, "  Paths in the project archive already point at the copies inside it");
+            }
         } else {
+            outln!(out, "\n✓ Collected {} into project/Samples/",
+                plural(collect.copied.len(), "sample", "samples"));
             outln!(out, "  Paths in .als rewritten — restart Ableton to reload");
         }
     }

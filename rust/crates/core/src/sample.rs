@@ -612,6 +612,18 @@ fn unique_destination(
     filename: &str,
     source: &Path,
 ) -> String {
+    unique_destination_in(claimed, samples_dir, filename, source, &[])
+}
+
+/// The same, but for a bundle: the entries the archive already carries
+/// are names that are taken.
+fn unique_destination_in(
+    claimed: &mut HashMap<String, PathBuf>,
+    samples_dir: &Path,
+    filename: &str,
+    source: &Path,
+    archive_entries: &[String],
+) -> String {
     // The same source claimed twice keeps the same name.
     if let Some(existing) = claimed.get(filename) {
         if existing == source {
@@ -620,7 +632,10 @@ fn unique_destination(
     }
 
     let mut candidate = filename.to_string();
-    if !claimed.contains_key(&candidate) && is_free(&candidate, samples_dir, source) {
+    if !claimed.contains_key(&candidate)
+        && is_free(&candidate, samples_dir, source)
+        && !archive_takes(archive_entries, &candidate)
+    {
         claimed.insert(candidate.clone(), source.to_path_buf());
         return candidate;
     }
@@ -642,7 +657,10 @@ fn unique_destination(
 
     if !parent.is_empty() {
         candidate = format!("{}_{}{}", parent, stem, ext);
-        if !claimed.contains_key(&candidate) && is_free(&candidate, samples_dir, source) {
+        if !claimed.contains_key(&candidate)
+            && is_free(&candidate, samples_dir, source)
+            && !archive_takes(archive_entries, &candidate)
+        {
             claimed.insert(candidate.clone(), source.to_path_buf());
             return candidate;
         }
@@ -653,6 +671,13 @@ fn unique_destination(
     candidate = format!("{}_{}{}", stem, &digest[..8], ext);
     claimed.insert(candidate.clone(), source.to_path_buf());
     candidate
+}
+
+/// Does the bundle already carry a file with this name?
+fn archive_takes(archive_entries: &[String], filename: &str) -> bool {
+    archive_entries
+        .iter()
+        .any(|entry| entry.rsplit('/').next() == Some(filename))
 }
 
 /// Collect missing/outside-project samples into the project folder.
@@ -675,6 +700,10 @@ pub fn collect_samples(
 
     let mut copied = Vec::new();
     let mut failed = Vec::new();
+    // The samples that were already inside the project bundle, and the
+    // ones that were added to it.
+    let mut already_inside = 0usize;
+    let mut added_to_bundle = 0usize;
     // Map: original path as stored in XML → new relative path (Unix-slash)
     let mut path_replacements: HashMap<String, String> = HashMap::new();
 
@@ -706,6 +735,66 @@ pub fn collect_samples(
 
     for ref_ in candidates {
         if let Some(ref resolved) = ref_.resolved_path {
+            let orig = ref_.path.to_string_lossy().replace('\\', "/");
+            if is_bitwig {
+                // A bundle is a self-contained project: the sample's
+                // bytes go *into* the archive and the reference points
+                // at the copy inside it. A copy written next to the
+                // bundle would leave the bundle pointing at something
+                // it does not carry, and the project would open
+                // without its audio.
+                let filename = unique_destination_in(
+                    &mut claimed,
+                    &samples_dir,
+                    &ref_.filename,
+                    resolved,
+                    &archive_entries,
+                );
+                let internal = format!("samples/{}", filename);
+                let bytes = match fs::read(resolved) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        error!("Failed to read {}: {}", resolved.display(), e);
+                        failed.push((ref_.path.clone(), e.to_string()));
+                        continue;
+                    }
+                };
+                match crate::bitwig_archive::add_entry(project_path, &internal, &bytes) {
+                    Ok(()) => {
+                        match crate::bitwig_archive::rewrite_sample_path(
+                            project_path,
+                            &orig,
+                            &internal,
+                        ) {
+                            Ok(true) => {
+                                info!("Collected {} into the project bundle", filename);
+                                copied.push(project_path.to_path_buf());
+                                added_to_bundle += 1;
+                            }
+                            Ok(false) => {
+                                error!(
+                                    "The reference to {} was not found in the project description",
+                                    ref_.filename
+                                );
+                                failed.push((
+                                    ref_.path.clone(),
+                                    "the reference was not found in the project description"
+                                        .to_string(),
+                                ));
+                            }
+                            Err(e) => {
+                                error!("Failed to repair the reference to {}: {}", ref_.filename, e);
+                                failed.push((ref_.path.clone(), e.to_string()));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to collect {} into the bundle: {}", ref_.filename, e);
+                        failed.push((ref_.path.clone(), e.to_string()));
+                    }
+                }
+                continue;
+            }
             let filename =
                 unique_destination(&mut claimed, &samples_dir, &ref_.filename, resolved);
             let dest = samples_dir.join(&filename);
@@ -734,7 +823,6 @@ pub fn collect_samples(
                     copied.push(dest.clone());
                     // Build replacement: original path in XML → new relative path
                     let new_rel = format!("Samples/{}", filename);
-                    let orig = ref_.path.to_string_lossy().replace('\\', "/");
                     path_replacements.insert(orig, new_rel);
                 }
                 Err(e) => {
@@ -759,6 +847,7 @@ pub fn collect_samples(
                 // The bundle already points at its own copy.
                 info!("{} is already inside the project bundle", ref_.filename);
                 copied.push(project_path.to_path_buf());
+                already_inside += 1;
             } else {
                 match crate::bitwig_archive::rewrite_sample_path(project_path, &orig, &internal) {
                     Ok(true) => {
@@ -767,6 +856,7 @@ pub fn collect_samples(
                             ref_.filename, internal
                         );
                         copied.push(project_path.to_path_buf());
+                        already_inside += 1;
                     }
                     Ok(false) => {
                         // The reference was not found in the project
@@ -805,7 +895,12 @@ pub fn collect_samples(
         }
     }
 
-    Ok(CollectReport { copied, failed })
+    Ok(CollectReport {
+        copied,
+        failed,
+        already_inside,
+        added_to_bundle,
+    })
 }
 
 /// Report of a collect operation.
@@ -815,6 +910,12 @@ pub struct CollectReport {
     pub copied: Vec<PathBuf>,
     /// (path, error) pairs for samples that could not be copied.
     pub failed: Vec<(PathBuf, String)>,
+    /// The samples that were already inside the project bundle.
+    ///
+    /// Nothing was copied for them: the bundle already carried them.
+    pub already_inside: usize,
+    /// The samples that were added to the project bundle.
+    pub added_to_bundle: usize,
 }
 
 /// Rewrite sample paths in an `.als` project file.
@@ -891,13 +992,38 @@ fn rewrite_project_sample_paths(
     };
 
     // Atomic write: temp file → rename
-    let tmp_path = project_path.with_extension("als.tmp");
+    //
+    // A project that is a symlink is written *through* the link. The
+    // rename would otherwise replace the link with a regular file, and
+    // the user's project would quietly become a copy: the target would
+    // still hold the old sample paths while the new file held the new
+    // ones.
+    let target = link_target_of(project_path);
+    let tmp_path = target.with_extension("als.tmp");
     fs::write(&tmp_path, &payload)
         .map_err(|e| ClavusError::ParseError(format!("write temp {}: {}", tmp_path.display(), e)))?;
-    std::fs::rename(&tmp_path, project_path)
-        .map_err(|e| ClavusError::ParseError(format!("rename {} → {}: {}", tmp_path.display(), project_path.display(), e)))?;
+    std::fs::rename(&tmp_path, &target)
+        .map_err(|e| ClavusError::ParseError(format!("rename {} → {}: {}", tmp_path.display(), target.display(), e)))?;
 
     Ok(())
+}
+
+/// The file a path really points at.
+///
+/// A symlink is followed to its target, so a rewrite lands in the file
+/// the user actually keeps. A path that is not a symlink is returned
+/// unchanged.
+pub fn link_target_of(path: &Path) -> PathBuf {
+    let Ok(meta) = fs::symlink_metadata(path) else {
+        return path.to_path_buf();
+    };
+    if !meta.file_type().is_symlink() {
+        return path.to_path_buf();
+    }
+    match fs::canonicalize(path) {
+        Ok(target) => target,
+        Err(_) => path.to_path_buf(),
+    }
 }
 
 // ─── Case-insensitive path resolution ───────────────────────────────────────
