@@ -54,7 +54,7 @@ struct Machine {
 impl Machine {
     fn new() -> Self {
         let tmp = TempDir::new().expect("temp dir");
-        let projects = tmp.path().join("projects");
+        let projects = tmp.path().join("clavus").join("projects");
         fs::create_dir_all(&projects).expect("projects dir");
         let root = tmp.path().join(".clavus");
         Machine {

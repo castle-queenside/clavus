@@ -38,7 +38,7 @@ impl Harness {
     /// Build an app rooted in a temp directory with one project.
     fn with_project() -> Self {
         let tmp = tempfile::tempdir().unwrap();
-        let projects = tmp.path().join("projects");
+        let projects = tmp.path().join("clavus").join("projects");
         let data = tmp.path().join("data");
         std::fs::create_dir_all(&projects).unwrap();
         std::fs::create_dir_all(&data).unwrap();
@@ -52,7 +52,7 @@ impl Harness {
 
     fn empty() -> Self {
         let tmp = tempfile::tempdir().unwrap();
-        let projects = tmp.path().join("projects");
+        let projects = tmp.path().join("clavus").join("projects");
         let data = tmp.path().join("data");
         std::fs::create_dir_all(&projects).unwrap();
         std::fs::create_dir_all(&data).unwrap();
@@ -515,7 +515,7 @@ fn ctrl_c_quits_without_creating_a_snapshot() {
 #[test]
 fn refresh_projects_finds_both_project_types() {
     let tmp = tempfile::tempdir().unwrap();
-    let projects = tmp.path().join("projects");
+    let projects = tmp.path().join("clavus").join("projects");
     std::fs::create_dir_all(&projects).unwrap();
     std::fs::write(projects.join("a.als"), MINIMAL_ALS).unwrap();
     std::fs::write(projects.join("b.bwproject"), b"not a real archive").unwrap();
@@ -549,7 +549,7 @@ fn load_project_with_bad_index_returns_error() {
 #[test]
 fn load_project_with_broken_file_returns_error() {
     let tmp = tempfile::tempdir().unwrap();
-    let projects = tmp.path().join("projects");
+    let projects = tmp.path().join("clavus").join("projects");
     std::fs::create_dir_all(&projects).unwrap();
     std::fs::write(projects.join("broken.als"), b"<not valid xml").unwrap();
     let mut app = App::new(projects);
@@ -773,7 +773,7 @@ fn the_tui_introduces_itself_with_the_selected_project() {
     let (addr, rx) = recording_relay();
 
     let tmp = tempfile::tempdir().unwrap();
-    let projects = tmp.path().join("projects");
+    let projects = tmp.path().join("clavus").join("projects");
     let data = tmp.path().join("data");
     std::fs::create_dir_all(&projects).unwrap();
     std::fs::create_dir_all(&data).unwrap();
@@ -808,7 +808,7 @@ fn the_tui_tells_the_relay_when_the_selection_changes() {
     let (addr, rx) = recording_relay();
 
     let tmp = tempfile::tempdir().unwrap();
-    let projects = tmp.path().join("projects");
+    let projects = tmp.path().join("clavus").join("projects");
     let data = tmp.path().join("data");
     std::fs::create_dir_all(&projects).unwrap();
     std::fs::create_dir_all(&data).unwrap();

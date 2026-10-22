@@ -179,25 +179,40 @@ pub fn unescape_key_part(part: &str) -> String {
 
 /// Whether two folder paths name two places in the same tree.
 ///
-/// `notes/sep/p1/studio` and `notes/sep/p2/studio` are two folders in
-/// one tree: two projects a user keeps side by side. `Music/Album` and
-/// `Work/Album` are two trees on two machines: the same project, seen
-/// from two sides.
+/// `notes/sep/p1/studio` and `notes/sep/p2/studio` are two folders with
+/// the same name in different places: two projects a user keeps side by
+/// side. `Music/Album` and `Work/Album` are two differently named
+/// folders, which is what a collaborator's copy usually looks like.
 ///
 /// The relay uses this to tell a collaborator on another machine from
 /// the other project next door. Two projects that sit in the same tree
 /// are not the same project, however identical their bytes are, and
 /// serving one the other's history is a leak.
+///
+/// The two folders must also be at the same depth. A folder of the
+/// same name at a different depth is not "the project next door" — it
+/// is a copy in a different place, which is what a collaborator has.
+/// `Studio` under the home directory and `Volumes/Studio` on an
+/// external disk are one project seen from two machines, and the
+/// bytes of the file are what prove it.
 pub fn folders_are_siblings(a: &str, b: &str) -> bool {
     if a.is_empty() || b.is_empty() || a == b {
         return false;
     }
-    let shared = a
-        .split('/')
-        .zip(b.split('/'))
-        .take_while(|(x, y)| x == y)
-        .count();
-    shared > 0
+    fn leaf(p: &str) -> &str {
+        p.rsplit('/').next().unwrap_or(p)
+    }
+    fn parent(p: &str) -> String {
+        let mut parts: Vec<&str> = p.split('/').collect();
+        parts.pop();
+        parts.join("/")
+    }
+    fn depth(p: &str) -> usize {
+        p.split('/').count()
+    }
+    // The same folder name in a different place. Two projects of the
+    // same name, kept side by side.
+    leaf(a) == leaf(b) && parent(a) != parent(b) && depth(a) == depth(b)
 }
 
 /// The path made absolute, with `.` and `..` resolved.
@@ -262,12 +277,31 @@ pub fn folder_path_of(path: &Path, home: Option<&Path>) -> String {
         });
     let mut parts: Vec<String> = match relative {
         Some(parts) => parts,
-        None => parent
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .filter(|s| !s.is_empty() && s != "." && s != "..")
-            .into_iter()
-            .collect(),
+        None => {
+            // A project outside the home directory keeps the last two
+            // folders of the folder it lives in.
+            //
+            // The name of the folder on its own was not enough: two
+            // projects that live in `p1/studio` and `p2/studio` on a
+            // disk outside the home both kept the name "studio", so
+            // they had one identity between them, and the relay served
+            // one the other's history and notes.
+            //
+            // Two folders are still a path two machines can be expected
+            // to agree on: it does not name the machine, and it does
+            // not change because a disk is mounted somewhere else.
+            let all = path_parts(parent);
+            let mut tail: Vec<String> = all.iter().rev().take(2).rev().cloned().collect();
+            if tail.is_empty() {
+                if let Some(name) = parent.file_name() {
+                    let name = name.to_string_lossy().to_string();
+                    if !name.is_empty() && name != "." && name != ".." {
+                        tail.push(name);
+                    }
+                }
+            }
+            tail
+        }
     };
     if parts.is_empty() {
         // The project sits at the top of a directory.
@@ -409,7 +443,44 @@ mod tests {
         // share, so the path of the machine is not part of it.
         let home = Path::new("/home/chris");
         let a = ProjectId::new_in(Path::new("/media/studio/Song.als"), Some(home));
-        assert_eq!(a.folder_path(), "studio");
-        assert_eq!(a.relay_key(), "Song.als::studio");
+        assert_eq!(a.folder_path(), "media/studio");
+        assert_eq!(a.relay_key(), "Song.als::media/studio");
+    }
+
+    #[test]
+    fn two_projects_in_folders_of_the_same_name_outside_the_home_stay_apart() {
+        // Two copies of a set on an external disk, kept side by side.
+        // They shared one identity when the folder path was only the
+        // name of the folder, and the relay served one the other's
+        // history and notes.
+        let home = Path::new("/home/chris");
+        let a = ProjectId::new_in(Path::new("/media/p1/studio/Song.als"), Some(home));
+        let b = ProjectId::new_in(Path::new("/media/p2/studio/Song.als"), Some(home));
+        assert_ne!(a.folder_path(), b.folder_path());
+        assert_ne!(a.relay_key(), b.relay_key());
+    }
+
+    #[test]
+    fn a_copy_on_another_disk_still_agrees_with_a_copy_in_the_home() {
+        // A collaborator's copy of a set. The two machines keep it in
+        // different places — one under the home directory, one on an
+        // external disk — and the bytes of the file are what prove
+        // they are the same project.
+        let home = Path::new("/home/chris");
+        let a = ProjectId::new_in(Path::new("/home/chris/Studio/Song.als"), Some(home));
+        let b = ProjectId::new_in(Path::new("/Volumes/Studio/Song.als"), Some(home));
+        assert!(
+            !folders_are_siblings(a.folder_path(), b.folder_path()),
+            "a copy at a different depth is not the project next door"
+        );
+    }
+
+    #[test]
+    fn the_project_next_door_is_a_sibling() {
+        assert!(folders_are_siblings("p1/studio", "p2/studio"));
+        assert!(folders_are_siblings("media/p1/studio", "media/p2/studio"));
+        assert!(!folders_are_siblings("p1/studio", "p1/studio"));
+        assert!(!folders_are_siblings("p1/studio", "music/album"));
+        assert!(!folders_are_siblings("", "p1/studio"));
     }
 }

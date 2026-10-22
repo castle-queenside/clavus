@@ -27,7 +27,7 @@ impl Workspace {
     fn new() -> Self {
         let tmp = TempDir::new().expect("temp dir");
         let root = tmp.path().join(".clavus");
-        let dir = tmp.path().join("projects");
+        let dir = tmp.path().join("clavus").join("projects");
         fs::create_dir_all(&dir).expect("projects dir");
         Workspace {
             _tmp: tmp,
@@ -62,14 +62,21 @@ struct HomeWorkspace {
 
 impl HomeWorkspace {
     fn new() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
         let home = PathBuf::from(std::env::var_os("HOME").expect("HOME"));
+        // The name must be unique: two tests that shared a folder
+        // would delete each other's files, and one test's failures
+        // would depend on the other's timing. The clock alone is not
+        // enough — its resolution is not guaranteed.
         let unique = format!(
-            ".clavus-test-{}-{}",
+            ".clavus-test-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("clock")
-                .as_nanos()
+                .as_nanos(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
         );
         let base = home.join(unique);
         let dir = base.join("notes");

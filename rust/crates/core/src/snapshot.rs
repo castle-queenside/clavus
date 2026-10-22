@@ -715,3 +715,53 @@ pub fn newest_in(snapshots: &[Snapshot]) -> Option<String> {
     // happen, but the list still has to yield something.
     snapshots.last().map(|s| s.hash.clone())
 }
+
+/// Whether a candidate snapshot extends the chain that ends at `head`.
+///
+/// A pull that brings a branch that does not descend from the local
+/// HEAD must not move the HEAD: the user's own snapshot would drop
+/// out of the history.
+pub fn extends_chain(store: &SnapshotStore, head: Option<&str>, candidate: &str) -> bool {
+    let Some(head) = head else {
+        // No local history yet — anything is an extension.
+        return true;
+    };
+    if head == candidate {
+        return false;
+    }
+    let mut current = Some(candidate.to_string());
+    let mut seen = std::collections::HashSet::new();
+    while let Some(hash) = current {
+        if !seen.insert(hash.clone()) {
+            return false;
+        }
+        if hash == head {
+            return true;
+        }
+        current = store.load(&hash).and_then(|s| s.parent);
+    }
+    false
+}
+
+/// The HEAD a pull should move to, if any.
+///
+/// Only a snapshot that *extends* the current chain may become the
+/// HEAD. A relay that offers a different branch must not replace the
+/// user's own history with it — the CLI and the TUI have to agree on
+/// this, or the same pull gives two different results.
+pub fn head_after_pull(
+    store: &SnapshotStore,
+    local_head: Option<&str>,
+    candidates: &[String],
+) -> Option<String> {
+    let extending: Vec<String> = candidates
+        .iter()
+        .filter(|h| extends_chain(store, local_head, h))
+        .cloned()
+        .collect();
+    if extending.is_empty() {
+        return None;
+    }
+    let snaps: Vec<Snapshot> = extending.iter().filter_map(|h| store.load(h)).collect();
+    newest_in(&snaps)
+}

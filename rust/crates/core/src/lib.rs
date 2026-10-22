@@ -29,6 +29,34 @@ pub use sample::{audit_project, collect_samples, CollectReport};
 pub mod error;
 pub use error::ClavusResult;
 
+/// The name a note is signed with when the user does not give one.
+///
+/// The CLI and the TUI must sign a note the same way, or a
+/// collaborator sees the same person as two different authors. The
+/// environment is asked first, then the host name, and only then a
+/// word that says nothing about who wrote it.
+pub fn default_author() -> String {
+    for key in ["CLAVUS_AUTHOR", "USER", "LOGNAME"] {
+        if let Ok(name) = std::env::var(key) {
+            let name = name.trim().to_string();
+            if !name.is_empty() {
+                return name;
+            }
+        }
+    }
+    // A machine with no user name — a container, a cron job, CI — still
+    // needs a name to sign a note with. The host name says who is
+    // speaking; the word "cli" said nothing at all and looked like a
+    // person's name in a list of people.
+    if let Ok(host) = std::env::var("HOSTNAME") {
+        let host = host.trim().to_string();
+        if !host.is_empty() {
+            return host;
+        }
+    }
+    "unknown".to_string()
+}
+
 /// Truncate `text` to at most `len` characters, for display.
 ///
 /// Slicing a string with `[..8]` panics when the string is shorter, and

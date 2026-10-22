@@ -83,7 +83,12 @@ impl Workspace {
     fn new() -> Self {
         let tmp = TempDir::new().expect("temp dir");
         let root = tmp.path().join(".clavus");
-        let dir = tmp.path().join("projects");
+        // The projects live one folder below a named root, so the
+        // project's identity — the path of its folder — is the same on
+        // every machine. A project outside the home keeps the last two
+        // folders of its path, and the temporary directory's own name
+        // would otherwise become part of it.
+        let dir = tmp.path().join("clavus").join("projects");
         fs::create_dir_all(&dir).expect("projects dir");
         Workspace {
             _tmp: tmp,

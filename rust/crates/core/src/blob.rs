@@ -99,6 +99,34 @@ impl BlobStore {
         }
     }
 
+    /// Whether the store's directories can be read.
+    ///
+    /// A store that cannot be read is not an empty store. The history
+    /// of a project is in there, and a caller that says "no snapshots"
+    /// when the directory is unreadable tells the user a lie.
+    pub fn check_readable(&self) -> io::Result<()> {
+        match fs::read_dir(&self.root) {
+            Ok(_) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                // The store was never written to. That is empty, not
+                // broken — but the *parent* has to be readable, or the
+                // store would look empty when it is merely hidden.
+                if let Some(parent) = self.root.parent() {
+                    if let Err(e) = fs::read_dir(parent) {
+                        if e.kind() != io::ErrorKind::NotFound {
+                            return Err(e);
+                        }
+                    }
+                }
+            }
+            Err(e) => return Err(e),
+        }
+        if self.refs_dir.exists() {
+            fs::read_dir(&self.refs_dir)?;
+        }
+        Ok(())
+    }
+
     /// Initialize the store directories. Safe to call repeatedly.
     pub fn init(&self) -> io::Result<()> {
         fs::create_dir_all(&self.root)?;

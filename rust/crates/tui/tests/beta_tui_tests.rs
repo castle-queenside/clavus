@@ -48,7 +48,7 @@ struct Harness {
 impl Harness {
     fn with_project() -> Self {
         let tmp = TempDir::new().unwrap();
-        let projects = tmp.path().join("projects");
+        let projects = tmp.path().join("clavus").join("projects");
         let data = tmp.path().join("data");
         std::fs::create_dir_all(&projects).unwrap();
         std::fs::create_dir_all(&data).unwrap();
@@ -120,7 +120,7 @@ fn a_q_can_be_typed_in_the_cue_form() {
 #[test]
 fn a_project_that_cannot_be_parsed_reports_an_error() {
     let tmp = TempDir::new().unwrap();
-    let projects = tmp.path().join("projects");
+    let projects = tmp.path().join("clavus").join("projects");
     let data = tmp.path().join("data");
     std::fs::create_dir_all(&projects).unwrap();
     std::fs::create_dir_all(&data).unwrap();
@@ -167,7 +167,7 @@ fn the_project_list_shows_the_real_tempo_and_track_count() {
 #[test]
 fn the_tui_finds_projects_in_sub_folders() {
     let tmp = TempDir::new().unwrap();
-    let projects = tmp.path().join("projects");
+    let projects = tmp.path().join("clavus").join("projects");
     let data = tmp.path().join("data");
     std::fs::create_dir_all(projects.join("nested")).unwrap();
     std::fs::create_dir_all(&data).unwrap();

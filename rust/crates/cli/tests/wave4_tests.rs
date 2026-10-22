@@ -30,14 +30,21 @@ struct HomeWorkspace {
 
 impl HomeWorkspace {
     fn new() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
         let home = PathBuf::from(std::env::var_os("HOME").expect("HOME"));
+        // The name must be unique: two tests that shared a folder
+        // would delete each other's files, and one test's failures
+        // would depend on the other's timing. The clock alone is not
+        // enough — its resolution is not guaranteed.
         let unique = format!(
-            ".clavus-wave4-{}-{}",
+            ".clavus-wave4-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("clock")
-                .as_nanos()
+                .as_nanos(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
         );
         let base = home.join(unique);
         let dir = base.join("notes");
@@ -75,7 +82,7 @@ impl Workspace {
     fn new() -> Self {
         let tmp = TempDir::new().expect("temp dir");
         let root = tmp.path().join(".clavus");
-        let dir = tmp.path().join("projects");
+        let dir = tmp.path().join("clavus").join("projects");
         fs::create_dir_all(&dir).expect("projects dir");
         Workspace {
             _tmp: tmp,
@@ -612,8 +619,45 @@ fn a_project_outside_the_home_keeps_the_folder_it_lives_in() {
     let home = Path::new("/Users/someone");
     let folder = clavus_core::project::folder_path_of(path, Some(home));
     assert_eq!(
-        folder, "Album1",
-        "a project outside the home keeps the name of its folder"
+        folder, "Studio/Album1",
+        "a project outside the home keeps the folders it lives in"
+    );
+}
+
+/// Two projects outside the home that share a folder name are two
+/// projects.
+///
+/// The wave-four TUI navigator found this: two copies of a set in
+/// `external/p1/studio` and `external/p2/studio` had one identity, so
+/// the relay served one the other's history and notes.
+#[test]
+fn two_projects_outside_the_home_with_the_same_name_are_two_projects() {
+    let home = Path::new("/Users/someone");
+    let one = clavus_core::project::folder_path_of(
+        Path::new("/Volumes/Studio/external/p1/studio/Song.als"),
+        Some(home),
+    );
+    let two = clavus_core::project::folder_path_of(
+        Path::new("/Volumes/Studio/external/p2/studio/Song.als"),
+        Some(home),
+    );
+    assert_ne!(
+        one, two,
+        "two projects in different places must have two identities"
+    );
+
+    // The same project, seen from two machines, keeps one identity.
+    let here = clavus_core::project::folder_path_of(
+        Path::new("/Volumes/Studio/Album1/Song.als"),
+        Some(home),
+    );
+    let there = clavus_core::project::folder_path_of(
+        Path::new("/mnt/studio/Studio/Album1/Song.als"),
+        Some(home),
+    );
+    assert_eq!(
+        here, there,
+        "the same project on two machines keeps one identity"
     );
 }
 

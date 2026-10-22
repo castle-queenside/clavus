@@ -102,7 +102,7 @@ impl Workspace {
     fn new() -> Self {
         let tmp = TempDir::new().expect("temp dir");
         let root = tmp.path().join(".clavus");
-        let dir = tmp.path().join("projects");
+        let dir = tmp.path().join("clavus").join("projects");
         fs::create_dir_all(&dir).expect("projects dir");
         let library = tmp.path().join("library");
         fs::create_dir_all(&library).expect("library dir");

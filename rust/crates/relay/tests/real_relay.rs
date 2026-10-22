@@ -1097,3 +1097,90 @@ fn the_relay_does_not_serve_a_sibling_folder_the_same_bytes() {
     one.close();
     two.close();
 }
+
+// ─── A collaborator's copy in another place is the same project ──────────
+
+#[test]
+fn the_relay_serves_a_collaborator_whose_copy_lives_elsewhere() {
+    // Regression: the folder path is the second half of a project's
+    // identity, and it keeps a user's two same-named projects apart.
+    // But a collaborator keeps the same set in a different place — in
+    // the home directory on one machine, on an external disk on the
+    // other — and the bytes of the file are what prove they are the
+    // same project.
+    //
+    // The folders here have the same last name but sit at different
+    // depths ("Studio" and "Volumes/Studio"), so they are not the
+    // project next door, and the hash settles it.
+    let tmp = TempDir::new().unwrap();
+    let addr = start_real_relay(&tmp);
+    let hash = "b".repeat(64);
+
+    // The first machine: the set lives under the home directory.
+    let one = SyncClient::connect(&addr).expect("connect");
+    one.hello_in("Song.als", vec![], "Studio", None)
+        .expect("hello");
+    let _ = one.recv_timeout(Duration::from_secs(2));
+    let mut snap = make_snap_for(&hash, None, "Song.als");
+    snap.project_folder = "Studio".to_string();
+    one.push(vec![snap], vec![]).expect("push");
+    let _ = one.recv_timeout(Duration::from_secs(2));
+
+    // The second machine: the same set, on an external disk.
+    let two = SyncClient::connect(&addr).expect("connect");
+    two.hello_in("Song.als", vec![], "Volumes/Studio", Some(hash.clone()))
+        .expect("hello");
+    let msg = two.recv_timeout(Duration::from_secs(3));
+    match msg {
+        Some(SyncMsg::Push { snapshots, .. }) => {
+            assert_eq!(
+                snapshots.len(),
+                1,
+                "a collaborator's copy must be served the project's history: {:?}",
+                snapshots
+            );
+        }
+        other => panic!("unexpected reply: {:?}", other),
+    }
+
+    one.close();
+    two.close();
+}
+
+#[test]
+fn the_relay_does_not_serve_a_same_depth_copy_next_door() {
+    // The other side of the same coin: two folders with the same name
+    // at the same depth are two projects a user keeps side by side,
+    // and one must never be served the other's history — however
+    // identical their bytes are.
+    let tmp = TempDir::new().unwrap();
+    let addr = start_real_relay(&tmp);
+    let hash = "c".repeat(64);
+
+    let one = SyncClient::connect(&addr).expect("connect");
+    one.hello_in("Song.als", vec![], "Volumes/Studio", None)
+        .expect("hello");
+    let _ = one.recv_timeout(Duration::from_secs(2));
+    let mut snap = make_snap_for(&hash, None, "Song.als");
+    snap.project_folder = "Volumes/Studio".to_string();
+    one.push(vec![snap], vec![]).expect("push");
+    let _ = one.recv_timeout(Duration::from_secs(2));
+
+    let two = SyncClient::connect(&addr).expect("connect");
+    two.hello_in("Song.als", vec![], "Backup/Studio", Some(hash.clone()))
+        .expect("hello");
+    let msg = two.recv_timeout(Duration::from_secs(3));
+    match msg {
+        Some(SyncMsg::Push { snapshots, .. }) => {
+            assert!(
+                snapshots.is_empty(),
+                "the project next door must not be served the other's history: {:?}",
+                snapshots
+            );
+        }
+        other => panic!("unexpected reply: {:?}", other),
+    }
+
+    one.close();
+    two.close();
+}

@@ -313,25 +313,7 @@ fn human_size(bytes: usize) -> String {
 /// The user's own name, so a collaborator can tell who wrote a note
 /// after a sync. Falls back to "cli" when the name cannot be found.
 pub fn default_author() -> String {
-    for key in ["CLAVUS_AUTHOR", "USER", "LOGNAME"] {
-        if let Ok(name) = std::env::var(key) {
-            let name = name.trim().to_string();
-            if !name.is_empty() {
-                return name;
-            }
-        }
-    }
-    // A machine with no user name — a container, a cron job, CI — still
-    // needs a name to sign a note with. The host name says who is
-    // speaking; the word "cli" said nothing at all and looked like a
-    // person's name in a list of people.
-    if let Ok(host) = std::env::var("HOSTNAME") {
-        let host = host.trim().to_string();
-        if !host.is_empty() {
-            return host;
-        }
-    }
-    "unknown".to_string()
+    clavus_core::default_author()
 }
 
 /// Check that a cue position is a `bars.beats.sixteenths` position.
@@ -364,6 +346,12 @@ pub fn cmd_log(project: &Path, clavus_root: &Path,
     let id = clavus_core::project::ProjectId::new(project);
 
     let store = BlobStore::open(clavus_root.join("blobs"));
+    // A store that cannot be read is not an empty store. Saying "no
+    // snapshots" when the directory is unreadable tells the user their
+    // history is empty when it is really hidden.
+    if let Err(e) = store.check_readable() {
+        anyhow::bail!("cannot read the Clavus data directory: {}", e);
+    }
     let snap_store = SnapshotStore::new(store, &id);
 
     // A record that exists but cannot be read is a broken history, not
