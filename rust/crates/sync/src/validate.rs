@@ -105,6 +105,7 @@ mod tests {
             sample_hashes: vec![],
             sample_paths: Default::default(),
             project_path: "/tmp/p.als".into(),
+            project_folder: String::new(),
         }
     }
 

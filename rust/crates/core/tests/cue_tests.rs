@@ -306,7 +306,8 @@ fn corrupted_cue_file_does_not_panic() {
     let id = s.add("cue", "1.1.1", "chris", "", "T").unwrap().id;
 
     // Corrupt the cue file on disk.
-    let cue_dir = dir.path().join("cues").join("demo");
+    let key = clavus_core::project::ProjectId::new(std::path::Path::new("demo")).key;
+    let cue_dir = dir.path().join("cues").join(key);
     let path = cue_dir.join(format!("{}.json", id));
     std::fs::write(&path, b"{ not valid json").unwrap();
 

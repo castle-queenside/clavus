@@ -165,6 +165,13 @@ pub struct Snapshot {
     pub sample_paths: HashMap<String, String>,
     /// Absolute path to the project file at snapshot time
     pub project_path: String,
+    /// The project's folder, relative to the home directory.
+    ///
+    /// It is the second half of the project's identity on the wire:
+    /// the file name says *which* project it is, and the folder says
+    /// *which one* when two of them share a file name.
+    #[serde(default)]
+    pub project_folder: String,
 }
 
 impl Snapshot {

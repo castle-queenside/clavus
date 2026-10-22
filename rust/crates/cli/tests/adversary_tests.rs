@@ -312,35 +312,15 @@ fn a_corrupt_snapshot_record_is_reported_as_corrupt() {
     };
 
     // Damage the record.
+    let key = clavus_core::project::ProjectId::new(&als).key;
     let record = ws
         .root
         .join("blobs")
         .join("projects")
-        .join(format!("{}__{}", "projects", "Set.als"))
+        .join(key)
         .join("snapshots")
         .join(format!("{}.json", hash));
-    // The key is the sanitised project key, which may differ. Find the
-    // record by name instead.
-    let snaps_dir = ws
-        .root
-        .join("blobs")
-        .join("projects")
-        .join(format!("{}__Set.als", "projects"));
-    let record = snaps_dir.join("snapshots").join(format!("{}.json", hash));
-    if !record.exists() {
-        // The key is built from the parent folder and the file name.
-        let parent = ws.dir.file_name().unwrap().to_string_lossy().to_string();
-        let record = ws
-            .root
-            .join("blobs")
-            .join("projects")
-            .join(format!("{}__{}", parent, "Set.als"))
-            .join("snapshots")
-            .join(format!("{}.json", hash));
-        fs::write(&record, b"{\"hash\": \"abc").expect("damage the record");
-    } else {
-        fs::write(&record, b"{\"hash\": \"abc").expect("damage the record");
-    }
+    fs::write(&record, b"{\"hash\": \"abc").expect("damage the record");
 
     // `log` must not say "no snapshots".
     let (out, result) = run(|o, e| cmd_log(&als, &ws.root, o, e));
@@ -393,10 +373,8 @@ fn a_corrupt_note_is_reported_as_corrupt() {
     assert!(result.is_ok(), "the note must be made: {}", out.all());
 
     // Damage the note.
-    let cues_dir = ws
-        .root
-        .join("cues")
-        .join(format!("{}__Set.als", "projects"));
+    let key = clavus_core::project::ProjectId::new(&als).key;
+    let cues_dir = ws.root.join("cues").join(key);
     let file = fs::read_dir(&cues_dir)
         .expect("cues dir")
         .flatten()

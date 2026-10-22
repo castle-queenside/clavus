@@ -17,11 +17,13 @@ pub enum SyncMsg {
     Hello {
         client_name: String,
         known_heads: Vec<String>,
-        /// The name of the folder the project lives in.
+        /// The path of the folder the project lives in, relative to the
+        /// home directory.
         ///
         /// Two projects can share a file name, and the folder tells
-        /// them apart. An empty folder means the project sits at the
-        /// top of a directory.
+        /// them apart. It is the folder's *path* — `p1/studio` and
+        /// `p2/studio` are two folders — because two projects in
+        /// folders of the same name are two projects.
         #[serde(default)]
         folder: String,
         /// The hash of the client's project file.

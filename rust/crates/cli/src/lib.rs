@@ -669,7 +669,7 @@ pub fn cmd_push(relay: &str, project: &Path, clavus_root: &Path,
     client.hello_in(
         id.sync_name(),
         vec![],
-        id.folder(),
+        id.folder_path(),
         clavus_core::blob::BlobStore::content_hash_of_file(project),
     )
     .map_err(|e| anyhow::anyhow!("Hello: {}", e))?;
@@ -700,6 +700,7 @@ pub fn cmd_push(relay: &str, project: &Path, clavus_root: &Path,
             sample_hashes: s.sample_hashes.clone(),
             sample_paths: s.sample_paths.clone(),
             project_path: s.project_path.clone(),
+            project_folder: s.project_folder.clone(),
         }
     }).collect();
 
@@ -831,7 +832,7 @@ pub fn cmd_pull(relay: &str, project: &Path, clavus_root: &Path,
     client.hello_in(
         id.sync_name(),
         known_heads,
-        id.folder(),
+        id.folder_path(),
         clavus_core::blob::BlobStore::content_hash_of_file(project),
     )
     .map_err(|e| anyhow::anyhow!("Hello: {}", e))?;

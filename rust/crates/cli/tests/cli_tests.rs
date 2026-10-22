@@ -651,6 +651,7 @@ fn hostile_snapshot(hash: &str) -> clavus_core::types::Snapshot {
         sample_hashes: vec![],
         sample_paths: std::collections::HashMap::new(),
         project_path: "/tmp/evil.als".to_string(),
+        project_folder: String::new(),
     }
 }
 

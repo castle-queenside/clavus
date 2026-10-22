@@ -203,6 +203,9 @@ impl SnapshotStore {
             sample_hashes,
             sample_paths,
             project_path: project_path.to_string_lossy().to_string(),
+            // The project's folder, so a relay can tell two projects
+            // that share a file name apart.
+            project_folder: self.project.folder_path().to_string(),
         };
 
         self.store

@@ -210,7 +210,7 @@ impl RelayState {
             .map_err(|e| std::io::Error::other(format!("snapshots parse: {}", e)))?;
         let mut out: HashMap<String, HashMap<String, Snapshot>> = HashMap::new();
         for snap in snaps {
-            let project = relay_key_from_path(&snap.project_path);
+            let project = relay_key_of(&snap);
             out.entry(project)
                 .or_default()
                 .insert(snap.hash.clone(), snap);
@@ -337,7 +337,7 @@ impl RelayState {
         // another machine — which is the normal case for a
         // collaborator.
         // The project in the client's own folder.
-        let wanted = format!("{}::{}", wire_name, folder);
+        let wanted = clavus_core::project::relay_key_for(wire_name, folder);
         if lineages.contains(&wanted) {
             return Some(wanted);
         }
@@ -388,7 +388,7 @@ impl RelayState {
     /// two projects that hold the same bytes — a copy of a set, a
     /// template — stay two projects.
     pub fn lineage_of_snapshot(&self, snap: &Snapshot) -> Option<String> {
-        let path_key = relay_key_from_path(&snap.project_path);
+        let path_key = relay_key_of(snap);
         // The project in that folder is already known.
         if self.snapshots.contains_key(&path_key) {
             return Some(path_key);
@@ -536,7 +536,7 @@ impl RelayState {
             // taken in. A project is a history, not a file name.
             let project_name = self
                 .lineage_of_snapshot(&snap)
-                .unwrap_or_else(|| relay_key_from_path(&snap.project_path));
+                .unwrap_or_else(|| relay_key_of(&snap));
 
             // Detect HEAD divergence per project
             if let Some(existing_head) = self.heads.get(&project_name) {
@@ -1052,19 +1052,36 @@ fn project_name_from_path(path: &str) -> String {
 /// name — `Album1/Track.als` and `Album2/Track.als` — are two
 /// different sets, and a relay that filed them together handed one
 /// project's history and notes to the other.
-fn relay_key_from_path(path: &str) -> String {
-    let p = std::path::Path::new(path);
+///
+/// The folder is the folder's *path*, not just its name: `p1/studio`
+/// and `p2/studio` are two folders, even though both are called
+/// `studio`.
+fn relay_key_from_path(path: &str, folder: &str) -> String {
     let file_name = project_name_from_path(path);
-    let folder = p
-        .parent()
-        .and_then(|d| d.file_name())
-        .map(|s| s.to_string_lossy().to_string())
-        .filter(|s| !s.is_empty() && s != "." && s != "..")
-        .unwrap_or_default();
-    format!("{}::{}", file_name, folder)
+    clavus_core::project::relay_key_for(&file_name, folder)
+}
+
+/// The relay's key for a snapshot's project.
+fn relay_key_of(snap: &Snapshot) -> String {
+    let folder = if snap.project_folder.is_empty() {
+        // An older client that does not send the folder. The last
+        // component of the path is the best guess there is.
+        std::path::Path::new(&snap.project_path)
+            .parent()
+            .and_then(|d| d.file_name())
+            .map(|s| s.to_string_lossy().to_string())
+            .filter(|s| !s.is_empty() && s != "." && s != "..")
+            .unwrap_or_default()
+    } else {
+        snap.project_folder.clone()
+    };
+    relay_key_from_path(&snap.project_path, &folder)
 }
 
 /// The wire name of a relay key: the file name on its own.
-fn wire_name_of(key: &str) -> &str {
-    key.split("::").next().unwrap_or(key)
+fn wire_name_of(key: &str) -> String {
+    // The key is `file name::folder`, and both parts are escaped, so
+    // the first separator is the real one.
+    let name = key.split("::").next().unwrap_or(key);
+    clavus_core::project::unescape_key_part(name)
 }

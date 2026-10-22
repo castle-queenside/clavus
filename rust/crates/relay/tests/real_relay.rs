@@ -35,6 +35,7 @@ fn make_snap_for(hash: &str, parent: Option<&str>, project: &str) -> Snapshot {
         sample_hashes: vec![],
         sample_paths: HashMap::new(),
         project_path: format!("/tmp/{}", project),
+        project_folder: String::new(),
     }
 }
 

@@ -576,6 +576,7 @@ fn store_pulled_saves_snapshots_and_imports_cues() {
         sample_hashes: vec![],
         sample_paths: std::collections::HashMap::new(),
         project_path: "/tmp/demo.als".to_string(),
+        project_folder: String::new(),
     };
     let cue = clavus_core::types::Cue {
         id: "abc123456789".to_string(),
@@ -629,6 +630,7 @@ fn store_pulled_rejects_a_snapshot_with_a_crafted_hash() {
         sample_hashes: vec![],
         sample_paths: std::collections::HashMap::new(),
         project_path: "/tmp/evil.als".to_string(),
+        project_folder: String::new(),
     };
 
     let (stored, _) = store_pulled(&[snap], &[], &data, &clavus_core::project::ProjectId::new(std::path::Path::new("demo")));

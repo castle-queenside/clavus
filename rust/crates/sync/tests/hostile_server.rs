@@ -345,6 +345,7 @@ fn test_snapshot(hash: &str, parent: Option<&str>) -> clavus_core::types::Snapsh
         sample_hashes: vec![],
         sample_paths: Default::default(),
         project_path: "/tmp/p.als".into(),
+        project_folder: String::new(),
     }
 }
 

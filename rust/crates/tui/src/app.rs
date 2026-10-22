@@ -374,13 +374,13 @@ impl App {
             .map(|e| e.id().sync_name().to_string())
     }
 
-    /// The name of the folder the selected project lives in.
+    /// The path of the folder the selected project lives in.
     ///
     /// It is the second half of the project's identity on the wire: two
     /// projects can share a file name, and the folder tells them apart.
     pub fn selected_project_folder(&self) -> Option<String> {
         self.selected_entry()
-            .map(|e| e.id().folder().to_string())
+            .map(|e| e.id().folder_path().to_string())
     }
 
     pub fn set_error(&mut self, msg: String) {
@@ -655,7 +655,7 @@ impl App {
                             if let Err(e) = c.hello_in(
                                 pull_name.as_str(),
                                 known_heads,
-                                project_id.folder(),
+                                project_id.folder_path(),
                                 clavus_core::blob::BlobStore::content_hash_of_file(&project_path),
                             ) {
                                 let _ = result_tx.send(format!("pull failed: {}", e));

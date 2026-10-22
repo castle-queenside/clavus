@@ -23,6 +23,7 @@ fn make_snap(hash: &str, parent: Option<&str>) -> Snapshot {
         sample_hashes: vec![],
         sample_paths: HashMap::new(),
         project_path: "/tmp/test.als".to_string(),
+        project_folder: String::new(),
     }
 }
 
@@ -344,6 +345,7 @@ fn test_snapshot_store_save_raw_and_has() {
         sample_hashes: vec![],
         sample_paths: std::collections::HashMap::new(),
         project_path: "/tmp/test.als".to_string(),
+        project_folder: String::new(),
     };
 
     let hash = "b".repeat(64);
