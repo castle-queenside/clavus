@@ -5,11 +5,15 @@ on:
     branches: [rust]
     paths:
       - 'rust/**'
+      - 'scripts/two-machine-relay-test.sh'
+      - 'fixtures/gen_relay_fixture.py'
       - '.github/workflows/rust-ci.yml'
   pull_request:
     branches: [rust]
     paths:
       - 'rust/**'
+      - 'scripts/two-machine-relay-test.sh'
+      - 'fixtures/gen_relay_fixture.py'
       - '.github/workflows/rust-ci.yml'
 
 jobs:
@@ -56,3 +60,30 @@ jobs:
           cargo build --release --target x86_64-unknown-linux-musl
           cargo build --release --target aarch64-unknown-linux-musl
         working-directory: rust
+
+  two-machine-relay:
+    # Three Linux machines in containers and a relay between them: one
+    # pushes, one pulls and restores, one pulls audio it never had.
+    # The unit tests use the real relay code in one process; this uses
+    # the real release binary over real TCP, which is the only way to
+    # know the bytes really arrive.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: rust
+
+      - name: Install Rust
+        run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+      - name: Build the Linux binary
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          cargo build --release --target x86_64-unknown-linux-musl
+        working-directory: rust
+
+      - name: Two machines, one relay
+        env:
+          CLAVUS_TEST_BIN: ${{ github.workspace }}/rust/target/x86_64-unknown-linux-musl/release/clavus
+          CLAVUS_TEST_PLATFORM: linux/amd64
+        run: bash scripts/two-machine-relay-test.sh

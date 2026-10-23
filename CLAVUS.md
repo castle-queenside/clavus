@@ -300,6 +300,9 @@ git add -A && git commit && git push
 - The TUI survives any terminal size, shows its selection, and notices
   a relay that has gone away
 - 512 tests passing, clippy clean, CI green
+- The Linux musl build runs on real Linux, and the release binary moves
+  project bytes, audio and notes between three real machines over TCP —
+  `scripts/two-machine-relay-test.sh`
 
 ### Blocked ⛔
 | Item | Blocker |
@@ -311,10 +314,11 @@ git add -A && git commit && git push
 
 ### High Priority
 1. **Real Bitwig export** — user action needed, to confirm the schema
-2. **Linux musl binaries** — build and test on the studio machine
+2. **Ableton Live round trip** — user action needed: install Live, open
+   a set from each major version, save, snapshot, restore
 3. **PR #13 review** — ready for review
-4. **Two real machines** — exercise a relay push and pull with a
-   collaborator on another machine
+4. **Two real machines** — the containers prove the protocol; a push and
+   pull between two physical machines is still worth doing
 
 ### Nice to Have
 5. HTML timeline visualization (like ableton-cookbook's historian)

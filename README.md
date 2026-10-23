@@ -196,6 +196,8 @@ One person runs `clavus relay`. Others run `clavus tui`, press `c` to connect, t
 | TUI | ✅ Ratatui, full keyboard nav |
 | CI | ✅ GitHub Actions, clippy clean, 512 tests |
 | Project isolation | ✅ Two same-named projects never share a chain |
+| Linux | ✅ Static musl builds for x86_64 and arm64, verified on real Linux |
+| Relay | ✅ Verified between three real Linux machines over TCP |
 | Windows | 🔜 Linux binary first |
 
 ---
@@ -209,6 +211,13 @@ git clone https://github.com/castle-queenside/clavus
 cd clavus/rust
 cargo test --all
 cargo clippy --workspace --all-targets -- -D warnings
+```
+
+To check that the release binary really moves bytes between machines —
+three Linux machines in Docker, one relay between them:
+
+```bash
+bash scripts/two-machine-relay-test.sh
 ```
 
 See [CLAVUS.md](CLAVUS.md) for full architecture documentation.
