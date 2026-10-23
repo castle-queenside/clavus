@@ -153,6 +153,37 @@ S          Cycle the project sort (recent → name → history → open notes)
 Esc/q      Back / quit
 ```
 
+### The mouse
+
+Clavus is keyboard-first, and the keyboard still does everything. The
+mouse is a second way in, not the only way — nothing is reachable by
+mouse that is not reachable by keyboard.
+
+| Gesture | What it does |
+|---------|--------------|
+| Wheel | Moves the selection, and the list scrolls to keep it on screen |
+| Click a row | Selects it |
+| Double click a row | Opens it — the same as `Enter` |
+| Drag with the button held | The row under the pointer becomes the selected one |
+| Click the scrollbar | Jumps the window to that part of the list |
+
+The mouse is told what is on the screen by the renderer, which records
+a map of the rows it drew. The layout is computed in one place, so the
+map can never disagree with what is on screen.
+
+Two details matter and are easy to get wrong:
+
+- **The capture is turned off again on every way out** — the normal
+  exit, the error paths, and the panic hook. A terminal left
+  reporting mouse events prints escape sequences into your shell after
+  the program has gone.
+- **The terminal is not asked to report every movement.** crossterm
+  turns that on along with everything else, and it is the wrong thing
+  for a full-screen program: every twitch of the mouse would arrive
+  as an event, and every event draws a frame. Presses, releases and
+  the movement that happens while a button is held are enough.
+
+
 ### Browsing a library
 
 A library of a thousand sets needs two questions answered at a glance:

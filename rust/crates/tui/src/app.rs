@@ -29,6 +29,35 @@ pub enum CueStep {
     Position,
 }
 
+/// Keep a scroll offset and a selected row in step.
+///
+/// `offset` is the index of the first row drawn, `selected` is the
+/// position of the cursor among the rows, and `len` is how many rows
+/// are drawn at once. The offset moves so that the cursor is always on
+/// a row that is on screen.
+///
+/// A list that does not fit in the terminal used to be drawn from the
+/// top and clipped. The arrow keys still moved the cursor, so it
+/// walked off the bottom of the screen and the user was left with a
+/// selection they could not see and a list that never moved.
+pub fn scroll_to_show(offset: &mut usize, selected: Option<usize>, len: usize, total: usize) {
+    if len == 0 || total == 0 {
+        *offset = 0;
+        return;
+    }
+    let max_offset = total.saturating_sub(len);
+    if *offset > max_offset {
+        *offset = max_offset;
+    }
+    if let Some(sel) = selected {
+        if sel < *offset {
+            *offset = sel;
+        } else if sel >= offset.saturating_add(len) {
+            *offset = sel + 1 - len;
+        }
+    }
+}
+
 /// The position a new cue gets when the user does not type one.
 pub const DEFAULT_CUE_POSITION: &str = "1.1.1";
 
@@ -88,6 +117,26 @@ pub struct App {
     pub relay_addr: String,
     /// The screen the sync screen was opened from.
     pub sync_opened_from: Option<Screen>,
+    /// The first project row on screen.
+    ///
+    /// A library of a thousand sets does not fit in a terminal, so the
+    /// list has to scroll. The renderer owns the number — it knows how
+    /// many rows fit — and keeps this in step with the selection, so
+    /// the row under the cursor is always one of the rows on screen.
+    pub list_scroll: usize,
+    /// The first cue row on screen.
+    pub cue_scroll: usize,
+    /// The first snapshot row on screen.
+    pub snapshot_scroll: usize,
+    /// The rows on the screen that mean something, and where they are.
+    ///
+    /// The renderer fills this in every frame and the mouse handler
+    /// reads it. The layout is computed in one place, so the map can
+    /// never disagree with what is on screen.
+    pub hits: Vec<crate::mouse::HitRegion>,
+    /// The last click, so that a second one can be recognised as a
+    /// double click.
+    pub last_click: Option<crate::mouse::Click>,
 }
 
 #[derive(Debug, Clone)]
@@ -278,6 +327,11 @@ impl App {
             cue_step: CueStep::Message,
             relay_addr: "127.0.0.1:4477".to_string(),
             sync_opened_from: None,
+            list_scroll: 0,
+            cue_scroll: 0,
+            snapshot_scroll: 0,
+            hits: Vec::new(),
+            last_click: None,
         }
     }
 
@@ -634,6 +688,120 @@ impl App {
             }
         }
         self.selected_project = Some(visible[0]);
+    }
+
+    /// The cues on show, in the order they are drawn, with each cue's
+    /// index in the whole list.
+    ///
+    /// The cue filter changes which cues are drawn, so a row on screen
+    /// is not the same number as a row in the list. The arrow keys used
+    /// to move through the unfiltered list while the highlight was
+    /// computed on the filtered one, so the cursor could land on a cue
+    /// that was not there.
+    pub fn visible_cue_indices(&self) -> Vec<usize> {
+        let filter = self.cue_filter.clone();
+        self.cues
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| match &filter {
+                None => true,
+                Some(f) => c.status == *f,
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Move the selection by `delta` rows, over the cues on show.
+    pub fn move_cue_selection(&mut self, delta: i32) {
+        let visible = self.visible_cue_indices();
+        if visible.is_empty() {
+            self.selected_cue = None;
+            return;
+        }
+        let current = self
+            .selected_cue
+            .and_then(|sel| visible.iter().position(|&i| i == sel));
+        let next = match current {
+            None => 0,
+            Some(pos) => {
+                let n = visible.len() as i32;
+                (pos as i32 + delta).clamp(0, n - 1) as usize
+            }
+        };
+        self.selected_cue = Some(visible[next]);
+    }
+
+    /// Move the selection by `delta` rows, over the snapshots.
+    pub fn move_snapshot_selection(&mut self, delta: i32) {
+        if self.snapshots.is_empty() {
+            self.selected_snapshot = None;
+            return;
+        }
+        let current = self.selected_snapshot;
+        let next = match current {
+            None => 0,
+            Some(pos) => {
+                let n = self.snapshots.len() as i32;
+                (pos as i32 + delta).clamp(0, n - 1) as usize
+            }
+        };
+        self.selected_snapshot = Some(next);
+    }
+
+    /// Move the selection up one row, on whichever list is on screen.
+    pub fn scroll_up(&mut self) {
+        match self.screen {
+            Screen::ProjectList => self.move_selection(-1),
+            Screen::CueList => self.move_cue_selection(-1),
+            Screen::SnapshotList => self.move_snapshot_selection(-1),
+            _ => {}
+        }
+    }
+
+    /// Move the selection down one row, on whichever list is on screen.
+    pub fn scroll_down(&mut self) {
+        match self.screen {
+            Screen::ProjectList => self.move_selection(1),
+            Screen::CueList => self.move_cue_selection(1),
+            Screen::SnapshotList => self.move_snapshot_selection(1),
+            _ => {}
+        }
+    }
+
+    /// The region of the screen under a point, if there is one.
+    pub fn hit_at(&self, x: u16, y: u16) -> Option<crate::mouse::HitRegion> {
+        self.hits.iter().copied().find(|r| r.contains(x, y))
+    }
+
+    /// Move the window of the list on screen.
+    ///
+    /// The selection goes with it: a scrollbar that moved the window
+    /// but left the cursor behind would put the cursor on a row that
+    /// is no longer on the screen.
+    pub fn scroll_to(&mut self, offset: usize) {
+        match self.screen {
+            Screen::ProjectList => {
+                let visible = self.visible_indices();
+                if let Some(&i) = visible.get(offset) {
+                    self.selected_project = Some(i);
+                }
+                self.list_scroll = offset;
+            }
+            Screen::CueList => {
+                let visible = self.visible_cue_indices();
+                if let Some(&i) = visible.get(offset) {
+                    self.selected_cue = Some(i);
+                }
+                self.cue_scroll = offset;
+            }
+            Screen::SnapshotList => {
+                if offset < self.snapshots.len() {
+                    self.selected_snapshot = Some(offset);
+                }
+                self.snapshot_scroll = offset;
+            }
+            _ => {}
+        }
     }
 
     /// The name of the currently selected project, if any.

@@ -82,27 +82,7 @@ pub fn handle_key(key: &KeyEvent, app: &mut App) -> bool {
         (KeyCode::Enter, _) | (KeyCode::Char('o'), KeyModifiers::NONE)
             if app.screen == Screen::ProjectList =>
         {
-            // Enter with nothing selected used to do nothing at all:
-            // no redraw, no message. The footer says "Enter open", so
-            // the first project is selected and opened.
-            let idx = match app.selected_project {
-                Some(idx) => idx,
-                None if !app.projects.is_empty() => {
-                    app.selected_project = Some(0);
-                    0
-                }
-                None => {
-                    app.set_info("no projects to open".into());
-                    return false;
-                }
-            };
-            match app.load_project(idx) {
-                Ok(()) => app.screen = Screen::ProjectDetail,
-                // A project that cannot be parsed used to do nothing
-                // at all — no error, no message. The user could not
-                // tell whether the key had been pressed.
-                Err(e) => app.set_error(e),
-            }
+            open_selected_project(app);
         }
         (KeyCode::Down, _) if app.screen == Screen::ProjectList => {
             // The counts in the list are read from the store, and the
@@ -155,20 +135,10 @@ pub fn handle_key(key: &KeyEvent, app: &mut App) -> bool {
 
         // ── Cue List ───────────────────────────────
         (KeyCode::Down, _) if app.screen == Screen::CueList => {
-            if let Some(i) = app.selected_cue {
-                if i + 1 < app.cues.len() {
-                    app.selected_cue = Some(i + 1);
-                }
-            } else if !app.cues.is_empty() {
-                app.selected_cue = Some(0);
-            }
+            app.move_cue_selection(1);
         }
         (KeyCode::Up, _) if app.screen == Screen::CueList => {
-            if let Some(i) = app.selected_cue {
-                if i > 0 {
-                    app.selected_cue = Some(i - 1);
-                }
-            }
+            app.move_cue_selection(-1);
         }
         (KeyCode::Char('a'), KeyModifiers::NONE) if app.screen == Screen::CueList => {
             app.screen = Screen::CueAdd;
@@ -275,25 +245,43 @@ pub fn handle_key(key: &KeyEvent, app: &mut App) -> bool {
 
         // ── Snapshot List ────────────────────────
         (KeyCode::Down, _) if app.screen == Screen::SnapshotList => {
-            if let Some(i) = app.selected_snapshot {
-                if i + 1 < app.snapshots.len() {
-                    app.selected_snapshot = Some(i + 1);
-                }
-            } else if !app.snapshots.is_empty() {
-                app.selected_snapshot = Some(0);
-            }
+            app.move_snapshot_selection(1);
         }
         (KeyCode::Up, _) if app.screen == Screen::SnapshotList => {
-            if let Some(i) = app.selected_snapshot {
-                if i > 0 {
-                    app.selected_snapshot = Some(i - 1);
-                }
-            }
+            app.move_snapshot_selection(-1);
         }
 
         _ => {}
     }
     false
+}
+
+/// Open the project under the cursor.
+///
+/// Shared by the keyboard and the mouse, so a double click and the
+/// Enter key do exactly the same thing.
+pub fn open_selected_project(app: &mut App) {
+    // Enter with nothing selected used to do nothing at all: no
+    // redraw, no message. The footer says "Enter open", so the first
+    // project is selected and opened.
+    let idx = match app.selected_project {
+        Some(idx) => idx,
+        None if !app.projects.is_empty() => {
+            app.selected_project = Some(0);
+            0
+        }
+        None => {
+            app.set_info("no projects to open".into());
+            return;
+        }
+    };
+    match app.load_project(idx) {
+        Ok(()) => app.screen = Screen::ProjectDetail,
+        // A project that cannot be parsed used to do nothing at all —
+        // no error, no message. The user could not tell whether the
+        // key had been pressed.
+        Err(e) => app.set_error(e),
+    }
 }
 
 /// Handle a key press while the project filter has the focus.

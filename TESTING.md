@@ -23,6 +23,7 @@
 | TUI (sync round trip) | `crates/tui/tests/sync_blob_tests.rs` | 1 | 🟢 |
 | TUI (fourth wave) | `crates/tui/tests/wave4_tests.rs` | 13 | 🟢 |
 | TUI (browsing a library) | `crates/tui/tests/workbench_tests.rs` | 24 | 🟢 |
+| TUI (mouse and scrolling) | `crates/tui/tests/mouse_tests.rs` | 19 | 🟢 |
 | CLI commands | `crates/cli/tests/cli_tests.rs` | 54 | 🟢 |
 | CLI (beta regressions) | `crates/cli/tests/beta_cli_tests.rs` | 17 | 🟢 |
 | CLI (second beta wave) | `crates/cli/tests/wave2_tests.rs` | 6 | 🟢 |
@@ -34,7 +35,7 @@
 | Sync unit tests (blob transfer) | `crates/sync/src/**` | 10 | 🟢 |
 | Two machines, one relay | `scripts/two-machine-relay-test.sh` | 3 machines | 🟢 |
 
-**545 tests passing, 0 failed, 0 ignored**, plus a three-machine relay
+**564 tests passing, 0 failed, 0 ignored**, plus a three-machine relay
 test that runs the real Linux binary over real TCP.
 The palette is Clavus's own, not the terminal's. A panel that sets no
 background of its own shows the *terminal's* background through, and
@@ -468,6 +469,58 @@ Every agent runs the **compiled binary** in its own `CLAVUS_DATA`
 sandbox. The repository is never touched.
 
 ---
+
+## The Mouse and the Scrolling It Needed ✅
+
+Clavus is keyboard-first, and the keyboard still does everything. The
+mouse is a second way in, not the only way: nothing is reachable by
+mouse that is not reachable by keyboard. The tests in
+`crates/tui/tests/mouse_tests.rs` drive the real application state,
+the real renderer and the real mouse handler — nineteen of them.
+
+| Gesture | What it does |
+|---------|--------------|
+| Wheel | Moves the selection; the list scrolls to keep it on screen |
+| Click a row | Selects it |
+| Double click a row | Opens it — the same as `Enter` |
+| Drag with the button held | The row under the pointer becomes the selected one |
+| Click the scrollbar | Jumps the window to that part of the list |
+
+**The mouse is told what is on the screen by the renderer**, which
+records a map of the rows it drew. The layout is computed in one
+place, so the map can never disagree with what is on screen, and a
+test can check the map against the drawn rows rather than against a
+hand-written copy of the layout.
+
+**The list did not scroll at all.** This was found by driving the real
+binary in a pty with forty-five sets and pressing the down arrow
+twenty-five times: the cursor walked off the bottom of the screen and
+the list never moved. A thousand sets do not fit in a terminal, so
+the renderer now works out how many rows fit, scrolls the window to
+keep the cursor on the screen, and draws a scrollbar down the right
+edge. The scrollbar is a control, not a picture — clicking it jumps
+the window, and the cursor goes with it.
+
+**The cue list's arrow keys were moving through the wrong list.** The
+cue filter changes which notes are drawn, but the keys walked the
+unfiltered list while the highlight was computed on the filtered one,
+so the cursor could land on a note that was not on screen. The cue and
+snapshot lists now have the same filter-aware navigation the project
+list has always had.
+
+**Two things about the terminal that are easy to get wrong.**
+
+- The capture has to be undone on **every** way out of the program:
+  the normal exit, the error paths, and the panic hook. A terminal
+  left reporting mouse events prints escape sequences into the shell
+  after Clavus has gone.
+- crossterm asks the terminal to report **every movement** along with
+  presses and releases. For a full-screen program that is the wrong
+  thing: every twitch of the mouse arrives as an event, and every
+  event draws a frame. The "any movement" mode is turned off again
+  straight away. Presses, releases, and the movement that happens
+  while a button is held — which is how a list is dragged — are
+  enough.
 
 ## Browsing a Library of Projects ✅
 

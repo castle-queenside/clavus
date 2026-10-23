@@ -3,13 +3,17 @@
 //! Warm blacks, layered panels, soft green accent, 4pt spacing grid.
 //! Palette: bg #0b0c0d · panels #0e1012/#121517/#15181a · accent #74e08c
 
-use crate::app::{App, Screen, ACTIVITY_CELLS};
+use crate::app::{scroll_to_show, App, Screen, ACTIVITY_CELLS};
+use crate::mouse::HitKind;
 use crate::theme::*;
 use ratatui::{
     layout::{Constraint, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Table, Row},
+    widgets::{
+        Block, Borders, Cell, List, ListItem, Paragraph, Row, Scrollbar,
+        ScrollbarOrientation, ScrollbarState, Table,
+    },
     Frame,
 };
 
@@ -49,6 +53,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // configured with — which reads as a patchy screen over SSH, and
     // changes colour when the terminal is reconfigured.
     frame.render_widget(Block::default().style(S_BG), size);
+
+    // The map of what is on the screen is rebuilt every frame. The
+    // layout moves when the terminal is resized, and a stale map would
+    // send a click to a row that has moved.
+    app.hits.clear();
 
     match app.screen {
         Screen::ProjectList  => render_project_list(frame, app),
@@ -120,6 +129,31 @@ fn render_project_list(frame: &mut Frame, app: &mut App) {
 
     let cols = columns_for(list_area.width);
 
+    // How many project rows fit. The table has a border above and
+    // below and a header row, so three of the lines belong to the
+    // frame.
+    let rows_fit = list_area.height.saturating_sub(3) as usize;
+
+    // Where the cursor is, among the rows on show.
+    let selected_pos = app
+        .selected_project
+        .and_then(|sel| visible.iter().position(|&i| i == sel));
+
+    // Keep the row under the cursor on the screen. A list of a
+    // thousand sets does not fit in a terminal, and the list used to
+    // be drawn from the top and clipped — so the cursor walked off
+    // the bottom of the screen and the user was left looking at a
+    // list that never moved.
+    scroll_to_show(&mut app.list_scroll, selected_pos, rows_fit, visible.len());
+
+    // The rows that are actually drawn.
+    let window: Vec<usize> = visible
+        .iter()
+        .skip(app.list_scroll)
+        .take(rows_fit)
+        .copied()
+        .collect();
+
     // ── Column headers ─────────────────────────────────────────────
     let h_style = Style::new().fg(MUTED).bg(PANEL_0).add_modifier(Modifier::BOLD);
     let mut header_cells = vec![Span::raw("TYPE"), Span::raw("NAME")];
@@ -144,7 +178,7 @@ fn render_project_list(frame: &mut Frame, app: &mut App) {
 
     // ── Project rows ──────────────────────────────────────────────
     let now = unix_now();
-    let rows: Vec<Row<'_>> = visible
+    let rows: Vec<Row<'_>> = window
         .iter()
         .map(|&pi| {
             let p = &app.projects[pi];
@@ -284,6 +318,70 @@ fn render_project_list(frame: &mut Frame, app: &mut App) {
         .style(Style::new().fg(TEXT).bg(PANEL_0));
 
     frame.render_widget(table, list_area);
+
+    // Tell the mouse where the rows are. The table's border and its
+    // header row take the first two lines, so the first project row
+    // is the third line of the panel.
+    let row_x = list_area.x + 1;
+    let row_w = list_area.width.saturating_sub(2);
+    for (r, &pi) in window.iter().enumerate() {
+        app.hits.push(crate::mouse::HitRegion {
+            x: row_x,
+            y: list_area.y + 2 + r as u16,
+            w: row_w,
+            h: 1,
+            kind: HitKind::ProjectRow(pi),
+        });
+    }
+
+    render_scrollbar(frame, app, list_area, app.list_scroll, visible.len(), rows_fit);
+}
+
+/// A scrollbar down the right-hand edge of a list.
+///
+/// A list that does not fit has no other sign of where it is in. The
+/// thumb says how far through the list the window is, which is the
+/// thing a mouse user — and a keyboard user in a long library — most
+/// needs to know.
+fn render_scrollbar(
+    frame: &mut Frame,
+    app: &mut App,
+    area: Rect,
+    offset: usize,
+    total: usize,
+    visible: usize,
+) {
+    if total <= visible || visible == 0 {
+        return;
+    }
+    let mut state = ScrollbarState::new(total)
+        .position(offset)
+        .viewport_content_length(visible);
+    frame.render_stateful_widget(
+        Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .style(Style::new().fg(LINE).bg(PANEL_0))
+            .track_style(Style::new().fg(LINE).bg(PANEL_0))
+            .thumb_style(Style::new().fg(ACCENT).bg(PANEL_0))
+            .begin_style(Style::new().fg(MUTED).bg(PANEL_0))
+            .end_style(Style::new().fg(MUTED).bg(PANEL_0)),
+        area,
+        &mut state,
+    );
+
+    // The scrollbar is a control, not a picture: clicking it moves the
+    // window to that part of the list.
+    app.hits.push(crate::mouse::HitRegion {
+        x: area.x + area.width.saturating_sub(1),
+        y: area.y,
+        w: 1,
+        h: area.height,
+        kind: HitKind::Scrollbar {
+            total,
+            visible,
+            top: area.y,
+            height: area.height,
+        },
+    });
 }
 
 // ─── The focus strip ─────────────────────────────────────────────────
@@ -547,12 +645,7 @@ fn render_cue_list(frame: &mut Frame, app: &mut App) {
     let filter = app.cue_filter.clone();
     // The rows are the filtered cues, but the selection is an index
     // into the whole list, so the original index is kept with each row.
-    let filtered: Vec<(usize, &clavus_core::types::Cue)> = app
-        .cues
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| filter.is_none() || filter.as_ref().is_some_and(|f| c.status == *f))
-        .collect();
+    let filtered = app.visible_cue_indices();
 
     if filtered.is_empty() {
         let msg = if filter.is_some() { "no cues match filter" } else { "no cues yet" };
@@ -569,9 +662,30 @@ fn render_cue_list(frame: &mut Frame, app: &mut App) {
         frame.render_widget(line, filter_area);
     }
 
-    let cue_rows: Vec<ListItem<'_>> = filtered
+    let list_area = if filter.is_some() {
+        Rect::new(body.x, body.y + 1, body.width, body.height.saturating_sub(1))
+    } else {
+        body
+    };
+
+    // Each cue is drawn on two lines, and the list has a border.
+    let rows_fit = (list_area.height.saturating_sub(2) / 2) as usize;
+    let selected_pos = app
+        .selected_cue
+        .and_then(|sel| filtered.iter().position(|&i| i == sel));
+    scroll_to_show(&mut app.cue_scroll, selected_pos, rows_fit, filtered.len());
+
+    let window: Vec<usize> = filtered
         .iter()
-        .map(|(index, c)| {
+        .skip(app.cue_scroll)
+        .take(rows_fit)
+        .copied()
+        .collect();
+
+    let cue_rows: Vec<ListItem<'_>> = window
+        .iter()
+        .map(|&index| {
+            let c = &app.cues[index];
             let color = cue_status_color(&c.status);
             let icon = cue_status_icon(&c.status);
 
@@ -582,7 +696,7 @@ fn render_cue_list(frame: &mut Frame, app: &mut App) {
             // The highlight is a raised surface rather than a block of
             // the full accent: a bright bar that travels as the cursor
             // moves is hard to read and draws the eye.
-            let selected = app.selected_cue == Some(*index);
+            let selected = app.selected_cue == Some(index);
             let bg = if selected { ACCENT_DIM } else { PANEL_0 };
             let fg = if selected { TEXT } else { color };
 
@@ -616,7 +730,30 @@ fn render_cue_list(frame: &mut Frame, app: &mut App) {
     } else {
         body
     };
+
     frame.render_widget(list, list_area);
+
+    // Tell the mouse where the cues are. Each cue takes two lines.
+    let row_x = list_area.x + 1;
+    let row_w = list_area.width.saturating_sub(2);
+    for (r, &idx) in window.iter().enumerate() {
+        app.hits.push(crate::mouse::HitRegion {
+            x: row_x,
+            y: list_area.y + 1 + (r as u16) * 2,
+            w: row_w,
+            h: 2,
+            kind: HitKind::CueRow(idx),
+        });
+    }
+
+    render_scrollbar(
+        frame,
+        app,
+        list_area,
+        app.cue_scroll,
+        filtered.len(),
+        rows_fit,
+    );
 }
 
 // ─── Cue Add ─────────────────────────────────────────────────────────
@@ -703,6 +840,19 @@ fn render_snapshot_list(frame: &mut Frame, app: &mut App) {
         return;
     }
 
+    // How many snapshot rows fit. The table has a border above and
+    // below and a header row, so three of the lines belong to the
+    // frame.
+    let rows_fit = body.height.saturating_sub(3) as usize;
+
+    // Keep the row under the cursor on the screen.
+    scroll_to_show(
+        &mut app.snapshot_scroll,
+        app.selected_snapshot,
+        rows_fit,
+        app.snapshots.len(),
+    );
+
     let h_style = Style::new().fg(MUTED).bg(PANEL_0).add_modifier(Modifier::BOLD);
     let snap_header = Row::new(vec![
         Span::raw("HASH"),
@@ -719,6 +869,8 @@ fn render_snapshot_list(frame: &mut Frame, app: &mut App) {
         .snapshots
         .iter()
         .enumerate()
+        .skip(app.snapshot_scroll)
+        .take(rows_fit)
         .map(|(row, s)| {
             let ts = unix_to_rel(s.timestamp as i64);
             // The selected row is highlighted — see the cue list.
@@ -754,6 +906,29 @@ fn render_snapshot_list(frame: &mut Frame, app: &mut App) {
     .style(Style::new().fg(TEXT).bg(PANEL_0));
 
     frame.render_widget(table, body);
+
+    // Tell the mouse where the snapshots are.
+    let row_x = body.x + 1;
+    let row_w = body.width.saturating_sub(2);
+    let drawn = rows_fit.min(app.snapshots.len().saturating_sub(app.snapshot_scroll));
+    for r in 0..drawn {
+        app.hits.push(crate::mouse::HitRegion {
+            x: row_x,
+            y: body.y + 2 + r as u16,
+            w: row_w,
+            h: 1,
+            kind: HitKind::SnapshotRow(app.snapshot_scroll + r),
+        });
+    }
+
+    render_scrollbar(
+        frame,
+        app,
+        body,
+        app.snapshot_scroll,
+        app.snapshots.len(),
+        rows_fit,
+    );
 }
 
 // ─── Sync ───────────────────────────────────────────────────────────

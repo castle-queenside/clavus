@@ -591,6 +591,51 @@ minimum size the TUI says so instead of drawing nonsense.
 reports a capital letter with the shift modifier held; if the TUI
 matches on the unmodified letter only, none of them will do anything.
 
+### 6.1j The Mouse
+
+Clavus is keyboard-first and the keyboard still does everything. The
+mouse is a second way in, and nothing is reachable by mouse that is
+not reachable by keyboard.
+
+**Test:** start the TUI with a good number of sets and use the mouse
+only.
+
+**Expected:**
+
+- The **wheel** moves the selection, and the list scrolls so that the
+  selected row stays on the screen. A long list must scroll — if the
+  cursor walks off the bottom and the list does not move, that is a
+  bug.
+- A **single click** on a row selects it. The row must be visibly
+  marked, and the strip above the table must name it.
+- A **double click** on a row opens that set, exactly as `Enter` does.
+- A **click on the scrollbar**, on the right-hand edge, jumps the
+  window to that part of the list. The selection goes with it — the
+  cursor must never be left on a row that is not on the screen.
+- **Dragging** with the button held moves the selection to the row
+  under the pointer.
+- Clicking on the **title bar or the footer** must do nothing. It must
+  not select a row.
+
+**Test:** use the mouse and the keyboard together, and check that
+neither one breaks the other.
+
+**Expected:** The arrow keys still work, `S` still sorts, `/` still
+filters, `q` still quits.
+
+**Test:** start the TUI, quit it, and then type in the shell.
+
+**Expected:** The shell behaves normally. A terminal left reporting
+mouse events prints escape sequences into the prompt, and the shell
+looks broken — that is a bug, and it is the one to watch for here.
+Report it with the exact sequence your terminal was left in.
+
+**Test:** make the list long enough to scroll, and look at the
+scrollbar.
+
+**Expected:** It only appears when there is something to scroll. It
+shows roughly where in the list the window is.
+
 ### 6.1c Leaving the TUI
 
 **Test:** Start the TUI and press **Ctrl-C**.

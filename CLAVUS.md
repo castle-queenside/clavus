@@ -296,6 +296,56 @@ A message of any length is truncated rather than allowed to move the
 layout. A notification that shoves the rest of the bar sideways is a
 notification nobody can read.
 
+### The mouse
+Clavus is keyboard-first and the keyboard still does everything. The
+mouse is a second way in.
+
+- The **wheel** moves the selection.
+- A **click** picks the row under the pointer.
+- A **double click** opens the set — the same as `Enter`.
+- A **drag** with the button held makes the row under the pointer the
+  selected one.
+- Clicking the **scrollbar** jumps the window to that part of the
+  list.
+
+Nothing is reachable by mouse that is not reachable by keyboard.
+
+### The renderer owns the layout, and the mouse is told about it
+The renderer records a map of the rows it drew — `App.hits` — and the
+mouse handler looks a click up in that map. The layout is computed in
+one place, so the map can never disagree with what is on screen, and a
+test can check the map against the drawn rows instead of against a
+hand-written copy of the layout. The map is rebuilt every frame: the
+layout moves when the terminal is resized, and a stale map would send
+a click to a row that has moved.
+
+### A list that does not fit has to scroll
+The renderer works out how many rows fit, and `scroll_to_show()` keeps
+the cursor on the screen. The renderer is the authority because it is
+the only thing that knows how big the terminal is.
+
+Without it, the list was drawn from the top and clipped: the arrow
+keys still moved the cursor, so it walked off the bottom of the
+screen and the user was left with a selection they could not see and
+a list that never moved. A scrollbar down the right edge says where
+the window is, and clicking it jumps the window.
+
+The same bug was in the cue list, in a different form: the cue filter
+changes which notes are drawn, but the arrow keys walked the
+unfiltered list while the highlight was computed on the filtered one.
+
+### The mouse capture is undone on every way out
+The normal exit, the error paths and the panic hook all turn the
+capture off. A terminal left reporting mouse events prints escape
+sequences into the shell after the program has gone.
+
+crossterm asks the terminal to report **every movement** along with
+presses and releases, and the "any movement" mode is turned off again
+straight away: for a full-screen program every twitch of the mouse
+would arrive as an event, and every event draws a frame. Presses,
+releases, and the movement that happens while a button is held — which
+is how a list is dragged — are enough.
+
 ### Keys are normalised before they are matched
 crossterm reports an uppercase letter with the shift modifier set,
 because that is what the keyboard physically did: `S` arrives as
@@ -347,9 +397,13 @@ git add -A && git commit && git push
 - The project list can be filtered and sorted, shows the shape of each
   project's history, the notes still open on it and how long ago it
   was last edited, and names the set under the cursor
+- A long list scrolls, with a scrollbar, and the cursor never walks
+  off the screen
+- The mouse works: the wheel scrolls, a click picks, a double click
+  opens, a drag picks, and the scrollbar is a control
 - Capital-letter shortcuts work, and capital letters can be typed into
   a note or a search box
-- 545 tests passing, clippy clean, CI green
+- 564 tests passing, clippy clean, CI green
 - The Linux musl build runs on real Linux, and the release binary moves
   project bytes, audio and notes between three real machines over TCP —
   `scripts/two-machine-relay-test.sh`

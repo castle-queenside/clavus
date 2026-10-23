@@ -185,7 +185,11 @@ fn run_tui(
     // the terminal is put back, so the message reaches the screen.
     let default_hook = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
-        let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::event::DisableMouseCapture
+        );
         let _ = crossterm::terminal::disable_raw_mode();
         default_hook(info);
     }));
@@ -226,6 +230,37 @@ fn run_tui(
         anyhow::bail!("cannot clear the terminal: {}", e);
     }
 
+    // Ask the terminal to report the mouse.
+    //
+    // The keyboard still does everything — the mouse is a second way
+    // in, not the only way. But a terminal that is left reporting
+    // mouse events after the program has gone keeps printing escape
+    // sequences into the shell, so the capture has to be undone on
+    // every way out of here: the normal exit, the error paths, and
+    // the panic hook above.
+    if let Err(e) = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture) {
+        // A terminal that cannot report the mouse is not a reason to
+        // refuse to start. The keyboard still works.
+        let _ = e;
+    }
+
+    // Turn off the terminal's "report every movement" mode.
+    //
+    // crossterm asks for it along with everything else, and it is the
+    // wrong thing for a full-screen program: every twitch of the
+    // mouse would arrive as an event, and every event draws a frame.
+    // A user moving the mouse across the window would have the app
+    // redrawing as fast as the terminal could send, for no gain — the
+    // program does not highlight anything under the pointer.
+    //
+    // What is left is enough: presses and releases, and the movement
+    // that happens while a button is held, which is how a list is
+    // dragged.
+    let _ = crossterm::execute!(
+        std::io::stdout(),
+        crossterm::style::Print("\x1b[?1003l")
+    );
+
     loop {
         terminal.draw(|f| ui::render(f, &mut app))?;
 
@@ -236,15 +271,15 @@ fn run_tui(
         // A read error means the terminal is gone (the input was closed,
         // for instance). The old loop ignored the error and spun
         // forever, so `clavus tui` hung with no way out.
-        let key = match crossterm::event::poll(std::time::Duration::from_millis(150)) {
+        let event = match crossterm::event::poll(std::time::Duration::from_millis(150)) {
             Ok(true) => match crossterm::event::read() {
-                Ok(crossterm::event::Event::Key(key)) => Some(key),
-                Ok(_) => None,
+                Ok(event) => Some(event),
                 Err(e) => {
                     // Restore the terminal before leaving.
                     let _ = crossterm::execute!(
                         std::io::stdout(),
-                        crossterm::terminal::LeaveAlternateScreen
+                        crossterm::terminal::LeaveAlternateScreen,
+                        crossterm::event::DisableMouseCapture
                     );
                     let _ = crossterm::terminal::disable_raw_mode();
                     anyhow::bail!("the terminal is gone: {}", e);
@@ -254,17 +289,26 @@ fn run_tui(
             Err(e) => {
                 let _ = crossterm::execute!(
                     std::io::stdout(),
-                    crossterm::terminal::LeaveAlternateScreen
+                    crossterm::terminal::LeaveAlternateScreen,
+                    crossterm::event::DisableMouseCapture
                 );
                 let _ = crossterm::terminal::disable_raw_mode();
                 anyhow::bail!("cannot read from the terminal: {}", e);
             }
         };
 
-        if let Some(key) = key {
-            if clavus_tui::handle_key(&key, &mut app) {
-                break;
+        match event {
+            Some(crossterm::event::Event::Key(key)) => {
+                if clavus_tui::handle_key(&key, &mut app) {
+                    break;
+                }
             }
+            Some(crossterm::event::Event::Mouse(mouse)) => {
+                if clavus_tui::mouse::handle_mouse(&mouse, &mut app) {
+                    break;
+                }
+            }
+            Some(_) | None => {}
         }
 
         // Pick up connection status changes from the background sync thread.
@@ -274,7 +318,15 @@ fn run_tui(
         app.tick();
     }
 
-    crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen)?;
+    // The mouse capture is undone last, so the terminal is still
+    // reporting the mouse while the screen is being put back. A
+    // terminal left reporting mouse events prints escape sequences
+    // into the shell after the program has gone.
+    crossterm::execute!(
+        std::io::stdout(),
+        crossterm::event::DisableMouseCapture,
+        crossterm::terminal::LeaveAlternateScreen
+    )?;
     crossterm::terminal::disable_raw_mode()?;
     Ok(())
 }
