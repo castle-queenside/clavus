@@ -299,7 +299,7 @@ git add -A && git commit && git push
 - A store that cannot be read is an error, never an empty history
 - The TUI survives any terminal size, shows its selection, and notices
   a relay that has gone away
-- 509 tests passing, clippy clean, CI green
+- 512 tests passing, clippy clean, CI green
 
 ### Blocked ⛔
 | Item | Blocker |

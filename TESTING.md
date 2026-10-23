@@ -32,7 +32,23 @@
 | Core unit tests | `crates/core/src/**` | 33 | 🟢 |
 | Sync unit tests (blob transfer) | `crates/sync/src/**` | 10 | 🟢 |
 
-**503 tests passing, 0 failed, 0 ignored.**
+**512 tests passing, 0 failed, 0 ignored.**
+The palette is Clavus's own, not the terminal's. A panel that sets no
+background of its own shows the *terminal's* background through, and
+the screen is then half Clavus's warm black and half whatever the
+terminal was configured with. Over a remote session, where the
+terminal on the other end is a different program with a different
+theme, that reads as a patchy screen with different colour
+backgrounds. Every screen is now checked for cells left on the
+terminal's own background.
+
+The selected row was a full block of the accent green. A bright bar
+that travels as the cursor moves is hard to read and draws the eye, so
+the row is *raised* instead — a dark green surface, plainly different
+from the panel around it, with a `▌` marker in the badge's own column
+so the row's text does not move when it is selected. A row that
+shifts sideways under the cursor reads as a glitch.
+
 
 The wave-five batch includes the Live user-library fix: a set that
 points at `Samples/kick.wav` means the file in Live's own user library

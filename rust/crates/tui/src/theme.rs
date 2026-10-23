@@ -37,6 +37,16 @@ pub const MUTED:        Color = Color::Rgb(90, 101, 104);
 /// Interactive accent — soft green, Omarchy's signature.
 pub const ACCENT:       Color = Color::Rgb(116, 224, 140);
 
+/// The accent, used as a *background*.
+///
+/// A whole row filled with the full accent is a bright block that
+/// moves as the cursor moves. It is hard to read against, and over a
+/// remote session it is the thing that draws the eye. The selected
+/// row is raised instead: a dark green that is clearly a different
+/// surface from the panel around it, with the accent kept for the
+/// text and the marker.
+pub const ACCENT_DIM:   Color = Color::Rgb(24, 44, 31);
+
 /// Warm amber — markers, snapshots, timestamps.
 pub const WARM:         Color = Color::Rgb(233, 180, 85);
 
@@ -61,6 +71,7 @@ pub const S_BG:          Style = Style::new().bg(BG);
 pub const S_PANEL_0:     Style = Style::new().bg(PANEL_0);
 pub const S_PANEL_1:     Style = Style::new().bg(PANEL_1);
 pub const S_ACCENT:      Style = Style::new().fg(ACCENT);
+pub const S_ACCENT_DIM:  Style = Style::new().bg(ACCENT_DIM);
 pub const S_WARM:        Style = Style::new().fg(WARM);
 pub const S_GOLD:        Style = Style::new().fg(GOLD);
 pub const S_GREEN:       Style = Style::new().fg(GREEN);

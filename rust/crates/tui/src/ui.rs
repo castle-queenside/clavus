@@ -35,9 +35,20 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             )
         };
         let area = Rect::new(size.x, size.y, size.width, 1);
-        frame.render_widget(Paragraph::new(msg).style(Style::new().fg(MUTED)), area);
+        frame.render_widget(
+            Paragraph::new(msg).style(Style::new().fg(MUTED).bg(BG)),
+            area,
+        );
         return;
     }
+
+    // The canvas is painted before anything else. A widget that does
+    // not set a background of its own would otherwise show the
+    // *terminal's* background through, and the screen would then be
+    // half Clavus's warm black and half whatever the terminal was
+    // configured with — which reads as a patchy screen over SSH, and
+    // changes colour when the terminal is reconfigured.
+    frame.render_widget(Block::default().style(S_BG), size);
 
     match app.screen {
         Screen::ProjectList  => render_project_list(frame, app),
@@ -111,10 +122,22 @@ fn render_project_list(frame: &mut Frame, app: &mut App) {
     // ── Project rows ──────────────────────────────────────────────
     let rows: Vec<Row<'_>> = app.projects.iter().enumerate().map(|(i, p)| {
         let sel = Some(i) == app.selected_project;
-        let bg = if sel { ACCENT } else { PANEL_0 };
-        let fg = if sel { BG } else { TEXT };
+        // A whole row filled with the full accent is a bright block
+        // that travels as the cursor moves. The selected row is raised
+        // instead — a dark green that is plainly a different surface
+        // from the panel around it.
+        let bg = if sel { ACCENT_DIM } else { PANEL_0 };
+        let fg = TEXT;
 
         let type_badge = if p.project_type == "Ableton" { "ALS" } else { "BW" };
+        // The marker sits in the type badge's own column, so the text
+        // does not move when the row is selected. A row that shifts
+        // under the cursor reads as a glitch.
+        let type_cell = if sel {
+            format!("\u{258c}{}", type_badge)
+        } else {
+            format!(" {}", type_badge)
+        };
 
         // Snapshot badge: count + short hash, or muted dash
         let (snap_text, snap_fg) = if p.snap_count > 0 {
@@ -123,15 +146,15 @@ fn render_project_list(frame: &mut Frame, app: &mut App) {
                 .as_ref()
                 .map(|h| clavus_core::short(h, 8))
                 .unwrap_or_else(|| "?".to_string());
-            (format!("{}·{}", p.snap_count, hash), ACCENT)
+            (format!("{}\u{00b7}{}", p.snap_count, hash), ACCENT)
         } else {
-            ("—".to_string(), MUTED)
+            ("\u{2014}".to_string(), MUTED)
         };
 
         let modified = unix_to_rel(p.modified_secs);
 
         Row::new(vec![
-            Span::raw(type_badge),
+            Span::raw(type_cell),
             Span::raw(&p.name),
             Span::raw(p.folder.clone()),
             Span::raw(snap_text).style(Style::new().fg(snap_fg)),
@@ -153,8 +176,13 @@ fn render_project_list(frame: &mut Frame, app: &mut App) {
         Constraint::Length(9),
     ])
     .header(header_row)
-    .block(Block::default().borders(Borders::ALL).border_style(Style::new().fg(LINE)))
-    .style(Style::new().fg(TEXT));
+    .block(Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::new().fg(LINE))
+        // The panel's own surface, so the border and the empty space
+        // below the list are the same colour as the rows.
+        .style(Style::new().bg(PANEL_0)))
+    .style(Style::new().fg(TEXT).bg(PANEL_0));
 
     frame.render_widget(table, body);
 }
@@ -212,8 +240,9 @@ fn render_project_detail(frame: &mut Frame, app: &mut App) {
         .title(format!(" tracks  {} ", project.tracks.len()))
         .title_style(Style::new().fg(MUTED).add_modifier(Modifier::BOLD))
         .borders(Borders::ALL)
-        .border_style(Style::new().fg(LINE)))
-    .style(Style::new().fg(TEXT));
+        .border_style(Style::new().fg(LINE))
+        .style(Style::new().bg(PANEL_0)))
+    .style(Style::new().fg(TEXT).bg(PANEL_0));
 
     frame.render_widget(tracks_table, tracks_col);
 
@@ -313,9 +342,13 @@ fn render_cue_list(frame: &mut Frame, app: &mut App) {
             // The selected row is highlighted. The arrow keys moved a
             // cursor that could not be seen, so the user did not know
             // which note the keys acted on.
+            //
+            // The highlight is a raised surface rather than a block of
+            // the full accent: a bright bar that travels as the cursor
+            // moves is hard to read and draws the eye.
             let selected = app.selected_cue == Some(*index);
-            let bg = if selected { ACCENT } else { PANEL_0 };
-            let fg = if selected { BG } else { color };
+            let bg = if selected { ACCENT_DIM } else { PANEL_0 };
+            let fg = if selected { TEXT } else { color };
 
             let line1 = Line::raw(format!(
                 "{} {}  {:12}  {}",
@@ -329,7 +362,7 @@ fn render_cue_list(frame: &mut Frame, app: &mut App) {
                 clavus_core::short(&c.id, 8),
                 c.author
             ))
-                .style(Style::new().fg(if selected { BG } else { MUTED }).bg(bg));
+                .style(Style::new().fg(MUTED).bg(bg));
 
             ListItem::new(vec![line1, line2])
         })
@@ -338,8 +371,9 @@ fn render_cue_list(frame: &mut Frame, app: &mut App) {
     let list = List::new(cue_rows)
         .block(Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::new().fg(LINE)))
-        .style(S_BG);
+            .border_style(Style::new().fg(LINE))
+            .style(Style::new().bg(PANEL_0)))
+        .style(Style::new().fg(TEXT).bg(PANEL_0));
 
     let list_area = if filter.is_some() {
         Rect::new(body.x, body.y + 1, body.width, body.height.saturating_sub(1))
@@ -453,10 +487,10 @@ fn render_snapshot_list(frame: &mut Frame, app: &mut App) {
             let ts = unix_to_rel(s.timestamp as i64);
             // The selected row is highlighted — see the cue list.
             let selected = app.selected_snapshot == Some(row);
-            let bg = if selected { ACCENT } else { PANEL_0 };
-            let fg = if selected { BG } else { TEXT };
+            let bg = if selected { ACCENT_DIM } else { PANEL_0 };
+            let fg = TEXT;
             Row::new(vec![
-                Span::raw(clavus_core::short(&s.hash, 8)).style(Style::new().fg(if selected { BG } else { WARM })),
+                Span::raw(clavus_core::short(&s.hash, 8)).style(Style::new().fg(if selected { ACCENT } else { WARM })),
                 Span::raw(s.message.replace('\n', " ")),
                 Span::raw(format!("{:.0}", s.bpm)),
                 Span::raw(s.track_count.to_string()),
@@ -479,8 +513,9 @@ fn render_snapshot_list(frame: &mut Frame, app: &mut App) {
     .header(snap_header)
     .block(Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::new().fg(LINE)))
-    .style(Style::new().fg(TEXT));
+        .border_style(Style::new().fg(LINE))
+        .style(Style::new().bg(PANEL_0)))
+    .style(Style::new().fg(TEXT).bg(PANEL_0));
 
     frame.render_widget(table, body);
 }
