@@ -78,6 +78,15 @@ pub fn decompress_als_bytes(raw: &[u8]) -> std::io::Result<(Vec<u8>, bool)> {
     const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
     if raw.len() >= 2 && raw[0] == GZIP_MAGIC[0] && raw[1] == GZIP_MAGIC[1] {
         Ok((flate2_decode(raw)?, true))
+    } else if raw.len() >= 2 && raw[0] == 0xab && raw[1] == 0x1e {
+        // Live's own compressed document format, which it used before
+        // gzip. It is a binary serialisation, not XML, so there is
+        // nothing to decompress into text.
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "this set uses Live's old compressed format, which Clavus cannot read; \
+             open it in Live and save it again to convert it",
+        ))
     } else {
         // Not gzip — treat as plain XML.
         Ok((raw.to_vec(), false))
@@ -140,7 +149,7 @@ pub fn audit_project(project_path: &Path) -> Result<SampleAuditReport, ClavusErr
         embedded.len(),
         project_path.display()
     );
-    audit_sample_refs(&refs, project_root, &embedded)
+    audit_sample_refs(&refs, project_root, &embedded, ext == "bwproject")
 }
 
 /// Validate that `xml` is an Ableton Live set.
@@ -396,6 +405,7 @@ fn audit_sample_refs(
     paths: &[PathBuf],
     project_root: &Path,
     archive_files: &[String],
+    is_bundle: bool,
 ) -> Result<SampleAuditReport, ClavusError> {
     let mut collected = Vec::new();
     let mut missing = Vec::new();
@@ -450,21 +460,50 @@ fn audit_sample_refs(
             .unwrap_or_default();
 
         // Try multiple resolution strategies:
-        // 1. As-is from the .als (may be relative or absolute)
-        // 2. Relative to project root (most common)
-        // 3. Relative to project root, matching each path component
+        // 1. Relative to the project root (most common). An absolute
+        //    reference names a place on disk directly — `join` on an
+        //    absolute path replaces the base — so one candidate covers
+        //    both.
+        // 2. Relative to project root, matching each path component
         //    case-insensitively — Live has been known to change the case
         //    of a folder in a saved set.
+        //
+        // A reference is resolved against the *project*, never against
+        // the process's current directory. The working directory is not
+        // part of the set: a file with the same name in whatever folder
+        // the command happened to be run from could be picked up instead
+        // of the copy inside the project, and the report then claimed the
+        // sample was outside the project. That made the audit depend on
+        // where it was run, and made two runs of the same command
+        // disagree.
         //
         // A search for *any* file with a matching name under the project
         // used to be the third strategy. It accepted a file the set never
         // referenced, so a set pointing at a sample that is not there
         // audited as clean and the snapshot recorded a path that does not
         // exist.
-        let mut candidates: Vec<PathBuf> = vec![
-            abs_root.join(path),
-            path.clone(),
-        ];
+        let mut candidates: Vec<PathBuf> = vec![abs_root.join(path)];
+
+        // A bundle is a self-contained project: a relative reference in
+        // it points *inside the bundle*. That is where the sample lives,
+        // so the bundle is asked before the disk. A file with the same
+        // name sitting next to the bundle is not the sample the project
+        // uses, and treating it as one hides a bundle that would open
+        // without its audio.
+        if is_bundle && path.is_relative() {
+            if let Some(entry) = archive_entry_at(archive_files, path) {
+                embedded.push(SampleRef {
+                    path: path.clone(),
+                    filename,
+                    resolved_path: None,
+                    relpath_from_project: None,
+                    hash: None,
+                    size_bytes: 0,
+                    archive_entry: Some(entry),
+                });
+                continue;
+            }
+        }
 
         if path.is_relative() {
             if let Some(found) = resolve_case_insensitive(&abs_root, path) {
@@ -1404,6 +1443,20 @@ fn volume_root(path: &Path) -> Option<PathBuf> {
 
 /// Resolve a case-insensitive path, used when a Live set has changed the
 /// case of a folder since the sample was recorded.
+/// The archive entry that sits at exactly this relative path.
+///
+/// A bundle's own references are paths inside the bundle, so the entry
+/// has to match the whole path and not just the file name: `samples/kick.wav`
+/// and `loops/kick.wav` are two different samples that happen to share a
+/// name.
+fn archive_entry_at(archive_files: &[String], reference: &Path) -> Option<String> {
+    let reference = reference.to_string_lossy().replace('\\', "/");
+    archive_files
+        .iter()
+        .find(|entry| entry.replace('\\', "/").eq_ignore_ascii_case(&reference))
+        .cloned()
+}
+
 fn resolve_case_insensitive(root: &Path, rel: &Path) -> Option<PathBuf> {
     let mut current = root.to_path_buf();
     for component in rel.components() {

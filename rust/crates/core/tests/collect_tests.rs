@@ -671,3 +671,80 @@ fn test_collect_extracts_a_sample_from_the_archive() {
         "the project should point at the copy inside the bundle"
     );
 }
+
+// ─── The working directory is not part of a project ───────────────────────
+//
+// Regression: a relative sample reference was also resolved against the
+// process's current directory. The audit then depended on where the
+// command happened to be run from: a file with the same name in the
+// working directory was picked up instead of the copy inside the project,
+// and the report claimed the sample was outside the project.
+//
+// That made two runs of the same command disagree — once the working
+// directory happened to hold a `samples/kick.wav`, the audit of a bundle
+// that carries its own copy of that sample went from clean to "outside
+// the project".
+
+/// A bundle that points at its own copy of a sample must audit clean even
+/// when the working directory holds a file of the same name.
+#[test]
+fn test_a_bundle_ignores_a_same_named_file_in_the_working_directory() {
+    let _guard = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let tmp = TempDir::new().unwrap();
+    let proj = tmp.path().join("Test.bwproject");
+    // The reference already points inside the bundle.
+    make_bwproject(&proj, "kick.wav", "samples/kick.wav", true);
+
+    // Somewhere else on the machine there is a file with the same name,
+    // and the command happens to be run from there.
+    let elsewhere = TempDir::new().unwrap();
+    make_sample(&elsewhere.path().join("samples").join("kick.wav"), b"RIFF----WAVEfake");
+
+    let prev_cwd = std::env::current_dir().unwrap();
+    std::env::set_current_dir(elsewhere.path()).unwrap();
+    let report = audit_project(&proj);
+    std::env::set_current_dir(prev_cwd).unwrap();
+
+    let report = report.unwrap();
+    assert!(
+        report.is_clean(),
+        "the bundle carries its own sample, so it is present: {:?}",
+        report
+    );
+    assert_eq!(report.embedded.len(), 1);
+    assert!(report.outside_project.is_empty());
+}
+
+/// A relative reference names a file next to the *set*, not next to
+/// whoever happens to be running the command.
+#[test]
+fn test_a_relative_reference_is_not_satisfied_by_the_working_directory() {
+    let _guard = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let tmp = TempDir::new().unwrap();
+    let project_dir = tmp.path().join("proj");
+    fs::create_dir_all(&project_dir).unwrap();
+    let als_path = project_dir.join("Rel.als");
+    make_als(&als_path, &als_xml(&[("Samples/kick.wav", "kick.wav")]));
+
+    // The working directory has a file of that name — but the project
+    // does not, so the sample is genuinely missing.
+    let elsewhere = TempDir::new().unwrap();
+    make_sample(&elsewhere.path().join("Samples").join("kick.wav"), b"audio data");
+
+    let prev_cwd = std::env::current_dir().unwrap();
+    std::env::set_current_dir(elsewhere.path()).unwrap();
+    let report = audit_project(&als_path);
+    std::env::set_current_dir(prev_cwd).unwrap();
+
+    let report = report.unwrap();
+    assert_eq!(
+        report.missing.len(),
+        1,
+        "the sample is not in the project, so it is missing: {:?}",
+        report
+    );
+    assert!(report.outside_project.is_empty());
+    assert!(report.collected.is_empty());
+}
