@@ -10,7 +10,7 @@
 | Parser ALS | `crates/parser-als/tests/als_parser.rs` | 48 | 🟢 |
 | Parser ALS (real sets) | `crates/parser-als/tests/real_world_tests.rs` | 17 | 🟢 |
 | Parser Bitwig | `crates/parser-bw/tests/bw_parser.rs` | 21 | 🟢 |
-| Sample audit + collect | `crates/core/tests/collect_tests.rs` | 22 | 🟢 |
+| Sample audit + collect | `crates/core/tests/collect_tests.rs` | 24 | 🟢 |
 | BlobStore / snapshot core | `crates/core/tests/core_tests.rs` | 42 | 🟢 |
 | Cue store | `crates/core/tests/cue_tests.rs` | 26 | 🟢 |
 | Property-based (core) | `crates/core/tests/property_tests.rs` | 11 | 🟢 |
@@ -37,7 +37,7 @@
 | Sync unit tests (blob transfer) | `crates/sync/src/**` | 10 | 🟢 |
 | Two machines, one relay | `scripts/two-machine-relay-test.sh` | 3 machines | 🟢 |
 
-**594 tests passing, 0 failed, 0 ignored**, plus a three-machine relay
+**596 tests passing, 0 failed, 0 ignored**, plus a three-machine relay
 test that runs the real Linux binary over real TCP.
 The palette is Clavus's own, not the terminal's. A panel that sets no
 background of its own shows the *terminal's* background through, and
@@ -257,6 +257,7 @@ real ones. Each now has a regression test:
 | A migrated note could not be read | The older version wrote `pending` in lower case; this one writes `Pending`, and the reader only knew one spelling | The spelling is matched without regard to case |
 | A dry run left a store behind | The store's directories were created before the migration knew whether it was a dry run | The store is opened for writing only when something is actually written |
 | The wrong file of two with the same name was used | A library can hold `Me And You/Me And You.als` and `Me And You/Me And You Project/Me And You.als`. The old store named the right one, and the part of its path after the library folder is still true | The old path is mapped onto where the sets live now, and the name is only a fallback |
+| The audit depended on where the command was run | A relative sample reference was resolved against the project *and* against the process's current directory. A file with the same name in the working directory was picked up instead of the copy inside the project, and the report said the sample was outside the project — so two runs of the same command could disagree | A reference is resolved against the project only. A bundle's relative reference points inside the bundle, so the bundle is asked before the disk |
 
 ---
 

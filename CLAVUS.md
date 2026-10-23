@@ -234,6 +234,15 @@ list, so a reader knows whose clock they are looking at.
 - Distinguishes "collected" (inside project) vs "outside_project" vs "missing".
 - This is the core differentiation from generic file backup tools.
 
+A sample reference is resolved against the **project**, never against the
+process's current directory. A relative path in a Live set means "next to
+the set", and the folder a command happens to be run from is not part of
+the set. Resolving it against both made the audit depend on where it was
+run, and two runs of the same command could disagree. A `.bwproject` is a
+bundle, so its own relative reference points *inside the bundle* — the
+bundle is asked before the disk, because a file of the same name sitting
+next to the bundle is not the sample the project uses.
+
 ### Sync protocol (TCP framed JSON)
 - 4-byte BE length prefix per message.
 - `SyncClient` connects, sends `Hello`, then receives `Subscribed`.
@@ -434,7 +443,7 @@ git add -A && git commit && git push
   opens, a drag picks, and the scrollbar is a control
 - Capital-letter shortcuts work, and capital letters can be typed into
   a note or a search box
-- 594 tests passing, clippy clean, CI green
+- 596 tests passing, clippy clean, CI green
 - The `.als` parser reads the real library: 1,242 of 1,245 sets from
   Live 8 to Live 12 report their real track count, tempo, track names
   and devices. The other three are in Live's old binary format and say
