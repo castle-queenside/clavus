@@ -264,6 +264,51 @@ through `clavus_core`: `default_author()` for a note's author, and
 - Spacing: 4pt grid (`sp1()` = 4, `sp2()` = 8, etc.)
 - Cliamp spectrum: 10-band LED bars, activated when relay connected
 
+### Browsing a library
+A list of a thousand sets has to answer two questions at a glance:
+which one do I want, and which ones am I actually working on. The
+second one is what the row is built around:
+
+- `WORK` — the shape of the project's own history, one bar per slice
+  of its life, tallest where the work clustered.
+- `OPEN` — how many notes are still open on it.
+- `AGE` — how long ago the file itself was last edited.
+- A strip above the table naming the set under the cursor.
+
+The history shape **has a floor of one day on its axis**
+(`spark::MIN_SPAN`). Without it, six snapshots taken in one afternoon
+land in six different slices of a six-second span, and the chart is a
+row of bars that says nothing. With it, one sitting reads as one
+burst and a few months of work reads as a spread. The difference is
+the thing worth seeing.
+
+An empty slice is drawn as the shortest bar in the quietest colour,
+not as a space, so the column reads as one chart with a baseline and a
+project with no history at all reads as a flat line.
+
+The first question has two answers: `/` filters the list as you type,
+across names and folders, and `S` cycles the order — recent, name,
+history, open notes. The order in force is always named in the footer.
+
+**The footer is three regions of fixed width** — what the list is doing
+on the left, a message in the middle, the relay's state on the right.
+A message of any length is truncated rather than allowed to move the
+layout. A notification that shoves the rest of the bar sideways is a
+notification nobody can read.
+
+### Keys are normalised before they are matched
+crossterm reports an uppercase letter with the shift modifier set,
+because that is what the keyboard physically did: `S` arrives as
+`Char('S')` plus `SHIFT`. `keys::normalise()` drops the shift
+modifier from a character key — but only when no other modifier is
+held, so Ctrl-Shift-C is not read as a capital C.
+
+Without this, every capital-letter shortcut was alive in the tests and
+dead in the program, because the tests built their key events by hand
+with no modifiers. `S` to sort, `P` to push and `G` to pull did
+nothing, and no capital letter could be typed into a note or a search
+box. **A key test must use the shape a terminal actually sends.**
+
 ## Verify Workflow
 
 ```
@@ -299,7 +344,12 @@ git add -A && git commit && git push
 - A store that cannot be read is an error, never an empty history
 - The TUI survives any terminal size, shows its selection, and notices
   a relay that has gone away
-- 512 tests passing, clippy clean, CI green
+- The project list can be filtered and sorted, shows the shape of each
+  project's history, the notes still open on it and how long ago it
+  was last edited, and names the set under the cursor
+- Capital-letter shortcuts work, and capital letters can be typed into
+  a note or a search box
+- 545 tests passing, clippy clean, CI green
 - The Linux musl build runs on real Linux, and the release binary moves
   project bytes, audio and notes between three real machines over TCP —
   `scripts/two-machine-relay-test.sh`

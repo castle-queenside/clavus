@@ -148,7 +148,42 @@ c          Connect relay (in Sync screen)
 r          Relay address (in Sync screen)
 P          Push
 G          Pull
+/          Filter the project list
+S          Cycle the project sort (recent → name → history → open notes)
 Esc/q      Back / quit
+```
+
+### Browsing a library
+
+A library of a thousand sets needs two questions answered at a glance:
+*which one do I want*, and *which ones am I actually working on*.
+
+The second question is what the list is built around. Every row carries
+the shape of that project's own history — one bar per slice of the
+project's life, tallest where the work clustered — the number of notes
+still open on it, and how long ago the file was last edited. A strip
+above the table names the set under the cursor, so the selection is
+never a guess.
+
+The first question has two answers. `/` filters the list as you type,
+across project names and folders, and shows what matched rather than
+silently hiding the rest. `S` cycles the order: most recent, by name, by
+the length of the history, or by the notes still open. The sort in
+force is always named in the footer, so the order is never a mystery.
+
+The footer is three regions of fixed width — what the list is doing on
+the left, a message in the middle, and the relay's state on the right.
+A message of any length is truncated rather than allowed to shove the
+rest of the bar sideways. That is the whole point of it: a
+notification that moves the layout is a notification nobody can read.
+
+```
+│ ▸ Tin Roof Sessions  8 snapshots  ○1 open  edited 9m                  │
+│TYPE  NAME              FOLDER           SNAPS      BPM  TRACKS WORK OPEN  AGE│
+│ ALS  Midnight Drive    sets/Midnight    6·489c61e  128  9     ▄▁▄▁▄▁▄█ ○2   9m │
+│ ALS  Tin Roof Sessions sets/Tin Roof    8·95bbe5b  128  12    ▄▁▄▁▄▄██ ○1   9m │
+│ ALS  Harbour Lights    sets/Harbour     5·ef3f314  128  7     █▁▁█▁███ —    9m │
+│ recent  /roof            ↑↓ navigate · Enter open · S sort · q quit  ○ offline│
 ```
 
 ---

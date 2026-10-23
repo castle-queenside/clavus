@@ -6,10 +6,43 @@
 use crate::app::{App, CueStep, Screen, SyncCmd};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+/// The key as the application sees it.
+///
+/// crossterm reports an uppercase letter with the shift modifier set,
+/// because that is what the keyboard physically did: typing `S`
+/// arrives as `Char('S')` plus `SHIFT`. The application does not
+/// care — `S` is `S` however it was typed, and the character itself
+/// already says whether it was shifted.
+///
+/// Without this, every capital-letter shortcut was dead in a real
+/// terminal and alive in the tests, because the tests built the event
+/// by hand with no modifiers. `S` to sort, `P` to push and `G` to pull
+/// on the sync screen all did nothing, and no capital letter could be
+/// typed into a cue or a search box.
+///
+/// The shift modifier is only dropped when no other modifier is
+/// held. Ctrl-Shift-C is not a capital C, and must not be read as one.
+fn normalise(key: &KeyEvent) -> KeyEvent {
+    if let KeyCode::Char(c) = key.code {
+        if !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            return KeyEvent::new(
+                KeyCode::Char(c),
+                key.modifiers.difference(KeyModifiers::SHIFT),
+            );
+        }
+    }
+    *key
+}
+
 /// Handle a key press.
 ///
 /// Returns `true` when the application should exit.
 pub fn handle_key(key: &KeyEvent, app: &mut App) -> bool {
+    let key = &normalise(key);
+
     // While a text field has the focus, the field owns the keyboard.
     //
     // The quit/back key used to be handled first, so typing a "q" in the
@@ -17,6 +50,12 @@ pub fn handle_key(key: &KeyEvent, app: &mut App) -> bool {
     // No word containing a lowercase "q" could be typed.
     if app.screen == Screen::CueAdd || app.screen == Screen::RelayInput {
         return handle_text_input(key, app);
+    }
+
+    // While the filter is being typed the filter owns the keyboard.
+    // Otherwise a "q" in a search term would quit the program.
+    if app.filtering {
+        return handle_filter_input(key, app);
     }
 
     match (key.code, key.modifiers) {
@@ -72,20 +111,24 @@ pub fn handle_key(key: &KeyEvent, app: &mut App) -> bool {
             // disagreed about the same project until the TUI was
             // restarted. It is refreshed as the user moves through it.
             app.refresh_project_counts();
-            if let Some(i) = app.selected_project {
-                if i + 1 < self_len(app) {
-                    app.selected_project = Some(i + 1);
-                }
-            } else if !app.projects.is_empty() {
-                app.selected_project = Some(0);
-            }
+            app.move_selection(1);
         }
         (KeyCode::Up, _) if app.screen == Screen::ProjectList => {
-            if let Some(i) = app.selected_project {
-                if i > 0 {
-                    app.selected_project = Some(i - 1);
-                }
-            }
+            app.move_selection(-1);
+        }
+
+        // ── Organising the list ─────────────────────────────────
+        //
+        // A library of sets can be a thousand strong. Two ways to
+        // find the one you want: narrow it, or order it differently.
+        (KeyCode::Char('/'), KeyModifiers::NONE) if app.screen == Screen::ProjectList => {
+            app.filtering = true;
+            app.set_info(String::new());
+        }
+        (KeyCode::Char('S'), KeyModifiers::NONE) if app.screen == Screen::ProjectList => {
+            app.cycle_sort();
+            let label = app.sort.label();
+            app.set_info(format!("sorted by {}", label));
         }
 
         // ── Project Detail ───────────────────────────
@@ -253,9 +296,37 @@ pub fn handle_key(key: &KeyEvent, app: &mut App) -> bool {
     false
 }
 
-/// The number of projects in the list.
-fn self_len(app: &App) -> usize {
-    app.projects.len()
+/// Handle a key press while the project filter has the focus.
+///
+/// The filter narrows the list as it is typed. Enter keeps it, Esc
+/// throws it away — the same as every other filter worth using.
+fn handle_filter_input(key: &KeyEvent, app: &mut App) -> bool {
+    match (key.code, key.modifiers) {
+        (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+            return true;
+        }
+        (KeyCode::Enter, _) => {
+            app.filtering = false;
+            app.clear_messages();
+        }
+        (KeyCode::Esc, _) => {
+            app.filtering = false;
+            app.clear_filter();
+            app.clear_messages();
+        }
+        (KeyCode::Backspace, _) => {
+            let mut buf = app.filter.clone();
+            buf.pop();
+            app.set_filter(buf);
+            app.ensure_selection_visible();
+        }
+        (KeyCode::Char(c), KeyModifiers::NONE) => {
+            app.set_filter(format!("{}{}", app.filter, c));
+            app.ensure_selection_visible();
+        }
+        _ => {}
+    }
+    false
 }
 
 /// Handle a key press while a text field has the focus.

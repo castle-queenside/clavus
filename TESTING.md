@@ -22,6 +22,7 @@
 | TUI (beta regressions) | `crates/tui/tests/beta_tui_tests.rs` | 10 | 🟢 |
 | TUI (sync round trip) | `crates/tui/tests/sync_blob_tests.rs` | 1 | 🟢 |
 | TUI (fourth wave) | `crates/tui/tests/wave4_tests.rs` | 13 | 🟢 |
+| TUI (browsing a library) | `crates/tui/tests/workbench_tests.rs` | 24 | 🟢 |
 | CLI commands | `crates/cli/tests/cli_tests.rs` | 54 | 🟢 |
 | CLI (beta regressions) | `crates/cli/tests/beta_cli_tests.rs` | 17 | 🟢 |
 | CLI (second beta wave) | `crates/cli/tests/wave2_tests.rs` | 6 | 🟢 |
@@ -33,7 +34,7 @@
 | Sync unit tests (blob transfer) | `crates/sync/src/**` | 10 | 🟢 |
 | Two machines, one relay | `scripts/two-machine-relay-test.sh` | 3 machines | 🟢 |
 
-**512 tests passing, 0 failed, 0 ignored**, plus a three-machine relay
+**545 tests passing, 0 failed, 0 ignored**, plus a three-machine relay
 test that runs the real Linux binary over real TCP.
 The palette is Clavus's own, not the terminal's. A panel that sets no
 background of its own shows the *terminal's* background through, and
@@ -465,6 +466,65 @@ The harness lives outside the repository, in `~/agent-state/beta-lab/`:
 
 Every agent runs the **compiled binary** in its own `CLAVUS_DATA`
 sandbox. The repository is never touched.
+
+---
+
+## Browsing a Library of Projects ✅
+
+A user with a thousand sets needs two questions answered at a glance:
+*which one do I want*, and *which ones am I actually working on*. The
+list now answers both, and the tests in
+`crates/tui/tests/workbench_tests.rs` drive the real application state
+and the real key handler — twenty-four of them.
+
+What the list shows:
+
+| Column | What it answers |
+|--------|------------------|
+| `SNAPS` | How much history this set has |
+| `WORK` | The shape of that history — one bar per slice of the project's own life, tallest where the work clustered |
+| `OPEN` | How many notes are still open on it |
+| `AGE` | How long ago the file itself was last edited |
+| `FOLDER` | Where the set lives, so two sets with the same name can be told apart |
+
+and a strip above the table naming the set under the cursor, so the
+selection is never a guess.
+
+**The history shape had to be made honest.** The first version divided
+the project's own lifetime into eight slices and put each snapshot in
+the slice it belonged to. A producer takes six snapshots in one
+afternoon, and six snapshots inside six seconds land in six different
+slices — so the chart was a row of bars that said nothing at all. The
+axis now has a floor of one day: work done in one sitting reads as
+one burst, and work spread over months reads as a spread. The
+difference between the two is the thing worth seeing.
+
+**A bug that only a real terminal could find.** crossterm reports an
+uppercase letter with the shift modifier set, because that is what the
+keyboard physically did: typing `S` arrives as `Char('S')` plus
+`SHIFT`. Every key test in the suite built its events by hand with no
+modifiers, so the capital-letter shortcuts were alive in the tests and
+dead in the program — `S` to sort, `P` to push and `G` to pull on the
+sync screen all did nothing, and no capital letter could be typed into
+a note or a search box. The keys are now normalised once, at the top
+of the handler, and the shift modifier is only dropped when no other
+modifier is held, so Ctrl-Shift-C is not read as a capital C.
+
+The regression tests for this use the shape a terminal actually sends
+(`Char('S')` with `SHIFT`), not the shape the old tests invented.
+
+**The footer was rebuilt rather than patched.** The old footer was one
+line of text with a message spliced into it, so a long message shoved
+the key hints and the relay's state sideways. The footer is now three
+regions of fixed width: what the list is doing on the left, a message
+in the middle, and the relay's state on the right. A message of any
+length is truncated rather than allowed to move the layout.
+
+**Narrow terminals.** The columns drop optional fields as the terminal
+gets narrower, but the history shape is never squeezed — it is the
+column worth keeping. A terminal too small to draw at all says so
+rather than panicking, and a title measured in bytes rather than
+characters used to panic on a name with an accent in it.
 
 ---
 

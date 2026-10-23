@@ -60,6 +60,12 @@ pub struct App {
     pub selected_snapshot: Option<usize>,
     /// Cue filter.
     pub cue_filter: Option<CueStatus>,
+    /// How the project list is ordered.
+    pub sort: SortMode,
+    /// The text the project list is narrowed by. Empty means everything.
+    pub filter: String,
+    /// True while the user is typing the filter.
+    pub filtering: bool,
     /// Current screen.
     pub screen: Screen,
     /// Sync state.
@@ -101,6 +107,14 @@ pub struct ProjectEntry {
     pub bpm: f64,
     pub track_count: usize,
     pub modified_secs: i64,
+    /// Notes on this project that have not been dealt with.
+    ///
+    /// A note you left and never closed is the clearest sign that the
+    /// project is still open. It is the one signal that comes from
+    /// Clavus itself rather than from the file's timestamps.
+    pub open_cues: usize,
+    /// The shape of the project's history, one bar height per cell.
+    pub activity: Vec<u8>,
 }
 
 impl ProjectEntry {
@@ -112,7 +126,58 @@ impl ProjectEntry {
     pub fn id(&self) -> clavus_core::project::ProjectId {
         clavus_core::project::ProjectId::new(&self.path)
     }
+
+    /// Whether the project matches what the user typed to filter by.
+    ///
+    /// The name and the folder are both searched, so "drums" finds a
+    /// set called *Drums* and a set called *Song* that happens to live
+    /// in a folder called *Drums*.
+    pub fn matches(&self, needle: &str) -> bool {
+        let n = needle.to_lowercase();
+        self.name.to_lowercase().contains(&n) || self.folder.to_lowercase().contains(&n)
+    }
 }
+
+/// How the project list is ordered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortMode {
+    /// Most recently touched first. The default, because the project
+    /// you were working on yesterday is the one you want to see.
+    Recent,
+    /// By name.
+    Name,
+    /// Most snapshots first — the projects with the most history.
+    History,
+    /// Most open notes first — the projects with the most unfinished
+    /// work.
+    Open,
+}
+
+impl SortMode {
+    /// The word shown in the status strip.
+    pub fn label(&self) -> &'static str {
+        match self {
+            SortMode::Recent => "recent",
+            SortMode::Name => "name",
+            SortMode::History => "history",
+            SortMode::Open => "open notes",
+        }
+    }
+
+    /// The next mode in the cycle.
+    pub fn next(&self) -> SortMode {
+        match self {
+            SortMode::Recent => SortMode::Name,
+            SortMode::Name => SortMode::History,
+            SortMode::History => SortMode::Open,
+            SortMode::Open => SortMode::Recent,
+        }
+    }
+}
+
+/// How many cells the history sparkline has.
+pub const ACTIVITY_CELLS: usize = 8;
+
 
 /// Commands sent from the TUI event loop to the background sync thread.
 #[derive(Debug)]
@@ -200,6 +265,9 @@ impl App {
             selected_snapshot: None,
             cue_filter: None,
             screen: Screen::ProjectList,
+            sort: SortMode::Recent,
+            filter: String::new(),
+            filtering: false,
             sync_state: SyncState::default(),
             error: None,
             info: None,
@@ -353,7 +421,12 @@ impl App {
             .to_string();
 
         // Check for existing snapshots
-        let (head, snap_count) = Self::snap_info(&self.clavus_root, path);
+        let (head, snap_count, activity) = Self::snap_info(&self.clavus_root, path);
+
+        // The notes that have not been dealt with. A project with open
+        // notes is one that is still in progress, and that is a signal
+        // that comes from Clavus rather than from the file's clock.
+        let open_cues = Self::open_cue_count(&self.clavus_root, path);
 
         // The list used to show 120 BPM and 0 tracks for every project —
         // numbers that are known to be false. The project is parsed so
@@ -373,6 +446,8 @@ impl App {
             bpm,
             track_count,
             modified_secs,
+            open_cues,
+            activity,
         })
     }
 
@@ -426,6 +501,139 @@ impl App {
 
     pub fn selected_entry(&self) -> Option<&ProjectEntry> {
         self.selected_project.and_then(|i| self.projects.get(i))
+    }
+
+    // ─── The view of the project list ─────────────────────────────────
+    //
+    // The list holds every project Clavus found. What the user sees
+    // is a *view* of that: narrowed by the filter they typed, ordered
+    // by the sort they chose. The selection is an index into the
+    // whole list, not into the view, so a project keeps its place
+    // when the order changes underneath it.
+
+    /// The projects the list shows, as indices into `projects`, in the
+    /// order they are shown.
+    pub fn visible_indices(&self) -> Vec<usize> {
+        let needle = self.filter.trim().to_lowercase();
+        let mut idx: Vec<usize> = if needle.is_empty() {
+            (0..self.projects.len()).collect()
+        } else {
+            self.projects
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.matches(&needle))
+                .map(|(i, _)| i)
+                .collect()
+        };
+        self.sort_indices(&mut idx);
+        idx
+    }
+
+    /// Order the visible projects by the current sort.
+    fn sort_indices(&self, idx: &mut [usize]) {
+        match self.sort {
+            // The list is already held most-recent-first, so this is
+            // the order the user has always seen.
+            SortMode::Recent => {
+                idx.sort_by_key(|&i| std::cmp::Reverse(self.projects[i].modified_secs));
+            }
+            SortMode::Name => {
+                idx.sort_by(|&a, &b| {
+                    self.projects[a]
+                        .name
+                        .to_lowercase()
+                        .cmp(&self.projects[b].name.to_lowercase())
+                });
+            }
+            SortMode::History => {
+                idx.sort_by(|&a, &b| {
+                    self.projects[b]
+                        .snap_count
+                        .cmp(&self.projects[a].snap_count)
+                        .then_with(|| {
+                            self.projects[b]
+                                .modified_secs
+                                .cmp(&self.projects[a].modified_secs)
+                        })
+                });
+            }
+            SortMode::Open => {
+                idx.sort_by(|&a, &b| {
+                    self.projects[b]
+                        .open_cues
+                        .cmp(&self.projects[a].open_cues)
+                        .then_with(|| {
+                            self.projects[b]
+                                .modified_secs
+                                .cmp(&self.projects[a].modified_secs)
+                        })
+                });
+            }
+        }
+    }
+
+    /// Move the selection by `delta` rows, over the projects on show.
+    ///
+    /// Moving past the end stops at the end. The selection is kept on
+    /// the same *project* even when the filter changes, so narrowing
+    /// the list does not silently select a different song.
+    pub fn move_selection(&mut self, delta: i32) {
+        let visible = self.visible_indices();
+        if visible.is_empty() {
+            self.selected_project = None;
+            return;
+        }
+        let current = self
+            .selected_project
+            .and_then(|sel| visible.iter().position(|&i| i == sel));
+        let next = match current {
+            None => 0,
+            Some(pos) => {
+                let n = visible.len() as i32;
+                (pos as i32 + delta).clamp(0, n - 1) as usize
+            }
+        };
+        self.selected_project = Some(visible[next]);
+    }
+
+    /// Move the selection to the first project on show.
+    pub fn select_first_visible(&mut self) {
+        self.move_selection(0);
+    }
+
+    /// Cycle the sort order.
+    pub fn cycle_sort(&mut self) {
+        self.sort = self.sort.next();
+        // The selection stays on the same project; the order around it
+        // changes, which is the point of sorting.
+    }
+
+    /// Narrow the list by what the user typed.
+    pub fn set_filter(&mut self, text: String) {
+        self.filter = text;
+    }
+
+    /// Clear the filter and show everything again.
+    pub fn clear_filter(&mut self) {
+        self.filter.clear();
+    }
+
+    /// Make sure the selection is on a project the list is showing.
+    ///
+    /// Narrowing the list can hide the project that was selected. The
+    /// selection then moves to the first project still on show, so the
+    /// user is never left with a cursor on something they cannot see.
+    pub fn ensure_selection_visible(&mut self) {
+        let visible = self.visible_indices();
+        if visible.is_empty() {
+            return;
+        }
+        if let Some(sel) = self.selected_project {
+            if visible.contains(&sel) {
+                return;
+            }
+        }
+        self.selected_project = Some(visible[0]);
     }
 
     /// The name of the currently selected project, if any.
@@ -909,16 +1117,46 @@ impl App {
 
     /// Get the HEAD snapshot hash and chain count for a project.
     /// Returns `(head_hash, snap_count)`, both `None`/`0` if no snapshots exist.
-    fn snap_info(clavus_root: &std::path::Path, project_path: &std::path::Path) -> (Option<String>, usize) {
+    fn snap_info(
+        clavus_root: &std::path::Path,
+        project_path: &std::path::Path,
+    ) -> (Option<String>, usize, Vec<u8>) {
         let blobs = match BlobStore::new(clavus_root.join("blobs")) {
             Ok(b) => b,
-            Err(_) => return (None, 0),
+            Err(_) => return (None, 0, Vec::new()),
         };
         let id = clavus_core::project::ProjectId::new(project_path);
         let store = SnapshotStore::new(blobs, &id);
         let head = store.head().map(|s| s.hash);
-        let count = store.chain_length(None);
-        (head, count)
+        let chain = store.walk_chain(None);
+        // The shape of the history comes from the same walk that
+        // counts the snapshots, so it costs nothing extra.
+        let stamps: Vec<f64> = chain.iter().map(|s| s.timestamp).collect();
+        let activity = crate::spark::sparkline(&stamps, ACTIVITY_CELLS);
+        (head, chain.len(), activity)
+    }
+
+    /// The notes on a project that have not been dealt with.
+    ///
+    /// "Open" means pending or deferred — a note that was skipped or
+    /// archived was closed on purpose, and one that was resolved was
+    /// finished. The store is opened read-only: counting notes must
+    /// never bring a Clavus directory into being.
+    fn open_cue_count(clavus_root: &std::path::Path, project_path: &std::path::Path) -> usize {
+        let id = clavus_core::project::ProjectId::new(project_path);
+        let store = clavus_core::CueStore::open(clavus_root, &id);
+        let Ok((cues, _broken)) = store.list_partial(None) else {
+            return 0;
+        };
+        cues
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c.status,
+                    clavus_core::types::CueStatus::Pending | clavus_core::types::CueStatus::Deferred
+                )
+            })
+            .count()
     }
 
     /// Refresh the snapshot counts and heads of the projects already in
@@ -932,9 +1170,11 @@ impl App {
     pub fn refresh_project_counts(&mut self) {
         let root = self.clavus_root.clone();
         for entry in &mut self.projects {
-            let (head, count) = Self::snap_info(&root, &entry.path);
+            let (head, count, activity) = Self::snap_info(&root, &entry.path);
             entry.head = head;
             entry.snap_count = count;
+            entry.activity = activity;
+            entry.open_cues = Self::open_cue_count(&root, &entry.path);
         }
     }
 

@@ -162,25 +162,30 @@ fn moving_the_cursor_does_not_move_the_text() {
     let (mut app, _tmp) = harness();
     app.screen = Screen::ProjectList;
 
-    let render = |app: &mut App| {
+    // The row the project is drawn on is found rather than assumed.
+    // The list gained a strip above it, and a test that hard-codes a
+    // row number breaks every time the layout moves — and then it
+    // fails for a reason that has nothing to do with what it is
+    // checking.
+    let render = |app: &mut App| -> String {
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|f| clavus_tui::ui::render(f, app))
             .unwrap();
         let buf = terminal.backend().buffer().clone();
-        let area = buf.area;
-        let width = area.width as usize;
-        let top = area.top() as usize;
-        let left = area.left() as usize;
-        let mut out = String::new();
-        for y in 3..4usize {
+        let width = buf.area.width as usize;
+        let mut rows: Vec<String> = Vec::new();
+        for y in 0..buf.area.height as usize {
+            let mut line = String::new();
             for x in 0..width {
-                out.push_str(buf.content[y * width + x].symbol());
+                line.push_str(buf.content[y * width + x].symbol());
             }
+            rows.push(line);
         }
-        let _ = (top, left);
-        out
+        rows.into_iter()
+            .find(|l| l.contains("demo") && l.contains("ALS"))
+            .unwrap_or_else(|| panic!("the project was not drawn"))
     };
 
     app.selected_project = None;

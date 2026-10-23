@@ -81,6 +81,27 @@ pub const S_MUTED:       Style = Style::new().fg(MUTED);
 pub const S_TEXT:        Style = Style::new().fg(TEXT);
 pub const S_PURPLE:      Style = Style::new().fg(PURPLE);
 
+// ─── The history sparkline ──────────────────────────────────────────
+
+/// The colour of one bar of a project's history.
+///
+/// The bars are Clavus's green, from a whisper to the full accent. The
+/// height already says *how much*; the colour only makes the shape of
+/// a project's history easier to take in at a glance.
+pub fn spark_color(height: u8) -> Color {
+    match height {
+        0 => LINE_LO,
+        1 => Color::Rgb(30, 58, 40),
+        2 => Color::Rgb(38, 74, 50),
+        3 => Color::Rgb(48, 94, 62),
+        4 => Color::Rgb(60, 118, 76),
+        5 => Color::Rgb(74, 146, 94),
+        6 => Color::Rgb(92, 178, 112),
+        7 => Color::Rgb(104, 200, 124),
+        _ => ACCENT,
+    }
+}
+
 // ─── Cue status helpers ─────────────────────────────────────────────
 
 pub fn cue_status_color(s: &CueStatus) -> Color {

@@ -2,6 +2,7 @@
 
 pub mod app;
 pub mod keys;
+pub mod spark;
 pub mod theme;
 pub mod ui;
 

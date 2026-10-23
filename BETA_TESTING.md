@@ -529,6 +529,68 @@ clavus tui
   be listed as a project. The CLI does not list it; the TUI must not
   either.
 
+### 6.1i Browsing a Library of Sets
+
+**Test:** Put five or six sets in a folder, give them a few snapshots
+each, and start the TUI on it.
+
+**Expected:**
+
+- Every row carries the **shape of that project's own history** — a
+  row of small bars, oldest on the left, tallest where the work
+  clustered. A set you worked on in one afternoon shows one solid burst
+  at the right-hand end; a set you keep coming back to shows a spread.
+  A row of evenly-spaced identical bars for every project, no matter
+  how differently you worked on them, is a bug.
+- The **open-note count** shows how many notes are still open on each
+  set. A set with two open notes must say so.
+- The **age** column shows how long ago the file itself was last
+  edited.
+- A **strip above the table** names the set under the cursor, with its
+  snapshot count, its open notes and its age. The selection must never
+  be a guess.
+- The **selected row** is visibly marked with a `▌` in the left-hand
+  column, and the text does not move sideways when the cursor moves
+  onto it.
+
+**Test:** press `/` and type part of a set's name.
+
+**Expected:** The list narrows as you type. The bottom-left corner
+shows what you have typed. The row that matches is still selected. A
+search that matches nothing says so plainly rather than showing an
+empty list.
+
+**Test:** press `Esc` while the filter is open.
+
+**Expected:** The filter is cleared and the whole list comes back. The
+text you typed is thrown away, not kept for next time.
+
+**Test:** press `S` a few times.
+
+**Expected:** The order cycles, and the bottom-left corner **names the
+order in force** — "recent", "name", "history", "open notes". Sorting
+by history puts the set with the most snapshots first; sorting by open
+notes puts the set with the most open notes first.
+
+**Test:** type a long message — open a project, add a note with a long
+text, and watch the bottom bar.
+
+**Expected:** The message is truncated. The key hints on the right and
+the relay's state on the far right **do not move**. A message that
+pushes the rest of the bar sideways is a bug.
+
+**Test:** make the terminal narrow, about 70 columns, and then narrower.
+
+**Expected:** Optional columns drop away one at a time. The **history
+shape is never squeezed** — it is the column worth keeping. Below the
+minimum size the TUI says so instead of drawing nonsense.
+
+**Test:** press `S` and `P` and `G` on the sync screen.
+
+**Expected:** They work. These are capital letters, and a terminal
+reports a capital letter with the shift modifier held; if the TUI
+matches on the unmodified letter only, none of them will do anything.
+
 ### 6.1c Leaving the TUI
 
 **Test:** Start the TUI and press **Ctrl-C**.
