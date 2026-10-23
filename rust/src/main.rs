@@ -314,6 +314,10 @@ fn run_tui(
         // Pick up connection status changes from the background sync thread.
         app.poll_sync();
 
+        // Pick up the tempos and track counts the background reader has
+        // found. The list fills in as the answers arrive.
+        app.poll_summaries();
+
         // Keep the idle phrases and the spectrum moving.
         app.tick();
     }

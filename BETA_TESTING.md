@@ -516,6 +516,12 @@ clavus tui
 - The **track count** and **BPM** must be the project's own, not the
   same numbers for every project. A row that always says "120 BPM" and
   "0 tracks" is a bug.
+  - **This one was a real bug, and it was in every set.** The parser
+    was reading one track, 120 BPM and no devices out of every real
+    Live set, because skipping a device chain swallowed the rest of
+    the document and the track parser never ended. If every row in
+    your library says 120 BPM, that is the bug talking — the sets are
+    not all at 120.
 - Projects in **sub-folders** must appear. A project the CLI can see
   but the TUI cannot is a bug.
 - A project that **cannot be parsed** must show an error, not vanish.

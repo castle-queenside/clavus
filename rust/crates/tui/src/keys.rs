@@ -90,7 +90,7 @@ pub fn handle_key(key: &KeyEvent, app: &mut App) -> bool {
             // was only read once at start-up, so the TUI and the CLI
             // disagreed about the same project until the TUI was
             // restarted. It is refreshed as the user moves through it.
-            app.refresh_project_counts();
+            app.refresh_project_counts_if_stale();
             app.move_selection(1);
         }
         (KeyCode::Up, _) if app.screen == Screen::ProjectList => {
@@ -421,6 +421,9 @@ fn save_cue(app: &mut App) {
                     app.set_info("cue saved".into());
                     app.input_buf.clear();
                     let _ = app.load_cues();
+                    // The store has changed, so the list's counts are
+                    // out of date.
+                    app.invalidate_counts();
                 }
                 Err(e) => app.set_error(format!("could not save the cue: {}", e)),
             },

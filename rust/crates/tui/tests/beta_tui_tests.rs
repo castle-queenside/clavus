@@ -150,16 +150,25 @@ fn a_project_that_cannot_be_parsed_reports_an_error() {
 
 #[test]
 fn the_project_list_shows_the_real_tempo_and_track_count() {
-    let h = Harness::with_project();
-    let entry = h.app.projects.first().expect("a project");
-    assert_eq!(
-        entry.bpm, 128.0,
-        "the tempo must come from the project file"
-    );
-    assert!(
-        entry.track_count > 0,
-        "the track count must come from the project file"
-    );
+    let mut h = Harness::with_project();
+    // The tempo and the track count are read in the background — a
+    // real library is gigabytes of project files, and reading them all
+    // before the first screen appears took over a minute. So the test
+    // waits for the answer, exactly as the screen does.
+    let mut bpm = None;
+    for _ in 0..600 {
+        h.app.poll_summaries();
+        if let Some(entry) = h.app.projects.first() {
+            if let clavus_tui::app::Summary::Known { bpm: b, tracks } = entry.summary {
+                bpm = Some((b, tracks));
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let (bpm, tracks) = bpm.expect("the project was read in the background");
+    assert_eq!(bpm, 128.0, "the tempo must come from the project file");
+    assert!(tracks > 0, "the track count must come from the project file");
 }
 
 // ─── The TUI finds projects in sub-folders ────────────────────────────────

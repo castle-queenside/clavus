@@ -1,6 +1,6 @@
 # Clavus Testing Plan
 
-> Last updated: 2026-10-23
+> Last updated: 2026-10-24
 > Status: 🟢 Core suites complete — the AI beta waves' findings are all fixed and covered
 
 ## Coverage at a Glance
@@ -8,6 +8,7 @@
 | Area | Test file | Tests | Status |
 |------|-----------|-------|--------|
 | Parser ALS | `crates/parser-als/tests/als_parser.rs` | 48 | 🟢 |
+| Parser ALS (real sets) | `crates/parser-als/tests/real_world_tests.rs` | 17 | 🟢 |
 | Parser Bitwig | `crates/parser-bw/tests/bw_parser.rs` | 21 | 🟢 |
 | Sample audit + collect | `crates/core/tests/collect_tests.rs` | 22 | 🟢 |
 | BlobStore / snapshot core | `crates/core/tests/core_tests.rs` | 42 | 🟢 |
@@ -24,6 +25,7 @@
 | TUI (fourth wave) | `crates/tui/tests/wave4_tests.rs` | 13 | 🟢 |
 | TUI (browsing a library) | `crates/tui/tests/workbench_tests.rs` | 24 | 🟢 |
 | TUI (mouse and scrolling) | `crates/tui/tests/mouse_tests.rs` | 19 | 🟢 |
+| TUI (a library of a thousand) | `crates/tui/tests/scale_tests.rs` | 13 | 🟢 |
 | CLI commands | `crates/cli/tests/cli_tests.rs` | 54 | 🟢 |
 | CLI (beta regressions) | `crates/cli/tests/beta_cli_tests.rs` | 17 | 🟢 |
 | CLI (second beta wave) | `crates/cli/tests/wave2_tests.rs` | 6 | 🟢 |
@@ -35,7 +37,7 @@
 | Sync unit tests (blob transfer) | `crates/sync/src/**` | 10 | 🟢 |
 | Two machines, one relay | `scripts/two-machine-relay-test.sh` | 3 machines | 🟢 |
 
-**564 tests passing, 0 failed, 0 ignored**, plus a three-machine relay
+**594 tests passing, 0 failed, 0 ignored**, plus a three-machine relay
 test that runs the real Linux binary over real TCP.
 The palette is Clavus's own, not the terminal's. A panel that sets no
 background of its own shows the *terminal's* background through, and
@@ -578,6 +580,84 @@ gets narrower, but the history shape is never squeezed — it is the
 column worth keeping. A terminal too small to draw at all says so
 rather than panicking, and a title measured in bytes rather than
 characters used to panic on a name with an accent in it.
+
+---
+
+## Testing Against a Real Studio Library ✅
+
+Every parser test until now used a synthetic fixture. A studio drive
+with a real library is a better teacher: 1,245 sets, written by Live 8,
+9, 10, 11 and 12 across ten years, with none of them written to be
+easy to parse.
+
+**What the real library found.** Every single one of those 1,242 sets
+Clavus could read parsed as *one track, 120 BPM, no devices, no track
+names* — and 120 BPM is the default, so the number was not a
+measurement but a constant. Five separate causes, all of them invisible
+against a synthetic fixture:
+
+1. **Skipping an element consumed the rest of the document.** The
+   routine that skipped past a subtree only counted the closing tags
+   that shared the target's name. Every ordinary element inside the
+   subtree pushed the count up and it never came back down, so the
+   skip ran to the end of the file. Every real set has a device chain
+   with ordinary elements inside it, so every real set lost everything
+   after its first device chain.
+
+2. **The track parser never ended.** It counted nesting depth to know
+   when a closing tag ended the track, but it counted *every* element
+   and compared against zero — and the count was one when the track's
+   own closing tag arrived. So the first track swallowed the rest of
+   the file. It now counts only elements with the same name as the
+   track, because Live 8 nests a `<Track>` inside every `<Mixer>`.
+
+3. **The tempo was read from the wrong place.** The project's tempo
+   lives in the master track. Live 10 and later write
+   `<Tempo><Manual Value="92"/></Tempo>`; Live 8 and 9 write the same
+   shape; older sets write the tempo as an automation curve. None of
+   those were read, so the default survived. Worse, Live 11 and 12 give
+   *every track* its own tempo, so the last one read would have won
+   — and a tempo read inside a track or a scene is not the project's
+   tempo at all.
+
+4. **The device list was the whole document.** Live keeps the devices
+   in a `<Devices>` list, inside a `<DeviceChain>` that is itself
+   nested inside the track's `<DeviceChain>`. Reading every element in
+   the chain as a device produced a list of every element in the file.
+
+5. **Live writes different shapes in different years.** A track's name
+   is `<Name Value="Kick"/>` in Live 8 and
+   `<Name><EffectiveName/><UserName/></Name>` from Live 9. Live 12
+   renamed `<MasterTrack>` to `<MainTrack>`. MIDI keyboard tracks are
+   `<KeyTrack>` and carry no name at all.
+
+**What it looks like now.** 1,242 of the 1,245 sets are readable, and
+every one of those reports its real track count (5 to 26), its real
+tempo (1,186 of them really are 120 BPM — the rest are 91.4 to 128),
+its real track names, and its real device names. The remaining three
+are rejected with a sentence that says what to do about them, which is
+described next. The library list in the TUI shows those numbers, and
+they are the numbers the sets actually contain.
+
+**Three sets cannot be read, and say so.** Live wrote some sets in its
+own binary format before gzip; it is a serialisation, not XML, so
+there is nothing to decompress into text. Three sets on this drive are
+in it. Clavus names the problem instead of reporting a decoding
+failure: *"this set uses Live's old compressed format, which Clavus
+cannot read; open it in Live and save it again to convert it."* Three
+sets out of 1,245 is not worth a binary decoder; a clear sentence is.
+
+**The regression tests** live in
+`crates/parser-als/tests/real_world_tests.rs` — seventeen of them,
+each built from the shape a real set of that Live version has. They
+are the tests that would have caught all five of the causes above.
+
+**The library also had to become openable.** The first version of the
+list resolved every folder to its real path and parsed every project
+before the first screen appeared: 13 seconds for the command line and
+**74 seconds** for the TUI on this drive. The list now appears in
+**0.33 seconds**, with the numbers arriving in the background as they
+are read. The tests for that are in `crates/tui/tests/scale_tests.rs`.
 
 ---
 

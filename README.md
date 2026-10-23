@@ -253,7 +253,7 @@ One person runs `clavus relay`. Others run `clavus tui`, press `c` to connect, t
 | | |
 |---|---|
 | Binary | ✅ 4MB standalone Rust binary |
-| Ableton parser | ✅ `.als` (gzip or plain XML, Live 9/10/11) |
+| Ableton parser | ✅ `.als` (gzip or plain XML) — reads real Live 8/9/10/11/12 sets |
 | Bitwig parser | ✅ `.bwproject` (zip XML) — fixture needed |
 | Snapshot store | ✅ Content-addressed blob + metadata, a chain per project |
 | Audio audit | ✅ Checks all sample references before snapshot |

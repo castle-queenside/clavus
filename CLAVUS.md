@@ -264,6 +264,37 @@ through `clavus_core`: `default_author()` for a note's author, and
 - Spacing: 4pt grid (`sp1()` = 4, `sp2()` = 8, etc.)
 - Cliamp spectrum: 10-band LED bars, activated when relay connected
 
+### Reading a real Live set
+Live has changed the shape of its files every few years, and a parser
+that only knows one shape reports confident nonsense for the others.
+The rules Clavus follows:
+
+- **The project's tempo lives in the master track** — `<Tempo><Manual
+  Value="92"/></Tempo>` in Live 8, 9, 10, 11 and 12, or an automation
+  curve in the oldest sets. It is read from `<MasterTrack>`, or from
+  `<MainTrack>` in Live 12. A tempo inside a *track* is that track's
+  own tempo, and a tempo inside a *scene* is that scene's: neither is
+  the project's.
+- **The devices live in a `<Devices>` list**, inside a `<DeviceChain>`
+  that is nested inside the track's own `<DeviceChain>`. Everything
+  else in a chain is structure — mixer, routing, automation lanes —
+  and reading it as devices produced a list of every element in the
+  file.
+- **A track's name has two shapes**: `<Name Value="Kick"/>` in Live 8,
+  and `<Name><EffectiveName/><UserName/></Name>` from Live 9. The
+  user's name wins when they gave one. Live 8 often stores no name at
+  all, so Clavus shows what Live's own interface shows: `1-MIDI`.
+- **`<KeyTrack>` is a MIDI keyboard track** and carries no name; it is
+  called `MIDI Keyboard`.
+- **Live wrote some sets in its own binary format** before gzip. That
+  format is a serialisation, not XML, so Clavus cannot read it — and
+  says so plainly instead of reporting a decoding failure.
+
+Everything above was learned by reading 1,245 real sets off a studio
+drive — 1,242 of them readable, and finding that every one of those
+parsed as one track, 120 BPM and no devices. The tests are in
+`crates/parser-als/tests/real_world_tests.rs`.
+
 ### Browsing a library
 A list of a thousand sets has to answer two questions at a glance:
 which one do I want, and which ones am I actually working on. The
@@ -403,7 +434,13 @@ git add -A && git commit && git push
   opens, a drag picks, and the scrollbar is a control
 - Capital-letter shortcuts work, and capital letters can be typed into
   a note or a search box
-- 564 tests passing, clippy clean, CI green
+- 594 tests passing, clippy clean, CI green
+- The `.als` parser reads the real library: 1,242 of 1,245 sets from
+  Live 8 to Live 12 report their real track count, tempo, track names
+  and devices. The other three are in Live's old binary format and say
+  so instead of failing obscurely
+- The library list opens in 0.33 seconds on a 1,245-set drive, with
+  the numbers arriving in the background
 - The Linux musl build runs on real Linux, and the release binary moves
   project bytes, audio and notes between three real machines over TCP —
   `scripts/two-machine-relay-test.sh`

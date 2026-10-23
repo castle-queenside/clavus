@@ -3,7 +3,7 @@
 //! Warm blacks, layered panels, soft green accent, 4pt spacing grid.
 //! Palette: bg #0b0c0d · panels #0e1012/#121517/#15181a · accent #74e08c
 
-use crate::app::{scroll_to_show, App, Screen, ACTIVITY_CELLS};
+use crate::app::{scroll_to_show, App, Screen, Summary, ACTIVITY_CELLS};
 use crate::mouse::HitKind;
 use crate::theme::*;
 use ratatui::{
@@ -225,14 +225,21 @@ fn render_project_list(frame: &mut Frame, app: &mut App) {
                 Span::raw(snap_text).style(Style::new().fg(snap_fg).bg(bg)),
             ));
             if cols.bpm {
-                cells.push(Cell::from(
-                    Span::raw(format!("{:.0}", p.bpm)).style(Style::new().fg(fg).bg(bg)),
-                ));
+                // A number that has not been read yet is shown as a
+                // dash, not as a zero. Zero is a claim about the
+                // project; a dash is a claim about the list.
+                let text = match p.summary {
+                    Summary::Known { bpm, .. } => format!("{:.0}", bpm),
+                    _ => "\u{2014}".to_string(),
+                };
+                cells.push(Cell::from(Span::raw(text).style(Style::new().fg(fg).bg(bg))));
             }
             if cols.tracks {
-                cells.push(Cell::from(
-                    Span::raw(p.track_count.to_string()).style(Style::new().fg(fg).bg(bg)),
-                ));
+                let text = match p.summary {
+                    Summary::Known { tracks, .. } => tracks.to_string(),
+                    _ => "\u{2014}".to_string(),
+                };
+                cells.push(Cell::from(Span::raw(text).style(Style::new().fg(fg).bg(bg))));
             }
 
             // The shape of the project's own history, oldest on the

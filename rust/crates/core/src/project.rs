@@ -243,6 +243,197 @@ pub fn is_live_backup_copy(path: &Path) -> bool {
         .any(|n| n == "backup" || n == "autosave")
 }
 
+/// A project file found on disk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredProject {
+    /// The file name without its extension — how a set is named on
+    /// screen and how it is asked for on the command line.
+    pub name: String,
+    /// Where the file actually is.
+    pub path: PathBuf,
+}
+
+/// How deep a recursive project scan will go.
+pub const MAX_SCAN_DEPTH: usize = 12;
+
+/// Find every Ableton and Bitwig project below `dirs`.
+///
+/// The CLI and the TUI show the same drive, so they have to find the
+/// same projects: a set that appears in one and not the other is a
+/// bug that only shows up in a studio, in front of a person.
+///
+/// The walk is deliberately cheap, because it runs over libraries with
+/// thousands of sets on slow drives. A real library on an external disk
+/// has tens of thousands of folders, and the first version of this took
+/// over a minute on one because it resolved every folder to its real
+/// path.
+///
+/// - The type of an entry comes from the directory listing itself,
+///   not from a second `stat` on every file.
+/// - A folder's real path is worked out by appending its name to its
+///   parent's real path, which costs nothing. Only a symlink has to be
+///   resolved, because only a symlink can be somewhere else.
+/// - A symlink that points at an ancestor cannot make the walk go in
+///   circles: a folder is remembered by its real path and never
+///   walked twice.
+pub fn discover_projects(dirs: &[PathBuf], recursive: bool) -> Vec<DiscoveredProject> {
+    let mut out = Vec::new();
+    let mut visited: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    for dir in dirs {
+        // The starting point is resolved once. Everything below it is
+        // already a real path, because a symlinked folder is resolved
+        // before it is walked.
+        let real = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+        walk_projects(dir, &real, recursive, &mut out, &mut visited, 0);
+    }
+    out
+}
+
+/// Walk one folder, carrying both where it is and where it really is.
+fn walk_projects(
+    dir: &Path,
+    real_dir: &Path,
+    recursive: bool,
+    out: &mut Vec<DiscoveredProject>,
+    visited: &mut std::collections::HashSet<PathBuf>,
+    depth: usize,
+) {
+    if depth > MAX_SCAN_DEPTH {
+        return;
+    }
+    if !visited.insert(real_dir.to_path_buf()) {
+        return;
+    }
+
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+
+        if file_type.is_symlink() {
+            // Only a symlink can be somewhere other than where it says.
+            // Resolving it is the one path lookup the walk cannot avoid.
+            let Ok(real) = path.canonicalize() else {
+                continue;
+            };
+            if real.is_dir() {
+                walk_projects(&real, &real, recursive, out, visited, depth + 1);
+            }
+            continue;
+        }
+
+        if file_type.is_dir() {
+            if recursive {
+                let name = entry.file_name();
+                let child_real = real_dir.join(&name);
+                walk_projects(&path, &child_real, recursive, out, visited, depth + 1);
+            }
+            continue;
+        }
+
+        let ext = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if ext == "als" || ext == "bwproject" {
+            // Live's own `Backup/` and `Autosave/` copies are not
+            // projects of their own — they are copies of one. Listing
+            // them made the list twice as long and showed the same set
+            // under a dozen names.
+            if is_live_backup_copy(&path) {
+                continue;
+            }
+            if let Some(name) = path.file_stem().map(|s| s.to_string_lossy().to_string()) {
+                out.push(DiscoveredProject { name, path });
+            }
+        }
+    }
+}
+
+/// Find every project below `dirs` whose file name is exactly `name`.
+///
+/// The name has to be unique across every place searched, so this
+/// returns all of the matches and lets the caller decide whether there
+/// is more than one. Two sets of the same name in two folders are two
+/// projects, and neither is the one that was asked for.
+///
+/// The walk is the same cheap one the project list uses: a real
+/// library has tens of thousands of folders, and resolving each of
+/// them to its real path costs a path lookup apiece.
+pub fn find_projects_named(dirs: &[PathBuf], name: &Path) -> Vec<PathBuf> {
+    let wanted = match name.file_name() {
+        Some(n) => n,
+        None => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    let mut visited: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    for dir in dirs {
+        let real = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+        walk_for_name(dir, &real, wanted, &mut out, &mut visited, 0);
+    }
+    out
+}
+
+/// Walk one folder looking for a file with a given name.
+fn walk_for_name(
+    dir: &Path,
+    real_dir: &Path,
+    wanted: &std::ffi::OsStr,
+    out: &mut Vec<PathBuf>,
+    visited: &mut std::collections::HashSet<PathBuf>,
+    depth: usize,
+) {
+    if depth > MAX_SCAN_DEPTH {
+        return;
+    }
+    if !visited.insert(real_dir.to_path_buf()) {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            let Ok(real) = path.canonicalize() else {
+                continue;
+            };
+            if real.is_dir() {
+                walk_for_name(&real, &real, wanted, out, visited, depth + 1);
+            }
+            continue;
+        }
+        if file_type.is_dir() {
+            // A folder of hidden files is not the user's projects.
+            let name = entry.file_name();
+            if name.to_string_lossy().starts_with('.') {
+                continue;
+            }
+            let child_real = real_dir.join(&name);
+            walk_for_name(&path, &child_real, wanted, out, visited, depth + 1);
+            continue;
+        }
+        if path.file_name() == Some(wanted) {
+            let is_project = matches!(
+                path.extension().and_then(|e| e.to_str()),
+                Some("als") | Some("bwproject")
+            );
+            if is_project && !is_live_backup_copy(&path) {
+                out.push(path);
+            }
+        }
+    }
+}
+
 /// The path made absolute, with `.` and `..` resolved.
 ///
 /// The path is not resolved through symlinks: a project's identity

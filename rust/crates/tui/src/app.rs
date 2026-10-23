@@ -137,9 +137,37 @@ pub struct App {
     /// The last click, so that a second one can be recognised as a
     /// double click.
     pub last_click: Option<crate::mouse::Click>,
+    /// What the background reader has found so far.
+    summaries: Option<std::sync::mpsc::Receiver<(usize, Summary)>>,
+    /// Kept so that the reader stops when the app is dropped.
+    summary_sender: Option<std::sync::mpsc::Sender<()>>,
+    /// When the store was last read for the list's counts.
+    ///
+    /// Re-reading the store for every project in a library of a
+    /// thousand costs a walk of the chain for each one, and that is far
+    /// too much to do on every keypress. The store's own clock decides
+    /// when it is worth doing again.
+    last_counts_refresh: Option<std::time::Instant>,
 }
 
-#[derive(Debug, Clone)]
+/// What the list knows about a project's tempo and track count.
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub enum Summary {
+    /// Not read yet.
+    ///
+    /// Reading every project in a real library is slow — a studio's
+    /// sets are gigabytes of gzipped XML — so it is done in the
+    /// background, and the rows that have not been read yet say so
+    /// rather than showing a number that is not known.
+    #[default]
+    Pending,
+    /// Read: the tempo and the number of tracks.
+    Known { bpm: f64, tracks: usize },
+    /// The file could not be read.
+    Unreadable,
+}
+
+#[derive(Debug)]
 pub struct ProjectEntry {
     pub path: PathBuf,
     pub name: String,
@@ -153,8 +181,8 @@ pub struct ProjectEntry {
     pub head: Option<String>,
     /// Number of snapshots in the chain (0 if never snapshotted).
     pub snap_count: usize,
-    pub bpm: f64,
-    pub track_count: usize,
+    /// The tempo and the number of tracks, once they have been read.
+    pub summary: Summary,
     pub modified_secs: i64,
     /// Notes on this project that have not been dealt with.
     ///
@@ -167,6 +195,22 @@ pub struct ProjectEntry {
 }
 
 impl ProjectEntry {
+    /// The project's tempo, or zero if it has not been read.
+    pub fn bpm(&self) -> f64 {
+        match self.summary {
+            Summary::Known { bpm, .. } => bpm,
+            _ => 0.0,
+        }
+    }
+
+    /// The project's number of tracks, or zero if it has not been read.
+    pub fn track_count(&self) -> usize {
+        match self.summary {
+            Summary::Known { tracks, .. } => tracks,
+            _ => 0,
+        }
+    }
+
     /// The project's identity.
     ///
     /// Two projects that share a file name are two different projects, so
@@ -332,6 +376,9 @@ impl App {
             snapshot_scroll: 0,
             hits: Vec::new(),
             last_click: None,
+            summaries: None,
+            summary_sender: None,
+            last_counts_refresh: None,
         }
     }
 
@@ -393,63 +440,162 @@ impl App {
         // user would think their history was gone.
         self.store_readable()?;
 
+        // The CLI and the TUI find projects the same way, so they show
+        // the same drive. The walk is cheap on purpose: a real library
+        // has tens of thousands of folders, and resolving each of them
+        // to its real path costs a path lookup apiece.
+        let found = clavus_core::project::discover_projects(&self.project_dirs, true);
+
         let mut entries = Vec::new();
-        for dir in &self.project_dirs {
-            self.scan_dir(dir, 0, &mut entries);
+        for project in found {
+            let ext = project
+                .path
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if let Some(entry) = self.project_entry(&project.path, &ext) {
+                entries.push(entry);
+            }
         }
 
         // Sort by modified time descending
         entries.sort_by_key(|a| std::cmp::Reverse(a.modified_secs));
         self.projects = entries;
+        self.start_summary_reader();
         Ok(())
     }
 
-    /// How deep the project scan goes.
-    const MAX_SCAN_DEPTH: usize = 12;
+    /// Read every project's tempo and track count in the background.
+    ///
+    /// A studio's library is gigabytes of gzipped XML, and reading it
+    /// all before the first screen appears took over a minute on a real
+    /// drive. The list does not need all of it at once: it needs the
+    /// rows it is showing. So the reading happens on another thread and
+    /// the rows fill in as the answers arrive.
+    ///
+    /// The list is ordered by how recently the project was edited, so
+    /// the sets that are read first are the ones the user was last
+    /// working on.
+    fn start_summary_reader(&mut self) {
+        // A reader from an earlier scan is stopped first.
+        self.summary_sender = None;
+        self.summaries = None;
 
-    fn scan_dir(&self, dir: &std::path::Path, depth: usize, out: &mut Vec<ProjectEntry>) {
-        if depth > Self::MAX_SCAN_DEPTH {
+        let jobs: Vec<(usize, PathBuf, String)> = self
+            .projects
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let ext = p
+                    .path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                (i, p.path.clone(), ext)
+            })
+            .collect();
+
+        if jobs.is_empty() {
             return;
         }
-        let Ok(read) = std::fs::read_dir(dir) else {
+
+        let (tx, rx) = std::sync::mpsc::channel::<(usize, Summary)>();
+        let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+
+        let handle = std::thread::Builder::new()
+            .name("clavus-summaries".into())
+            .spawn(move || {
+                for (index, path, ext) in jobs {
+                    // The app has gone, or the list was scanned again:
+                    // there is nobody left to tell.
+                    match stop_rx.try_recv() {
+                        Ok(()) => return,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                    }
+                    let summary = match App::parse_summary(&path, &ext) {
+                        Some((bpm, tracks)) => Summary::Known { bpm, tracks },
+                        None => Summary::Unreadable,
+                    };
+                    if tx.send((index, summary)).is_err() {
+                        return;
+                    }
+                }
+            });
+
+        if handle.is_err() {
+            // No thread, no summaries — the list says "not read yet"
+            // and carries on.
             return;
-        };
-        for entry in read.flatten() {
-            let path = entry.path();
-
-            // A directory is not a project, whatever it is called. A
-            // folder named `Folder.als` was listed as a project and
-            // then failed to open; the CLI never listed it.
-            if path.is_dir() {
-                // A symlink loop must not make the scan run forever.
-                let real = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-                if real.is_dir() {
-                    self.scan_dir(&path, depth + 1, out);
-                }
-                continue;
-            }
-
-            let ext = path
-                .extension()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_ascii_lowercase();
-
-            if ext == "als" || ext == "bwproject" {
-                // Live's own `Backup/` and `Autosave/` copies are not
-                // projects of their own — they are copies of one. The
-                // CLI's `clavus projects` skips them, and the TUI has
-                // to skip them too or the two disagree about the same
-                // drive.
-                if clavus_core::project::is_live_backup_copy(&path) {
-                    continue;
-                }
-                if let Some(project_entry) = self.project_entry(&path, &ext) {
-                    out.push(project_entry);
-                }
-            }
         }
+        self.summaries = Some(rx);
+        self.summary_sender = Some(stop_tx);
     }
+
+    /// Pick up whatever the background reader has found.
+    ///
+    /// Returns true when something changed, so the caller knows to draw
+    /// again.
+    pub fn poll_summaries(&mut self) -> bool {
+        let mut changed = false;
+        if let Some(rx) = &self.summaries {
+            while let Ok((index, summary)) = rx.try_recv() {
+                if let Some(entry) = self.projects.get_mut(index) {
+                    if entry.summary != summary {
+                        entry.summary = summary;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if self.read_selected_summary() {
+            changed = true;
+        }
+        changed
+    }
+
+    /// Read the row under the cursor, if it has not been read yet.
+    ///
+    /// The background reader works through the whole library, and a
+    /// library of a thousand sets is gigabytes of project files. The
+    /// row the user is looking at is the one they are waiting for, so
+    /// it is read straight away rather than in the background's time.
+    fn read_selected_summary(&mut self) -> bool {
+        let Some(index) = self.selected_project else {
+            return false;
+        };
+        let Some(entry) = self.projects.get(index) else {
+            return false;
+        };
+        if entry.summary != Summary::Pending {
+            return false;
+        }
+        let path = entry.path.clone();
+        let ext = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let summary = match App::parse_summary(&path, &ext) {
+            Some((bpm, tracks)) => Summary::Known { bpm, tracks },
+            None => Summary::Unreadable,
+        };
+        if let Some(entry) = self.projects.get_mut(index) {
+            entry.summary = summary;
+        }
+        true
+    }
+
+    /// How often the list's counts are re-read from the store.
+    ///
+    /// The list has to agree with the CLI about the same project, and
+    /// the counts change when the user works in the CLI while the TUI
+    /// is running. Re-reading the store for every project in a large
+    /// library takes long enough to be felt on every keypress, so it
+    /// is done at most this often.
+    pub const COUNTS_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1500);
 
     /// Build a list entry for one project file.
     fn project_entry(&self, path: &std::path::Path, ext: &str) -> Option<ProjectEntry> {
@@ -482,14 +628,6 @@ impl App {
         // that comes from Clavus rather than from the file's clock.
         let open_cues = Self::open_cue_count(&self.clavus_root, path);
 
-        // The list used to show 120 BPM and 0 tracks for every project —
-        // numbers that are known to be false. The project is parsed so
-        // the list agrees with `clavus status`.
-        let (bpm, track_count) = match Self::parse_summary(path, ext) {
-            Some((bpm, tracks)) => (bpm, tracks),
-            None => (0.0, 0),
-        };
-
         Some(ProjectEntry {
             path: path.to_path_buf(),
             name,
@@ -497,8 +635,7 @@ impl App {
             project_type: project_type.to_string(),
             head,
             snap_count,
-            bpm,
-            track_count,
+            summary: Summary::Pending,
             modified_secs,
             open_cues,
             activity,
@@ -506,7 +643,8 @@ impl App {
     }
 
     /// The project's tempo and track count, read from the project file.
-    fn parse_summary(path: &std::path::Path, ext: &str) -> Option<(f64, usize)> {
+    /// Read a project's tempo and track count.
+    pub fn parse_summary(path: &std::path::Path, ext: &str) -> Option<(f64, usize)> {
         let project = if ext == "als" {
             clavus_parser_als::AlsParser::new(path).ok()?.project
         } else {
@@ -1289,10 +1427,10 @@ impl App {
         clavus_root: &std::path::Path,
         project_path: &std::path::Path,
     ) -> (Option<String>, usize, Vec<u8>) {
-        let blobs = match BlobStore::new(clavus_root.join("blobs")) {
-            Ok(b) => b,
-            Err(_) => return (None, 0, Vec::new()),
-        };
+        // The store is opened, not created: counting snapshots must
+        // never bring a Clavus directory into being, and it is read
+        // once per project, so it must not do any work either.
+        let blobs = BlobStore::open(clavus_root.join("blobs"));
         let id = clavus_core::project::ProjectId::new(project_path);
         let store = SnapshotStore::new(blobs, &id);
         let head = store.head().map(|s| s.hash);
@@ -1344,6 +1482,37 @@ impl App {
             entry.activity = activity;
             entry.open_cues = Self::open_cue_count(&root, &entry.path);
         }
+    }
+
+    /// Re-read the counts, unless they were read very recently.
+    ///
+    /// Re-reading the store for every project in a library of a
+    /// thousand walks every chain in it, and that is far too much to do
+    /// on every keypress — the list was unusable on a large library,
+    /// because moving the cursor took a tenth of a second.
+    ///
+    /// The only thing that can have changed is the store, so the
+    /// store's own clock decides when it is worth looking again. A
+    /// caller that knows the store has just changed should call
+    /// `refresh_project_counts` instead, or `invalidate_counts` first.
+    pub fn refresh_project_counts_if_stale(&mut self) {
+        let now = std::time::Instant::now();
+        if let Some(last) = self.last_counts_refresh {
+            if now.duration_since(last) < Self::COUNTS_REFRESH_INTERVAL {
+                return;
+            }
+        }
+        self.last_counts_refresh = Some(now);
+        self.refresh_project_counts();
+    }
+
+    /// Forget when the counts were last read, so that the next refresh
+    /// happens straight away.
+    ///
+    /// Clavus changes the store itself when it takes a snapshot or
+    /// pulls from a relay, and the list has to show that at once.
+    pub fn invalidate_counts(&mut self) {
+        self.last_counts_refresh = None;
     }
 
     /// Whether the Clavus data directory can be read.

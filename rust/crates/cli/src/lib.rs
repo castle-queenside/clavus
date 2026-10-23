@@ -1648,12 +1648,7 @@ pub fn cmd_projects(
         return Ok(());
     }
 
-    let mut projects: Vec<(String, PathBuf)> = Vec::new();
-    let mut visited = std::collections::HashSet::new();
-
-    for base in dirs {
-        find_projects_in(&base, recursive, &mut projects, &mut visited, 0);
-    }
+    let projects = clavus_core::project::discover_projects(&dirs, recursive);
 
     if projects.is_empty() {
         outln!(out, "No Ableton/Bitwig projects found.");
@@ -1662,7 +1657,7 @@ pub fn cmd_projects(
     }
 
     outln!(out, "Found {} project(s):\n", projects.len());
-    for (name, path) in &projects {
+    for (name, path) in projects.iter().map(|p| (&p.name, &p.path)) {
         let modified = std::fs::metadata(path)
             .and_then(|m| m.modified())
             .map(format_modified_time)
@@ -1723,63 +1718,6 @@ fn format_modified_time(t: std::time::SystemTime) -> String {
 }
 
 
-/// How deep a recursive project scan will go.
-const MAX_SCAN_DEPTH: usize = 12;
-
-fn find_projects_in(
-    dir: &Path,
-    recursive: bool,
-    out: &mut Vec<(String, PathBuf)>,
-    visited: &mut std::collections::HashSet<PathBuf>,
-    depth: usize,
-) {
-    if depth > MAX_SCAN_DEPTH {
-        return;
-    }
-
-    // A symlink that points at an ancestor makes the walk go in circles.
-    // Canonicalising each directory and refusing to visit one twice stops
-    // that instead of recursing until the stack runs out.
-    if let Ok(real) = dir.canonicalize() {
-        if !visited.insert(real) {
-            return;
-        }
-    }
-
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            if recursive {
-                find_projects_in(&path, recursive, out, visited, depth + 1);
-            }
-            continue;
-        }
-
-        let ext = path
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        if ext == "als" || ext == "bwproject" {
-            // Live's own `Backup/` and `Autosave/` copies are not
-            // projects of their own — they are copies of one. Listing
-            // them made the list twice as long and showed the same set
-            // under a dozen names.
-            if clavus_core::project::is_live_backup_copy(&path) {
-                continue;
-            }
-            if let Some(name) = path.file_stem().map(|s| s.to_string_lossy().to_string()) {
-                out.push((name, path));
-            }
-        }
-    }
-}
-
 pub fn projects_dir() -> PathBuf {
     dirs::audio_dir()
         .or_else(dirs::home_dir)
@@ -1834,65 +1772,15 @@ pub fn resolve_project(project: &Path, dir: Option<&Path>) -> PathBuf {
 /// Find the one project below `dir` that answers to `name`.
 ///
 /// Only `.als` and `.bwproject` files count, and the name has to match
-/// exactly. Several matches are no match: the caller is better off
-/// with an error than with the wrong project.
+/// exactly. Several matches are no match: the caller is better off with
+/// an error than with the wrong project.
 fn find_unique_below(dir: &Path, name: &Path) -> Option<PathBuf> {
-    let wanted = name.file_name()?;
-    let mut found: Option<PathBuf> = None;
-    let mut stack = vec![(dir.to_path_buf(), 0usize)];
-    // A directory is visited at most once, and the walk has a depth
-    // cap. Without them a folder that links to its own ancestor would
-    // make this run forever, and a deep library would take minutes.
-    let mut visited: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
-    while let Some((current, depth)) = stack.pop() {
-        if depth > MAX_SCAN_DEPTH {
-            continue;
-        }
-        if let Ok(real) = current.canonicalize() {
-            if !visited.insert(real) {
-                continue;
-            }
-        }
-        let entries = match std::fs::read_dir(&current) {
-            Ok(entries) => entries,
-            Err(_) => continue,
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let file_type = match entry.file_type() {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
-            if file_type.is_dir() {
-                // Do not walk into the data directory or into a folder
-                // of hidden files: they are not the user's projects.
-                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if name.starts_with('.') {
-                    continue;
-                }
-                stack.push((path, depth + 1));
-                continue;
-            }
-            let matches_name = path.file_name() == Some(wanted);
-            let is_project = matches!(
-                path.extension().and_then(|e| e.to_str()),
-                Some("als") | Some("bwproject")
-            );
-            if matches_name && is_project {
-                // Live's own copies are not projects of their own, so
-                // they must not make a name look ambiguous.
-                if clavus_core::project::is_live_backup_copy(&path) {
-                    continue;
-                }
-                if found.is_some() {
-                    // More than one — no choice is safe.
-                    return None;
-                }
-                found = Some(path);
-            }
-        }
+    let matches = clavus_core::project::find_projects_named(&[dir.to_path_buf()], name);
+    if matches.len() == 1 {
+        Some(matches.into_iter().next().unwrap())
+    } else {
+        None
     }
-    found
 }
 
 pub fn clavus_root() -> PathBuf {
