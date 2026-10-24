@@ -131,6 +131,9 @@ cargo build --release
 ./clavus relocate map "/Volumes/Old Disk" "/Volumes/LaCie"
 ./clavus relocate list
 
+# Work out which rules would put the missing samples back
+./clavus relocate suggest --root /Volumes/LaCie ~/Music/Ableton/MySet.als
+
 # Open the TUI
 ./clavus tui --dir ~/Music/Ableton
 ```

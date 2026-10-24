@@ -11,8 +11,8 @@
 | Parser ALS (real sets) | `crates/parser-als/tests/real_world_tests.rs` | 17 | 🟢 |
 | Parser Bitwig | `crates/parser-bw/tests/bw_parser.rs` | 21 | 🟢 |
 | Sample audit + collect | `crates/core/tests/collect_tests.rs` | 24 | 🟢 |
-| Relocation map | `crates/core/tests/relocate_tests.rs` | 10 | 🟢 |
-| Relocation map (CLI) | `crates/cli/tests/relocate_tests.rs` | 7 | 🟢 |
+| Relocation map | `crates/core/tests/relocate_tests.rs` | 18 | 🟢 |
+| Relocation map (CLI) | `crates/cli/tests/relocate_tests.rs` | 11 | 🟢 |
 | BlobStore / snapshot core | `crates/core/tests/core_tests.rs` | 42 | 🟢 |
 | Cue store | `crates/core/tests/cue_tests.rs` | 26 | 🟢 |
 | Property-based (core) | `crates/core/tests/property_tests.rs` | 11 | 🟢 |
@@ -39,7 +39,7 @@
 | Sync unit tests (blob transfer) | `crates/sync/src/**` | 10 | 🟢 |
 | Two machines, one relay | `scripts/two-machine-relay-test.sh` | 3 machines | 🟢 |
 
-**615 tests passing, 0 failed, 0 ignored**, plus a three-machine relay
+**627 tests passing, 0 failed, 0 ignored**, plus a three-machine relay
 test that runs the real Linux binary over real TCP.
 The palette is Clavus's own, not the terminal's. A panel that sets no
 background of its own shows the *terminal's* background through, and
@@ -718,8 +718,39 @@ is more than one match. A search would be slow, and it would sometimes
 pick the wrong copy of the same audio. The map is one line per move,
 it is visible, and it can be corrected. Clavus does not guess.
 
-**The tests** are in `crates/core/tests/relocate_tests.rs` (10) and
-`crates/cli/tests/relocate_tests.rs` (7). They drive the real map, the
+**But it can help you write the map.** `clavus relocate suggest` audits
+the sets you name, looks for each missing sample under a folder you
+point it at, and prints the rules that would put them back — one line
+each, ready to run:
+
+```bash
+clavus relocate suggest --root /Volumes/LaCie ~/Music/Ableton/MySet.als
+```
+
+It writes nothing. The rules are proposals, and the user runs the ones
+they accept.
+
+**How a rule is worked out.** The library is walked once and indexed by
+file name. A reference with no file of that name is gone — nothing to
+propose. A reference with several files of that name is ambiguous, and
+no rule is proposed for it either, because serving the wrong copy of
+the same audio is worse than serving none. Copies that hold *identical
+bytes* are not a real ambiguity: whichever one is picked, the audio is
+the same.
+
+For everything else the rule is the part of the reference that changed
+and the part of the file's real path that replaces it. The overlap is
+measured in path components, and both sides are cut the same way — a
+trailing slash on a reference cannot make the two disagree about what
+a component is.
+
+```rust
+// rust/crates/core/src/relocate.rs
+pub fn suggest_rules(references: &[PathBuf], root: &Path) -> Suggestions
+```
+
+**The tests** are in `crates/core/tests/relocate_tests.rs` (18) and
+`crates/cli/tests/relocate_tests.rs` (11). They drive the real map, the
 real audit and the real collect.
 
 ---

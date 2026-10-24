@@ -153,22 +153,45 @@ fn removing_a_rule_that_is_not_there_says_so() {
 }
 
 #[test]
-fn a_relative_path_is_refused() {
+fn a_relative_destination_is_refused() {
     let tmp = TempDir::new().unwrap();
     let store = tmp.path().join(".clavus");
     let (_, result) = run(|o, e| {
         cmd_relocate(
             &RelocateAction::Map {
-                from: "Volumes/Old".into(),
-                to: "/Volumes/New".into(),
+                from: "/Volumes/Old".into(),
+                to: "Volumes/New".into(),
             },
             &store,
             o,
             e,
         )
     });
-    let err = result.expect_err("a relative path should be refused");
+    let err = result.expect_err("a relative destination should be refused");
     assert!(err.to_string().contains("absolute"), "{}", err);
+}
+
+#[test]
+fn a_relative_start_is_allowed_because_a_set_writes_it_that_way() {
+    let tmp = TempDir::new().unwrap();
+    let store = tmp.path().join(".clavus");
+    // A set that refers to its library by folder name, or that was made
+    // on a PC, writes a path that is not absolute. The rule has to be
+    // able to name that path as it was written.
+    let (out, result) = run(|o, e| {
+        cmd_relocate(
+            &RelocateAction::Map {
+                from: "Beat Lab/Samples".into(),
+                to: "/Volumes/LaCie/New Packs".into(),
+            },
+            &store,
+            o,
+            e,
+        )
+    });
+    assert!(result.is_ok(), "{}", out.all());
+    let (out, _) = run(|o, e| cmd_relocate(&RelocateAction::List, &store, o, e));
+    assert!(out.stdout.contains("Beat Lab/Samples"), "{}", out.all());
 }
 
 #[test]
@@ -234,4 +257,104 @@ fn the_audit_finds_a_sample_whose_path_moved() {
         "the report must name the place: {}",
         out.all()
     );
+}
+
+// ─── The suggestions ─────────────────────────────────────────────────────
+
+/// A set that points at a sample which is not where it says.
+fn a_set_pointing_at_a_moved_sample(root: &std::path::Path) -> (PathBuf, PathBuf) {
+    let project = root.join("Project");
+    let library = root.join("New Library");
+    let sample = library.join("Kick.wav");
+    fs::create_dir_all(&project).expect("project dir");
+    fs::create_dir_all(sample.parent().unwrap()).expect("sample dir");
+    fs::write(&sample, b"kick").expect("write sample");
+
+    let als = project.join("Set.als");
+    write_als(&als, "/Old/Machine/Library/Kick.wav");
+    (als, library)
+}
+
+#[test]
+fn clavus_suggests_the_rule_that_would_put_the_sample_back() {
+    let tmp = TempDir::new().expect("temp dir");
+    let store = tmp.path().join("store");
+    let (als, library) = a_set_pointing_at_a_moved_sample(tmp.path());
+
+    let (out, _) = run(|o, e| {
+        cmd_relocate(
+            &RelocateAction::Suggest {
+                root: library.clone(),
+                projects: vec![als.clone()],
+                dir: None,
+            },
+            &store,
+            o,
+            e,
+        )
+    });
+
+    assert!(
+        out.stdout.contains("relocate map"),
+        "the command must print the rule to run: {}",
+        out.all()
+    );
+    assert!(
+        out.stdout.contains("/Old/Machine/Library"),
+        "the rule must name the path the set points at: {}",
+        out.all()
+    );
+    assert!(
+        out.stdout.contains("New Library"),
+        "the rule must name where the audio is now: {}",
+        out.all()
+    );
+}
+
+#[test]
+fn clavus_says_when_there_is_nothing_to_suggest() {
+    let tmp = TempDir::new().expect("temp dir");
+    let store = tmp.path().join("store");
+    let library = tmp.path().join("Library");
+    fs::create_dir_all(&library).expect("library");
+
+    let (out, _) = run(|o, e| {
+        cmd_relocate(
+            &RelocateAction::Suggest {
+                root: library,
+                projects: vec![],
+                dir: Some(tmp.path().join("no sets here").clone()),
+            },
+            &store,
+            o,
+            e,
+        )
+    });
+    // With no sets named and no standard locations, the command has to
+    // say so rather than quietly doing nothing.
+    assert!(
+        out.stderr.contains("standard locations") || out.stdout.contains("nothing to suggest"),
+        "{}",
+        out.all()
+    );
+}
+
+#[test]
+fn a_suggestion_needs_a_folder_that_exists() {
+    let tmp = TempDir::new().expect("temp dir");
+    let store = tmp.path().join("store");
+    let (_, result) = run(|o, e| {
+        cmd_relocate(
+            &RelocateAction::Suggest {
+                root: tmp.path().join("not there"),
+                projects: vec![],
+                dir: None,
+            },
+            &store,
+            o,
+            e,
+        )
+    });
+    let err = result.expect_err("a missing folder has to be an error");
+    assert!(err.to_string().contains("does not exist"), "{}", err);
 }

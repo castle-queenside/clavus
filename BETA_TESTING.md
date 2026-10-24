@@ -156,8 +156,42 @@ it in.
 - `clavus relocate unmap "/the/old/path"` removes it, and the audit goes
   back to reporting the samples as missing.
 - A rule for `/Volumes/Set` must NOT rewrite `/Volumes/Set Two`.
-- A relative path (`Volumes/Old` instead of `/Volumes/Old`) is refused.
+- A relative **destination** (`Volumes/New` instead of `/Volumes/New`)
+  is refused.
 - A path containing `..` is refused.
+- A relative **start** is allowed, because that is how a set writes it:
+  `clavus relocate map "Beat Lab/Samples" "/Volumes/LaCie/New Packs"`
+  is accepted.
+
+### 2.2c Let Clavus Work The Rules Out 🧭
+
+**Setup:** A set — or a library of sets — whose samples are missing.
+
+**Test:**
+```bash
+clavus relocate suggest --root /Volumes/LaCie "/path/to/project.als"
+```
+
+**Expected:** the command audits the sets, looks for each missing
+sample under the folder you named, and prints the rules that would put
+them back:
+
+```
+These rules would recover 229 reference(s):
+
+    120  clavus relocate map "Samples/Grand Piano" "/Volumes/LaCie/..."
+     50  clavus relocate map "C:/Users/chris/OneDrive/Desktop/Create" "/Volumes/LaCie/PC Create"
+```
+
+**Things to check:**
+
+- It prints the rules; it does **not** apply them. `clavus relocate
+  list` still shows nothing until you run one.
+- It says how many references had more than one file of that name, and
+  proposes no rule for them.
+- It says how many references have no file of that name at all — those
+  are genuinely gone.
+- A folder that does not exist is an error, not an empty answer.
 
 ### 2.3 Audit a Bitwig Project
 

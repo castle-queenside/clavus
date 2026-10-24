@@ -186,6 +186,17 @@ pub enum RelocateAction {
         /// The path the rule starts from
         from: String,
     },
+    /// Work out which rules would put the missing samples back
+    Suggest {
+        /// The folder to search for the audio
+        #[arg(long)]
+        root: PathBuf,
+        /// The sets to look at
+        projects: Vec<PathBuf>,
+        /// The folder of sets to look at, when they are not named
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
 }
 
 pub fn cmd_snapshot(
@@ -1963,7 +1974,7 @@ pub fn cmd_relocate(
     out: &mut dyn Write,
     _err: &mut dyn Write,
 ) -> anyhow::Result<()> {
-    use clavus_core::relocate::{is_safe_root, Relocations};
+    use clavus_core::relocate::{is_safe_source, is_safe_target, Relocations};
 
     let mut map = match Relocations::load(clavus_root) {
         Ok(map) => map,
@@ -1986,8 +1997,11 @@ pub fn cmd_relocate(
             }
         }
         RelocateAction::Map { from, to } => {
-            if !is_safe_root(from) || !is_safe_root(to) {
-                anyhow::bail!("both paths have to be absolute, and cannot contain `..`");
+            if !is_safe_source(from) {
+                anyhow::bail!("the path a set points at cannot contain `..`");
+            }
+            if !is_safe_target(to) {
+                anyhow::bail!("where it went has to be an absolute path on this machine, and cannot contain `..`");
             }
             map.map(from, to)?;
             map.save(clavus_root)?;
@@ -2005,6 +2019,120 @@ pub fn cmd_relocate(
                 anyhow::bail!("no rule for {}", from.trim_end_matches('/'));
             }
         }
+        RelocateAction::Suggest {
+            root,
+            projects,
+            dir,
+        } => {
+            suggest_relocations(projects, dir.as_deref(), root, &map, out)?;
+        }
     }
+    Ok(())
+}
+
+/// Work out which rules would put the missing samples back.
+///
+/// Nothing is written. The rules are printed for the user to accept,
+/// because a rule that is wrong would send a sample to the wrong place
+/// — and only the user knows which copy of a sample is the right one.
+fn suggest_relocations(
+    projects: &[PathBuf],
+    dir: Option<&Path>,
+    root: &Path,
+    map: &clavus_core::relocate::Relocations,
+    out: &mut dyn Write,
+) -> anyhow::Result<()> {
+    use clavus_core::relocate::suggest_rules;
+
+    if !root.exists() {
+        anyhow::bail!("{} does not exist", root.display());
+    }
+
+    // The sets to look at.
+    let sets: Vec<PathBuf> = if !projects.is_empty() {
+        projects.to_vec()
+    } else {
+        let dirs: Vec<PathBuf> = match dir {
+            Some(d) => vec![d.to_path_buf()],
+            None => standard_albeton_dirs(),
+        };
+        if dirs.is_empty() {
+            anyhow::bail!("no standard locations found — name the sets to look at");
+        }
+        outln!(
+            out,
+            "Looking at every set in {}. This takes a while.",
+            dirs[0].display()
+        );
+        clavus_core::project::discover_projects(&dirs, true)
+            .into_iter()
+            .map(|p| p.path)
+            .collect()
+    };
+
+    // Every reference that does not resolve.
+    let mut references: Vec<PathBuf> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for (n, set) in sets.iter().enumerate() {
+        let report = match sample::audit_project_with(set, map) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        for missing in &report.missing {
+            if seen.insert(missing.path.clone()) {
+                references.push(missing.path.clone());
+            }
+        }
+        if sets.len() > 20 && (n + 1) % 20 == 0 {
+            outln!(out, "  audited {} of {} sets…", n + 1, sets.len());
+        }
+    }
+
+    if references.is_empty() {
+        outln!(out, "Nothing is missing — there is nothing to suggest.");
+        return Ok(());
+    }
+    outln!(
+        out,
+        "{} distinct reference(s) do not resolve. Searching {}…",
+        references.len(),
+        root.display()
+    );
+
+    let suggestions = suggest_rules(&references, root);
+
+    if suggestions.rules.is_empty() {
+        outln!(out, "No rule could be worked out.");
+    } else {
+        outln!(
+            out,
+            "\nThese rules would recover {} reference(s):\n",
+            suggestions
+                .rules
+                .iter()
+                .map(|r| r.references)
+                .sum::<usize>()
+        );
+        for rule in &suggestions.rules {
+            outln!(
+                out,
+                "  {:5}  clavus relocate map {:?} {:?}",
+                rule.references,
+                rule.from,
+                rule.to
+            );
+        }
+    }
+    outln!(
+        out,
+        "\n{} reference(s) have more than one file of that name — no rule was proposed for them, because the wrong copy is worse than none.",
+        suggestions.ambiguous
+    );
+    outln!(
+        out,
+        "{} reference(s) have no file of that name under {} — they are gone.",
+        suggestions.unmatched,
+        root.display()
+    );
     Ok(())
 }

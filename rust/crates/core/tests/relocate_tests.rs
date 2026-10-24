@@ -8,7 +8,7 @@
 //! These tests drive the real map, the real audit and the real collect —
 //! no reimplementation of the resolution order.
 
-use clavus_core::relocate::{is_safe_root, Relocation, Relocations};
+use clavus_core::relocate::{is_safe_source, is_safe_target, Relocation, Relocations};
 use clavus_core::{audit_project_with, collect_samples};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -142,10 +142,22 @@ fn mapping_the_same_path_twice_replaces_the_rule() {
 }
 
 #[test]
-fn a_rule_cannot_climb_out_of_its_own_folder() {
-    assert!(is_safe_root("/Volumes/LaCie"));
-    assert!(!is_safe_root("Volumes/LaCie"));
-    assert!(!is_safe_root("/Volumes/LaCie/../../etc"));
+fn a_destination_has_to_be_an_absolute_path_here() {
+    assert!(is_safe_target("/Volumes/LaCie"));
+    assert!(!is_safe_target("Volumes/LaCie"));
+    assert!(!is_safe_target("/Volumes/LaCie/../../etc"));
+}
+
+#[test]
+fn the_start_may_be_relative_or_from_a_windows_machine() {
+    // A set made on a PC writes `C:/Users/Chris/...`, and a set that
+    // refers to a library by its folder name writes a relative path.
+    // Both are the reference as written, and the rule has to be able to
+    // name them.
+    assert!(is_safe_source("C:/Users/Chris/Music"));
+    assert!(is_safe_source("Beat Lab/Samples"));
+    assert!(!is_safe_source("../etc"));
+    assert!(!is_safe_source("Samples/../../etc"));
 }
 
 #[test]
@@ -250,4 +262,134 @@ fn collecting_after_a_relocation_brings_the_audio_home() {
     // ...and the set points at it.
     let after = audit_project_with(&set, &map).expect("audit");
     assert!(after.is_clean(), "the project is clean: {:?}", after);
+}
+
+// ── the suggestion engine ──────────────────────────────────────────────
+
+fn touch(path: &Path, bytes: &[u8]) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(path, bytes).unwrap();
+}
+
+#[test]
+fn a_reference_that_moved_gets_a_rule() {
+    let tmp = TempDir::new().unwrap();
+    let lib = tmp.path().join("library");
+    touch(&lib.join("New Pack/Kick.wav"), b"kick bytes");
+
+    let suggestions = clavus_core::relocate::suggest_rules(
+        &[PathBuf::from("/Old/Machine/Library/Kick.wav")],
+        &lib,
+    );
+
+    assert_eq!(suggestions.rules.len(), 1);
+    assert_eq!(suggestions.rules[0].from, "/Old/Machine/Library");
+    assert_eq!(
+        suggestions.rules[0].to,
+        lib.join("New Pack").to_string_lossy()
+    );
+    assert_eq!(suggestions.rules[0].references, 1);
+    assert_eq!(suggestions.ambiguous, 0);
+    assert_eq!(suggestions.unmatched, 0);
+}
+
+#[test]
+fn a_rule_that_was_worked_out_actually_resolves_the_reference() {
+    let tmp = TempDir::new().unwrap();
+    let lib = tmp.path().join("library");
+    touch(&lib.join("Packs/Beat Lab/Kick.wav"), b"kick");
+
+    let reference = PathBuf::from("Beat Lab/Kick.wav");
+    let suggestions = clavus_core::relocate::suggest_rules(std::slice::from_ref(&reference), &lib);
+    assert_eq!(suggestions.rules.len(), 1);
+
+    // The rule has to work when it is actually used, not just look right.
+    let mut map = Relocations::default();
+    map.map(&suggestions.rules[0].from, &suggestions.rules[0].to)
+        .expect("the rule it suggested has to be a usable rule");
+    let candidates = map.candidates(&reference);
+    assert_eq!(candidates.len(), 1);
+    assert!(candidates[0].exists());
+    assert_eq!(fs::read(&candidates[0]).unwrap(), b"kick");
+}
+
+#[test]
+fn a_sample_that_is_not_on_the_drive_at_all_is_reported_as_gone() {
+    let tmp = TempDir::new().unwrap();
+    let lib = tmp.path().join("library");
+    touch(&lib.join("something-else.wav"), b"x");
+
+    let suggestions = clavus_core::relocate::suggest_rules(
+        &[PathBuf::from("/Old/Machine/Library/Not Here.wav")],
+        &lib,
+    );
+
+    assert!(suggestions.rules.is_empty());
+    assert_eq!(suggestions.unmatched, 1);
+    assert_eq!(suggestions.ambiguous, 0);
+}
+
+#[test]
+fn two_different_files_of_the_same_name_are_ambiguous() {
+    let tmp = TempDir::new().unwrap();
+    let lib = tmp.path().join("library");
+    touch(&lib.join("A/Kick.wav"), b"one");
+    touch(&lib.join("B/Kick.wav"), b"two different");
+
+    let suggestions =
+        clavus_core::relocate::suggest_rules(&[PathBuf::from("/Old/Library/Kick.wav")], &lib);
+
+    assert!(suggestions.rules.is_empty());
+    assert_eq!(suggestions.ambiguous, 1);
+}
+
+#[test]
+fn copies_of_the_same_audio_are_not_a_real_ambiguity() {
+    let tmp = TempDir::new().unwrap();
+    let lib = tmp.path().join("library");
+    touch(&lib.join("A/Kick.wav"), b"the very same bytes");
+    touch(&lib.join("B/Kick.wav"), b"the very same bytes");
+
+    let suggestions =
+        clavus_core::relocate::suggest_rules(&[PathBuf::from("/Old/Library/Kick.wav")], &lib);
+
+    assert_eq!(suggestions.rules.len(), 1);
+    assert_eq!(suggestions.ambiguous, 0);
+}
+
+#[test]
+fn a_trailing_slash_does_not_confuse_the_rule() {
+    let tmp = TempDir::new().unwrap();
+    let lib = tmp.path().join("library");
+    touch(&lib.join("New Pack/Kick.wav"), b"kick");
+
+    // Some sets write a path with a trailing slash on it.
+    let suggestions = clavus_core::relocate::suggest_rules(
+        &[PathBuf::from("/Old/Machine/Library/Kick.wav/")],
+        &lib,
+    );
+
+    assert_eq!(suggestions.rules.len(), 1);
+    assert_eq!(suggestions.rules[0].from, "/Old/Machine/Library");
+}
+
+#[test]
+fn the_rules_are_offered_most_valuable_first() {
+    let tmp = TempDir::new().unwrap();
+    let lib = tmp.path().join("library");
+    touch(&lib.join("New/Kick.wav"), b"kick");
+    touch(&lib.join("New/Snare.wav"), b"snare");
+    touch(&lib.join("New/Clap.wav"), b"clap");
+
+    let references = vec![
+        PathBuf::from("/Old/A/Kick.wav"),
+        PathBuf::from("/Old/A/Snare.wav"),
+        PathBuf::from("/Old/A/Clap.wav"),
+    ];
+    let suggestions = clavus_core::relocate::suggest_rules(&references, &lib);
+
+    assert_eq!(suggestions.rules.len(), 1);
+    assert_eq!(suggestions.rules[0].references, 3);
 }

@@ -125,11 +125,26 @@ audio, and the audit says so.
 clavus relocate map "/Volumes/Old Disk" "/Volumes/LaCie"
 clavus relocate list
 clavus relocate unmap "/Volumes/Old Disk"
+
+# When you have a whole library of moved paths and do not know them all:
+clavus relocate suggest --root /Volumes/LaCie ~/Music/Ableton/MySet.als
 ```
 
 The rules live in `~/.clavus/relocations.json` and are asked about
 after the path the set names has been tried, so a rule that is out of
 date cannot move a sample that was already where the set said it was.
+
+A rule's **start** is the path as the set wrote it, so it may be
+relative (`Beat Lab/Samples`) or a Windows path from a set made on a PC
+(`C:/Users/Chris/Music`). A rule's **destination** has to be an
+absolute path on this machine.
+
+`clavus relocate suggest` works the rules out for you. It audits the
+sets you name, looks for each missing sample under the folder you
+point it at, and prints the rules that would put them back — one line
+each, ready to run. It writes nothing: a rule that sends a sample to
+the wrong copy is worse than no rule at all, so the user reads them and
+chooses.
 
 On the real studio drive this took 305 samples that the audit called
 lost back to where they are. The rest — twelve files — were never
@@ -478,7 +493,7 @@ git add -A && git commit && git push
   opens, a drag picks, and the scrollbar is a control
 - Capital-letter shortcuts work, and capital letters can be typed into
   a note or a search box
-- 615 tests passing, clippy clean, CI green
+- 627 tests passing, clippy clean, CI green
 - The `.als` parser reads the real library: 1,242 of 1,245 sets from
   Live 8 to Live 12 report their real track count, tempo, track names
   and devices. The other three are in Live's old binary format and say
