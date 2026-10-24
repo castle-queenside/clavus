@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use clavus_cli::{
-    cmd_audit, cmd_collect, cmd_cue, cmd_cues, cmd_log, cmd_projects, cmd_pull, cmd_push,
+    cmd_audit, cmd_collect, cmd_collect_with, cmd_cue, cmd_cues, cmd_log, cmd_projects,
+    cmd_pull, cmd_push,
     cmd_restore, cmd_snapshot, cmd_status,
 };
 use tempfile::TempDir;
@@ -488,6 +489,42 @@ fn restore_of_head_after_a_snapshot_keeps_the_project_usable() {
 }
 
 // ─── collect ──────────────────────────────────────────────────────────────
+
+#[test]
+fn a_dry_run_collect_changes_nothing_and_says_what_it_would_do() {
+    let ws = Workspace::new();
+    let outside = ws.project.parent().unwrap().join("outside.wav");
+    fs::write(&outside, b"RIFFoutside").unwrap();
+    let als = ws.write_als(&als_xml(&["../outside.wav"]));
+    let before = fs::read(&als).unwrap();
+
+    let (out, result) = run(|o, e| cmd_collect_with(&als, &ws.root, true, o, e));
+    assert!(result.is_ok(), "a dry run should succeed: {:?}", result);
+
+    // It says what it would do.
+    assert!(
+        out.stdout.contains("Would collect"),
+        "the dry run must say what it would do: {}",
+        out.all()
+    );
+    assert!(
+        out.stdout.contains("Nothing was written"),
+        "the dry run must say that nothing was written: {}",
+        out.all()
+    );
+
+    // And it did not do it.
+    assert_eq!(
+        fs::read(&als).unwrap(),
+        before,
+        "a dry run must not rewrite the set"
+    );
+    assert!(
+        !ws.project.join("Samples").exists(),
+        "a dry run must not create a Samples folder"
+    );
+    assert_eq!(fs::read(&outside).unwrap(), b"RIFFoutside");
+}
 
 #[test]
 fn collect_copies_an_outside_sample_into_the_project() {

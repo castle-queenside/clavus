@@ -4,7 +4,7 @@
 //! be driven directly from tests. This binary only parses arguments and
 //! dispatches.
 
-use clavus_cli::{cmd_audit, cmd_collect, cmd_cue, cmd_cues, cmd_log, cmd_projects,
+use clavus_cli::{cmd_audit, cmd_collect_with, cmd_cue, cmd_cues, cmd_log, cmd_projects,
                  cmd_pull, cmd_push, cmd_relay, cmd_restore, cmd_snapshot, cmd_status,
                  clavus_root, resolve_project, standard_albeton_dirs, Cli, Commands};
 use clap::Parser;
@@ -96,9 +96,15 @@ fn main() -> anyhow::Result<()> {
             let project = resolve_project(&project, cli.dir.as_deref());
             cmd_audit(&project, strict, &clavus_root, &mut stdout, &mut stderr)
         }
-        Commands::Collect { project } => {
+        Commands::Collect { project, dry_run } => {
             let project = resolve_project(&project, cli.dir.as_deref());
-            cmd_collect(&project, &clavus_root, &mut stdout, &mut stderr)
+            cmd_collect_with(
+                &project,
+                &clavus_root,
+                dry_run,
+                &mut stdout,
+                &mut stderr,
+            )
         }
         Commands::Push { relay, project } => {
             let project = resolve_project(&project, cli.dir.as_deref());

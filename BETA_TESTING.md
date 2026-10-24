@@ -236,7 +236,35 @@ the audit does not understand the Bitwig bundle.
 
 Collect copies external/missing samples into `YourProject_Samples/` and rewrites the `.als` to point to the local copies.
 
-> ⚠️ **Before testing:** Back up your project. Collect modifies the `.als` file's internal sample paths.
+> ⚠️ **Before testing:** Collect modifies the `.als` file's internal sample paths. Always try `--dry-run` first — it shows exactly what it would do and changes nothing.
+
+### 3.0 Look Before You Leap 🛡️
+
+**Test:**
+```bash
+clavus collect --dry-run "/path/to/project.als"
+```
+
+**Expected:**
+```
+  3 missing  ·  0 outside project  ·  0 inside archive
+Would collect 3 sample(s) into project/Samples/
+  Paths in .als would be rewritten — restart Ableton to reload
+
+Nothing was written. Run the same command without --dry-run to do it.
+```
+
+**Verify — this is the important part:**
+
+1. The `.als` file is **byte-for-byte identical** afterwards. Check it:
+   ```bash
+   shasum -a 256 "/path/to/project.als"    # before and after — same
+   ```
+2. No `Samples/` folder was created next to the project.
+3. The sample files themselves, wherever they live, are untouched.
+
+Then run the real thing and check the set *does* change — that is what
+collect is for.
 
 ### 3.1 First Collect (Samples Outside Project)
 

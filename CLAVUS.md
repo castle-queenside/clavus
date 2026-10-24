@@ -182,6 +182,26 @@ Nothing is dropped in silence.
   project was snapshotted last owned the chain, and the other project's
   `log`, `push` and `restore` showed the wrong history.
 
+### The set is the user's work
+A set is the one thing in this whole program that belongs to the user
+and nothing else. Clavus is careful with it:
+
+- **Only `collect` writes to a set.** It copies the audio the set points
+  at into the project and rewrites the paths inside the set. The audit,
+  the log, the status, a snapshot, a push, a pull and a restore all
+  leave the set's bytes exactly as they were.
+- **`clavus collect --dry-run` reports the plan and writes nothing.** No
+  file is copied, no folder is created, and not one path in the set is
+  rewritten. The only way to be sure about a change to someone's work
+  is to see it before it happens.
+- **The audit never writes to the project either.** It reads the set,
+  reads the disk, and prints.
+
+`collect_samples_with(project, report, dry_run)` is the one function
+that decides what would be copied and what would be rewritten; the dry
+run and the real collect go through the same code, so the plan cannot
+drift from the action.
+
 ### Bitwig archives
 A `.bwproject` is a ZIP archive holding `project.xml` and, usually, a copy
 of every sample the project uses. The references inside `project.xml`
@@ -493,7 +513,7 @@ git add -A && git commit && git push
   opens, a drag picks, and the scrollbar is a control
 - Capital-letter shortcuts work, and capital letters can be typed into
   a note or a search box
-- 627 tests passing, clippy clean, CI green
+- 630 tests passing, clippy clean, CI green
 - The `.als` parser reads the real library: 1,242 of 1,245 sets from
   Live 8 to Live 12 report their real track count, tempo, track names
   and devices. The other three are in Live's old binary format and say

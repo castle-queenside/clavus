@@ -109,7 +109,15 @@ pub enum Commands {
         strict: bool,
     },
     /// Collect missing audio samples into the project folder
-    Collect { project: PathBuf },
+    ///
+    /// This rewrites the paths inside the set. Use --dry-run to see what
+    /// it would do first — a set is the user's work.
+    Collect {
+        project: PathBuf,
+        /// Say what would happen without changing anything
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Push local snapshots to the relay server
     Push {
         /// Relay address (e.g. 192.168.1.10:4477)
@@ -725,6 +733,19 @@ pub fn cmd_collect(project: &Path, clavus_root: &Path,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> anyhow::Result<()> {
+    cmd_collect_with(project, clavus_root, false, out, err)
+}
+
+/// Collect the audio a project points at into the project itself.
+///
+/// With `dry_run` the plan is reported and nothing is written: no file
+/// is copied and no reference in the set is rewritten. A set is the
+/// user's work, and the only way to be sure about a change to it is to
+/// see it before it happens.
+pub fn cmd_collect_with(project: &Path, clavus_root: &Path, dry_run: bool,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> anyhow::Result<()> {
     let relocations = clavus_core::relocate::Relocations::load(clavus_root)?;
     let report = sample::audit_project_with(project, &relocations)?;
 
@@ -742,19 +763,28 @@ pub fn cmd_collect(project: &Path, clavus_root: &Path,
     );
 
     // Copy outside-project samples into project/Samples/ and rewrite paths
-    let collect = sample::collect_samples(project, &report)?;
+    let collect = sample::collect_samples_with(project, &report, dry_run)?;
 
     if collect.repointed_in_project > 0 {
         // Nothing was copied: the audio was already in the project and
         // the set was still pointing at the machine it came from. That
         // is a repair, and it has to be said — "nothing to collect"
         // would leave the user thinking the set was left alone.
-        outln!(
-            out,
-            "\n✓ Pointed {} at the copies already in the project",
-            plural(collect.repointed_in_project, "reference", "references")
-        );
-        outln!(out, "  Nothing was copied — the samples were already there. Paths in .als rewritten — restart Ableton to reload");
+        if dry_run {
+            outln!(
+                out,
+                "\nWould point {} at the copies already in the project",
+                plural(collect.repointed_in_project, "reference", "references")
+            );
+            outln!(out, "  Nothing would be copied — the samples are already there");
+        } else {
+            outln!(
+                out,
+                "\n✓ Pointed {} at the copies already in the project",
+                plural(collect.repointed_in_project, "reference", "references")
+            );
+            outln!(out, "  Nothing was copied — the samples were already there. Paths in .als rewritten — restart Ableton to reload");
+        }
     }
 
     if !collect.copied.is_empty() {
@@ -768,7 +798,21 @@ pub fn cmd_collect(project: &Path, clavus_root: &Path,
             // they were in it already. Saying that a folder next to the
             // bundle was filled would be a lie — there is no such
             // folder.
-            if collect.added_to_bundle > 0 {
+            if dry_run {
+                if collect.added_to_bundle > 0 {
+                    outln!(out, "\nWould collect {} into the project bundle",
+                        plural(collect.added_to_bundle, "sample", "samples"));
+                    outln!(out, "  Paths in the project archive would be rewritten — reopen the project in Bitwig");
+                } else {
+                    outln!(out, "\n{} already inside the project bundle",
+                        plural(collect.already_inside, "sample", "samples"));
+                    if collect.pointed_inside > 0 || collect.rewritten > 0 {
+                        outln!(out, "  Paths in the project archive would be rewritten to point at the copies inside it");
+                    } else {
+                        outln!(out, "  Paths in the project archive already point at the copies inside it");
+                    }
+                }
+            } else if collect.added_to_bundle > 0 {
                 outln!(out, "\n✓ Collected {} into the project bundle",
                     plural(collect.added_to_bundle, "sample", "samples"));
                 outln!(out, "  Paths in the project archive rewritten — reopen the project in Bitwig");
@@ -784,6 +828,18 @@ pub fn cmd_collect(project: &Path, clavus_root: &Path,
                 } else {
                     outln!(out, "  Paths in the project archive already point at the copies inside it");
                 }
+            }
+        } else if dry_run {
+            outln!(out, "\nWould collect {} into project/Samples/",
+                plural(collect.copied.len(), "sample", "samples"));
+            if collect.rewritten == collect.copied.len() {
+                outln!(out, "  Paths in .als would be rewritten — restart Ableton to reload");
+            } else {
+                outln!(
+                    out,
+                    "  ⚠ {} could not be rewritten — the project would still point at the outside file:",
+                    plural(collect.copied.len() - collect.rewritten, "reference", "references")
+                );
             }
         } else {
             outln!(out, "\n✓ Collected {} into project/Samples/",
@@ -816,6 +872,10 @@ pub fn cmd_collect(project: &Path, clavus_root: &Path,
 
     if collect.copied.is_empty() && collect.repointed_in_project == 0 {
         outln!(out, "\nNothing to collect.");
+    }
+
+    if dry_run {
+        outln!(out, "\nNothing was written. Run the same command without --dry-run to do it.");
     }
 
     Ok(())

@@ -748,3 +748,83 @@ fn test_a_relative_reference_is_not_satisfied_by_the_working_directory() {
     assert!(report.outside_project.is_empty());
     assert!(report.collected.is_empty());
 }
+
+// ─── The dry run ──────────────────────────────────────────────────────────
+
+#[test]
+fn a_dry_run_changes_nothing_at_all() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+
+    // The audio lives outside the project, and the set points at it.
+    let outside = root.join("Library/kick.wav");
+    make_sample(&outside, b"kick");
+
+    let project_dir = root.join("Project");
+    fs::create_dir_all(&project_dir).unwrap();
+    let als = project_dir.join("Set.als");
+    make_als(&als, &als_xml(&[(outside.to_str().unwrap(), "kick.wav")]));
+
+    // What the set looked like before anything was done to it.
+    let set_before = fs::read(&als).unwrap();
+
+    let report = audit_project(&als).unwrap();
+    assert!(!report.is_clean(), "the sample is outside the project");
+
+    let plan = clavus_core::sample::collect_samples_with(&als, &report, true).unwrap();
+
+    // The plan says what would happen.
+    assert_eq!(plan.copied.len(), 1);
+    assert!(plan.dry_run);
+
+    // And nothing happened.
+    assert_eq!(
+        fs::read(&als).unwrap(),
+        set_before,
+        "a dry run must not rewrite the set"
+    );
+    assert!(
+        !project_dir.join("Samples").exists(),
+        "a dry run must not create a Samples folder"
+    );
+    assert!(
+        !project_dir.join("Samples/kick.wav").exists(),
+        "a dry run must not copy the audio"
+    );
+    assert_eq!(
+        fs::read(&outside).unwrap(),
+        b"kick",
+        "the audio outside the project must be left alone"
+    );
+}
+
+#[test]
+fn the_dry_run_and_the_real_collect_agree_on_what_would_happen() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+
+    let outside = root.join("Library/kick.wav");
+    make_sample(&outside, b"kick");
+
+    let project_dir = root.join("Project");
+    fs::create_dir_all(&project_dir).unwrap();
+    let als = project_dir.join("Set.als");
+    make_als(&als, &als_xml(&[(outside.to_str().unwrap(), "kick.wav")]));
+
+    let report = audit_project(&als).unwrap();
+    let plan = clavus_core::sample::collect_samples_with(&als, &report, true).unwrap();
+
+    // Now do it for real, on a copy of the same scene.
+    let done = root.join("Done");
+    fs::create_dir_all(&done).unwrap();
+    let als2 = done.join("Set.als");
+    make_als(&als2, &als_xml(&[(outside.to_str().unwrap(), "kick.wav")]));
+    let report2 = audit_project(&als2).unwrap();
+    let real = clavus_core::sample::collect_samples_with(&als2, &report2, false).unwrap();
+
+    assert_eq!(plan.copied.len(), real.copied.len());
+    assert_eq!(plan.rewritten, real.rewritten);
+    assert_eq!(plan.added_to_bundle, real.added_to_bundle);
+    assert!(!real.dry_run);
+    assert!(done.join("Samples/kick.wav").exists());
+}

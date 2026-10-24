@@ -10,7 +10,7 @@
 | Parser ALS | `crates/parser-als/tests/als_parser.rs` | 48 | 🟢 |
 | Parser ALS (real sets) | `crates/parser-als/tests/real_world_tests.rs` | 17 | 🟢 |
 | Parser Bitwig | `crates/parser-bw/tests/bw_parser.rs` | 21 | 🟢 |
-| Sample audit + collect | `crates/core/tests/collect_tests.rs` | 24 | 🟢 |
+| Sample audit + collect | `crates/core/tests/collect_tests.rs` | 26 | 🟢 |
 | Relocation map | `crates/core/tests/relocate_tests.rs` | 18 | 🟢 |
 | Relocation map (CLI) | `crates/cli/tests/relocate_tests.rs` | 11 | 🟢 |
 | BlobStore / snapshot core | `crates/core/tests/core_tests.rs` | 42 | 🟢 |
@@ -39,7 +39,7 @@
 | Sync unit tests (blob transfer) | `crates/sync/src/**` | 10 | 🟢 |
 | Two machines, one relay | `scripts/two-machine-relay-test.sh` | 3 machines | 🟢 |
 
-**627 tests passing, 0 failed, 0 ignored**, plus a three-machine relay
+**630 tests passing, 0 failed, 0 ignored**, plus a three-machine relay
 test that runs the real Linux binary over real TCP.
 The palette is Clavus's own, not the terminal's. A panel that sets no
 background of its own shows the *terminal's* background through, and
@@ -752,6 +752,50 @@ pub fn suggest_rules(references: &[PathBuf], root: &Path) -> Suggestions
 **The tests** are in `crates/core/tests/relocate_tests.rs` (18) and
 `crates/cli/tests/relocate_tests.rs` (11). They drive the real map, the
 real audit and the real collect.
+
+---
+
+## The Set Is the User's Work 🛡️
+
+A set is the one thing in this program that belongs to the user and
+nothing else. So the question that matters is not "does collect work"
+but "**what does Clavus touch, and when**".
+
+| Command | Writes to the set? |
+|---|---|
+| `audit` | no |
+| `log`, `status`, `cues`, `projects` | no |
+| `snapshot` | no — it copies the set *into* the store |
+| `push`, `pull` | no |
+| `restore` | **yes** — it puts a snapshot back over the set |
+| `collect` | **yes** — it copies audio in and rewrites the paths inside |
+
+`collect` is the one that rewrites paths, so it has a dry run:
+
+```bash
+clavus collect --dry-run "path/to/set.als"
+```
+
+It says what it would do and **writes nothing** — no file copied, no
+`Samples/` folder created, not one path in the set rewritten. The plan
+and the action go through the same function, so the plan cannot drift
+from what actually happens:
+
+```rust
+// rust/crates/core/src/sample.rs
+pub fn collect_samples_with(
+    project_path: &Path,
+    report: &SampleAuditReport,
+    dry_run: bool,
+) -> Result<CollectReport, ClavusError>
+```
+
+**The tests** are in `crates/core/tests/collect_tests.rs` (26) and
+`crates/cli/tests/cli_tests.rs` (60). They assert on the *bytes*: the
+set is read before and after, and the dry run has to leave them
+identical. There is also a test that the dry run and the real collect
+report the same counts — a plan that says one thing and does another
+is worse than no plan at all.
 
 ---
 

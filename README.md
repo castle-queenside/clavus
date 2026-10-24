@@ -61,6 +61,7 @@ Clavus watches your project files and maintains a content-addressed snapshot cha
 |---------|-------------|
 | **Snapshot** | Save a content-addressed checkpoint. SHA256 of `.als`/`.bwproject` bytes. Duplicates detected automatically. |
 | **Audio audit** | Before every snapshot: verify all sample references are present and inside the project folder. No silent missing samples. A Bitwig bundle's own samples count as present, and `collect` keeps the bundle self-contained. A path that has moved is looked up through a map you write, so a renamed drive is not a lost library. |
+| **Your set is yours** | `collect` is the only command that writes to a set, and it rewrites the paths inside it. `clavus collect --dry-run` says what it would do and changes nothing. Everything else — audit, log, status, snapshot, push, pull, restore — leaves the set alone. |
 | **Cue markers** | Pin timeline comments at bar positions. Filter by Pending / Resolved / Skipped / Deferred / Archived. Each note records who wrote it. |
 | **Relay sync** | Push/pull snapshots over TCP to a collaborator's relay. No cloud. |
 | **Diff** | Walk the chain. See what changed: BPM, track count, sample manifest, message. |
@@ -133,6 +134,9 @@ cargo build --release
 
 # Work out which rules would put the missing samples back
 ./clavus relocate suggest --root /Volumes/LaCie ~/Music/Ableton/MySet.als
+
+# See what collecting would do, before it touches your set
+./clavus collect --dry-run ~/Music/Ableton/MySet.als
 
 # Open the TUI
 ./clavus tui --dir ~/Music/Ableton

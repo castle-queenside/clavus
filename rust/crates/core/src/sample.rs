@@ -827,9 +827,27 @@ fn archive_takes(archive_entries: &[String], filename: &str) -> bool {
 /// Rewrites the project file to point to the new local paths.
 ///
 /// Returns a [`CollectReport`] with what was copied and what failed.
+/// Collect the audio a project points at into the project itself.
+///
+/// With `dry_run` the plan is worked out and reported, and **nothing is
+/// written**: no file is copied, no archive is changed, and no reference
+/// in the set is rewritten. A set is the user's work, and the only way
+/// to be sure about a change is to see it before it happens.
 pub fn collect_samples(
     project_path: &Path,
     report: &SampleAuditReport,
+) -> Result<CollectReport, ClavusError> {
+    collect_samples_with(project_path, report, false)
+}
+
+/// Collect the audio a project points at into the project itself.
+///
+/// `dry_run` works out what would happen and reports it without
+/// touching a single file.
+pub fn collect_samples_with(
+    project_path: &Path,
+    report: &SampleAuditReport,
+    dry_run: bool,
 ) -> Result<CollectReport, ClavusError> {
     let project_root = project_root_of(project_path)
         .ok_or_else(|| ClavusError::ParseError("no parent directory".into()))?;
@@ -906,6 +924,12 @@ pub fn collect_samples(
                         continue;
                     }
                 };
+                if dry_run {
+                    info!("Would collect {} into the project bundle", filename);
+                    copied.push(project_path.to_path_buf());
+                    added_to_bundle += 1;
+                    continue;
+                }
                 match crate::bitwig_archive::add_entry(project_path, &internal, &bytes) {
                     Ok(()) => {
                         match crate::bitwig_archive::rewrite_sample_path(
@@ -945,6 +969,12 @@ pub fn collect_samples(
             let filename =
                 unique_destination(&mut claimed, &samples_dir, &ref_.filename, resolved);
             let dest = samples_dir.join(&filename);
+            if dry_run {
+                info!("Would collect {} into {}", filename, dest.display());
+                copied.push(dest.clone());
+                path_replacements.insert(orig, format!("Samples/{}", filename));
+                continue;
+            }
             if let Err(e) = fs::create_dir_all(&samples_dir) {
                 error!("Failed to create {}: {}", samples_dir.display(), e);
                 failed.push((ref_.path.clone(), e.to_string()));
@@ -992,6 +1022,14 @@ pub fn collect_samples(
                 info!("{} is already inside the project bundle", ref_.filename);
                 copied.push(project_path.to_path_buf());
                 already_inside += 1;
+            } else if dry_run {
+                info!(
+                    "Would point {} at the copy inside the project bundle ({})",
+                    ref_.filename, internal
+                );
+                copied.push(project_path.to_path_buf());
+                already_inside += 1;
+                pointed_inside += 1;
             } else {
                 match crate::bitwig_archive::rewrite_sample_path(project_path, &orig, &internal) {
                     Ok(true) => {
@@ -1055,7 +1093,9 @@ pub fn collect_samples(
     // Rewrite project file sample paths
     let mut rewritten = 0usize;
     if !path_replacements.is_empty() {
-        if is_bitwig {
+        if dry_run {
+            rewritten = path_replacements.len();
+        } else if is_bitwig {
             // The reference lives inside the archive's project.xml.
             for (old, new) in &path_replacements {
                 if crate::bitwig_archive::rewrite_sample_path(project_path, old, new)? {
@@ -1097,6 +1137,7 @@ pub fn collect_samples(
         pointed_inside,
         rewritten,
         repointed_in_project,
+        dry_run,
     })
 }
 
@@ -1133,6 +1174,9 @@ pub struct CollectReport {
     /// already in the project. Nothing was copied; the reference was
     /// pointed at the file that was there.
     pub repointed_in_project: usize,
+    /// True when the report describes what *would* happen, and nothing
+    /// was written.
+    pub dry_run: bool,
 }
 
 /// Find the file a missing reference is really pointing at.
