@@ -157,6 +157,35 @@ pub enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Say where a path a set points at has moved to
+    ///
+    /// A set writes down the absolute path of every sample it uses. When
+    /// a drive is renamed or a library moves, those paths stop resolving
+    /// and the set looks like it has lost its audio. This is where Clavus
+    /// is told what moved where.
+    Relocate {
+        #[command(subcommand)]
+        action: RelocateAction,
+    },
+}
+
+/// What to do with the relocation map.
+#[derive(Subcommand, Debug, Clone)]
+pub enum RelocateAction {
+    /// Show every rule
+    List,
+    /// Say that a path has moved somewhere else
+    Map {
+        /// The path the set points at, as it was written down
+        from: String,
+        /// Where that path lives now
+        to: String,
+    },
+    /// Forget a rule
+    Unmap {
+        /// The path the rule starts from
+        from: String,
+    },
 }
 
 pub fn cmd_snapshot(
@@ -178,7 +207,8 @@ pub fn cmd_snapshot(
         clavus_parser_als::AlsParser::new(project)?.project
     };
 
-    let report = sample::audit_project(project)?;
+    let relocations = clavus_core::relocate::Relocations::load(clavus_root)?;
+    let report = sample::audit_project_with(project, &relocations)?;
     if let Err(e) = report.ensure_clean() {
         errln!(err, "✗ {}", e);
         for line in e.detail_lines() {
@@ -188,7 +218,7 @@ pub fn cmd_snapshot(
             errln!(err, "\n→ Running `clavus collect` to copy samples into project folder...");
             sample::collect_samples(project, &report)?;
             // Re-audit after collecting
-            let report = sample::audit_project(project)?;
+            let report = sample::audit_project_with(project, &relocations)?;
             if let Err(e) = report.ensure_clean() {
                 errln!(err, "✗ Even after collecting, audit still failed:");
                 for line in e.detail_lines() {
@@ -631,10 +661,12 @@ fn print_sample_summary(report: &clavus_core::SampleAuditReport, out: &mut dyn W
 }
 
 pub fn cmd_audit(project: &Path, strict: bool,
+    clavus_root: &Path,
     out: &mut dyn Write,
     _err: &mut dyn Write,
 ) -> anyhow::Result<()> {
-    let report = sample::audit_project(project)?;
+    let relocations = clavus_core::relocate::Relocations::load(clavus_root)?;
+    let report = sample::audit_project_with(project, &relocations)?;
 
     if report.is_clean() {
         print_sample_summary(&report, out);
@@ -654,6 +686,14 @@ pub fn cmd_audit(project: &Path, strict: bool,
             outln!(out, "✗ {} outside project:", report.outside_project.len());
             for s in &report.outside_project {
                 outln!(out, "  {}", s.path.display());
+                // The set points at a path that has moved; the audio is
+                // here. Saying where is the difference between "lost"
+                // and "not collected yet".
+                if let Some(found) = &s.resolved_path {
+                    if found != &s.path {
+                        outln!(out, "    ↳ found at {}", found.display());
+                    }
+                }
             }
         }
         // Live's own factory samples are not the user's audio and are
@@ -670,11 +710,12 @@ pub fn cmd_audit(project: &Path, strict: bool,
     Ok(())
 }
 
-pub fn cmd_collect(project: &Path, _clavus_root: &Path,
+pub fn cmd_collect(project: &Path, clavus_root: &Path,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> anyhow::Result<()> {
-    let report = sample::audit_project(project)?;
+    let relocations = clavus_core::relocate::Relocations::load(clavus_root)?;
+    let report = sample::audit_project_with(project, &relocations)?;
 
     if report.is_clean() && report.embedded.is_empty() {
         outln!(out, "✓ {} already present, all inside project folder",
@@ -1571,7 +1612,8 @@ pub fn cmd_status(project: &Path, clavus_root: &Path,
     //
     // The audit runs first: a report for a project that could not be
     // read is a report about nothing.
-    let report = sample::audit_project(project)?;
+    let relocations = clavus_core::relocate::Relocations::load(clavus_root)?;
+    let report = sample::audit_project_with(project, &relocations)?;
 
     outln!(out, "{name}  ({project_type})");
     outln!(out, "{}", "─".repeat(50));
@@ -1905,6 +1947,64 @@ pub fn cmd_import_legacy(
             "Error: nothing could be brought across — the old store's projects were not found"
         );
         return Ok(());
+    }
+    Ok(())
+}
+
+// ─── Relocation map ───────────────────────────────────────────────────────
+
+/// Show, add or remove the "this path moved there" rules.
+///
+/// The map is what keeps a set that was made on another machine — or
+/// before a drive was renamed — from looking like it has lost its audio.
+pub fn cmd_relocate(
+    action: &RelocateAction,
+    clavus_root: &Path,
+    out: &mut dyn Write,
+    _err: &mut dyn Write,
+) -> anyhow::Result<()> {
+    use clavus_core::relocate::{is_safe_root, Relocations};
+
+    let mut map = match Relocations::load(clavus_root) {
+        Ok(map) => map,
+        Err(e) => anyhow::bail!("{}", e),
+    };
+
+    match action {
+        RelocateAction::List => {
+            if map.entries.is_empty() {
+                outln!(out, "No rules. A set that points at a path that has moved");
+                outln!(
+                    out,
+                    "is asked about them: `clavus relocate map <old path> <new path>`"
+                );
+                return Ok(());
+            }
+            outln!(out, "{} rule(s):", map.entries.len());
+            for entry in &map.entries {
+                outln!(out, "  {}  →  {}", entry.from, entry.to);
+            }
+        }
+        RelocateAction::Map { from, to } => {
+            if !is_safe_root(from) || !is_safe_root(to) {
+                anyhow::bail!("both paths have to be absolute, and cannot contain `..`");
+            }
+            map.map(from, to)?;
+            map.save(clavus_root)?;
+            outln!(out, "✓ {}  →  {}", from.trim_end_matches('/'), to.trim_end_matches('/'));
+            outln!(
+                out,
+                "  Clavus will look there when a set points at the old path."
+            );
+        }
+        RelocateAction::Unmap { from } => {
+            if map.unmap(from) {
+                map.save(clavus_root)?;
+                outln!(out, "✓ Removed the rule for {}", from.trim_end_matches('/'));
+            } else {
+                anyhow::bail!("no rule for {}", from.trim_end_matches('/'));
+            }
+        }
     }
     Ok(())
 }

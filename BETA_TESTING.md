@@ -66,7 +66,7 @@ clavus 0.1.0
 clavus --help
 ```
 
-**Expected:** A list of commands including `snapshot`, `log`, `audit`, `collect`, `relay`, `tui`, `cue`, `cues`.
+**Expected:** A list of commands including `snapshot`, `log`, `audit`, `collect`, `relay`, `tui`, `cue`, `cues`, `relocate`.
 
 **What to watch for:** Commands that are listed but crash when you try them.
 
@@ -122,6 +122,42 @@ wc -c out.txt err.txt
 
 `out.txt` holds the report; `err.txt` is empty. (Only a project that
 could not be *read* writes to stderr.)
+
+### 2.2b A Library That Moved
+
+**Setup:** Find a set that points at a path that no longer exists — a
+drive that was renamed, or a home folder that belonged to somebody
+else. The audit says the sample is missing.
+
+**Test:**
+```bash
+clavus audit "/path/to/project.als"
+clavus relocate map "/the/old/path" "/where/it/is/now"
+clavus audit "/path/to/project.als"
+clavus relocate list
+```
+
+**Expected:** the first audit reports the samples as missing. After the
+rule, they are found — and the report says *where*:
+
+```
+✗ 5 outside project:
+  /the/old/path/kick.wav
+    ↳ found at /where/it/is/now/kick.wav
+```
+
+They are *outside the project*, not missing: the audio is there, it
+just has not been collected into the set yet. `clavus collect` brings
+it in.
+
+**Things to check:**
+
+- `clavus relocate list` shows the rule after you add it.
+- `clavus relocate unmap "/the/old/path"` removes it, and the audit goes
+  back to reporting the samples as missing.
+- A rule for `/Volumes/Set` must NOT rewrite `/Volumes/Set Two`.
+- A relative path (`Volumes/Old` instead of `/Volumes/Old`) is refused.
+- A path containing `..` is refused.
 
 ### 2.3 Audit a Bitwig Project
 

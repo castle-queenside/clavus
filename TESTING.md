@@ -11,6 +11,8 @@
 | Parser ALS (real sets) | `crates/parser-als/tests/real_world_tests.rs` | 17 | 🟢 |
 | Parser Bitwig | `crates/parser-bw/tests/bw_parser.rs` | 21 | 🟢 |
 | Sample audit + collect | `crates/core/tests/collect_tests.rs` | 24 | 🟢 |
+| Relocation map | `crates/core/tests/relocate_tests.rs` | 10 | 🟢 |
+| Relocation map (CLI) | `crates/cli/tests/relocate_tests.rs` | 7 | 🟢 |
 | BlobStore / snapshot core | `crates/core/tests/core_tests.rs` | 42 | 🟢 |
 | Cue store | `crates/core/tests/cue_tests.rs` | 26 | 🟢 |
 | Property-based (core) | `crates/core/tests/property_tests.rs` | 11 | 🟢 |
@@ -37,7 +39,7 @@
 | Sync unit tests (blob transfer) | `crates/sync/src/**` | 10 | 🟢 |
 | Two machines, one relay | `scripts/two-machine-relay-test.sh` | 3 machines | 🟢 |
 
-**596 tests passing, 0 failed, 0 ignored**, plus a three-machine relay
+**615 tests passing, 0 failed, 0 ignored**, plus a three-machine relay
 test that runs the real Linux binary over real TCP.
 The palette is Clavus's own, not the terminal's. A panel that sets no
 background of its own shows the *terminal's* background through, and
@@ -258,6 +260,7 @@ real ones. Each now has a regression test:
 | A dry run left a store behind | The store's directories were created before the migration knew whether it was a dry run | The store is opened for writing only when something is actually written |
 | The wrong file of two with the same name was used | A library can hold `Me And You/Me And You.als` and `Me And You/Me And You Project/Me And You.als`. The old store named the right one, and the part of its path after the library folder is still true | The old path is mapped onto where the sets live now, and the name is only a fallback |
 | The audit depended on where the command was run | A relative sample reference was resolved against the project *and* against the process's current directory. A file with the same name in the working directory was picked up instead of the copy inside the project, and the report said the sample was outside the project — so two runs of the same command could disagree | A reference is resolved against the project only. A bundle's relative reference points inside the bundle, so the bundle is asked before the disk |
+| A renamed drive looked like a lost library | A set writes down the absolute path of every sample. When the drive was renamed and the machine was rebuilt under a different user name, those paths stopped resolving and 327 samples on a real drive were reported missing | The user says what moved where — `clavus relocate map <old> <new>` — and the audit asks that map before it calls a sample missing. On the same drive, 305 of those 327 were found again |
 
 ---
 
@@ -659,6 +662,65 @@ before the first screen appeared: 13 seconds for the command line and
 **74 seconds** for the TUI on this drive. The list now appears in
 **0.33 seconds**, with the numbers arriving in the background as they
 are read. The tests for that are in `crates/tui/tests/scale_tests.rs`.
+
+---
+
+## The Library That Moved 🧭
+
+A set writes down the absolute path of every sample it uses. This
+drive's sets were made over ten years, on machines that were renamed,
+on a drive that was renamed, and in a home folder that belonged to
+somebody else. Every one of those paths stopped resolving, and the
+audit said the audio was gone.
+
+**What the drive actually said.** 234,167 sample references across the
+1,245 sets. 222,269 are relative and resolve against the set. The
+rest are absolute, and they name four places that no longer exist:
+
+| What the set points at | References | What it is now |
+|---|---|---|
+| `/Volumes/LaCie/Create ` | 4,764 | still there — the drive kept the folder |
+| `/Users/chriscarr/Splice` | 3,764 | `/Volumes/LaCie/new age projects back ups` |
+| `/Users/chriscarr/Library/Mobile Documents/…` | 868 | this machine's iCloud library |
+| `/Users/chriscarr/Music`, `/Users/chriscarr/Downloads` | 72 | genuinely gone — 12 files |
+
+**What Clavus does about it.** It keeps a map the user writes:
+
+```bash
+clavus relocate map "/Users/chriscarr/Splice" "/Volumes/LaCie/new age projects back ups"
+clavus relocate map "/Users/chriscarr/Library/Mobile Documents/com~apple~CloudDocs" \
+                   "/Users/chris/Library/Mobile Documents/com~apple~CloudDocs"
+clavus relocate list
+```
+
+The map is asked **last**, after the path the set names has been tried.
+A rule that is out of date cannot move a sample that was already where
+the set said it was. A rule only matches on a path-component boundary,
+so `/Volumes/Set` never rewrites `/Volumes/Set Two`.
+
+**What it is worth, on the real drive.** Across the 38 sets that point
+at the old home folder:
+
+| | Missing | Outside the project |
+|---|---|---|
+| Without the map | **327** | 31 |
+| With the map | **22** | 57 |
+
+305 samples that the audit called lost are found again. The 26 that
+moved from "missing" to "outside the project" are audio that is present
+and simply has not been collected into the set yet — which is what
+`clavus collect` is for. The 22 that stay missing are the Live
+recordings and the stems that were never copied to the drive.
+
+**Why Clavus does not go looking.** It could search the drive for a file
+with the same name — 242,843 files, and for 151 of the references there
+is more than one match. A search would be slow, and it would sometimes
+pick the wrong copy of the same audio. The map is one line per move,
+it is visible, and it can be corrected. Clavus does not guess.
+
+**The tests** are in `crates/core/tests/relocate_tests.rs` (10) and
+`crates/cli/tests/relocate_tests.rs` (7). They drive the real map, the
+real audit and the real collect.
 
 ---
 

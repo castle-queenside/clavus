@@ -104,6 +104,19 @@ fn flate2_decode(data: &[u8]) -> std::io::Result<Vec<u8>> {
 /// Run a full sample audit on a project file.
 /// Returns a report with collected, missing, and outside-project samples.
 pub fn audit_project(project_path: &Path) -> Result<SampleAuditReport, ClavusError> {
+    audit_project_with(project_path, &crate::relocate::Relocations::default())
+}
+
+/// The same audit, with the user's relocation map in hand.
+///
+/// A set records the absolute path of every sample it uses. When a drive
+/// is renamed or a library moves, those paths stop resolving and the set
+/// looks like it has lost its audio. The map says where those paths went,
+/// and the audit asks it before it calls a sample missing.
+pub fn audit_project_with(
+    project_path: &Path,
+    relocations: &crate::relocate::Relocations,
+) -> Result<SampleAuditReport, ClavusError> {
     let project_root = project_root_of(project_path)
         .ok_or_else(|| ClavusError::ParseError("no parent directory for project".into()))?;
 
@@ -149,7 +162,13 @@ pub fn audit_project(project_path: &Path) -> Result<SampleAuditReport, ClavusErr
         embedded.len(),
         project_path.display()
     );
-    audit_sample_refs(&refs, project_root, &embedded, ext == "bwproject")
+    audit_sample_refs(
+        &refs,
+        project_root,
+        &embedded,
+        ext == "bwproject",
+        relocations,
+    )
 }
 
 /// Validate that `xml` is an Ableton Live set.
@@ -406,6 +425,7 @@ fn audit_sample_refs(
     project_root: &Path,
     archive_files: &[String],
     is_bundle: bool,
+    relocations: &crate::relocate::Relocations,
 ) -> Result<SampleAuditReport, ClavusError> {
     let mut collected = Vec::new();
     let mut missing = Vec::new();
@@ -519,6 +539,18 @@ fn audit_sample_refs(
                 if !candidates.contains(&candidate) {
                     candidates.push(candidate);
                 }
+            }
+        }
+
+        // Where the user says this path moved to.
+        //
+        // This comes last on purpose: a path that still resolves where
+        // the set says it does is used as it is, and the map is only
+        // asked about the ones that no longer resolve. A map that is out
+        // of date cannot quietly move a sample that was there all along.
+        for candidate in relocations.candidates(path) {
+            if !candidates.contains(&candidate) {
+                candidates.push(candidate);
             }
         }
 

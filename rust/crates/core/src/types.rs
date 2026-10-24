@@ -493,4 +493,7 @@ pub enum ClavusError {
 
     #[error("Protocol error: {0}")]
     Protocol(String),
+
+    #[error("Configuration error: {0}")]
+    Config(String),
 }

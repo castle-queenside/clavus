@@ -541,7 +541,7 @@ impl BlobStore {
 
 /// Write `data` to `path` atomically: writes to `path.tmp` first, then renames.
 /// If the process crashes mid-write, the original file is intact.
-fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
+pub fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
     let tmp = PathBuf::from(path.to_string_lossy().to_string() + ".tmp");
     fs::write(&tmp, data)?;
     fs::rename(&tmp, path)?;

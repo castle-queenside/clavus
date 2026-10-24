@@ -197,7 +197,7 @@ fn a_collected_bundle_audits_clean() {
     let (out, result) = run(|o, e| cmd_collect(&bundle, &tmp.path().join(".clavus"), o, e));
     assert!(result.is_ok(), "collect: {}", out.all());
 
-    let (out, result) = run(|o, e| cmd_audit(&bundle, false, o, e));
+    let (out, result) = run(|o, e| cmd_audit(&bundle, false, &tmp.path().join(".clavus"), o, e));
     assert!(result.is_ok(), "audit: {}", out.all());
     assert!(
         !out.stdout.contains("missing"),

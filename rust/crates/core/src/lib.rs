@@ -21,10 +21,13 @@ pub mod als_refs;
 
 pub mod project;
 
+pub mod relocate;
+pub use relocate::{Relocation, Relocations};
+
 pub mod time;
 
 pub mod sample;
-pub use sample::{audit_project, collect_samples, CollectReport};
+pub use sample::{audit_project, audit_project_with, collect_samples, CollectReport};
 
 pub mod error;
 

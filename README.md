@@ -60,7 +60,7 @@ Clavus watches your project files and maintains a content-addressed snapshot cha
 | Feature | What it does |
 |---------|-------------|
 | **Snapshot** | Save a content-addressed checkpoint. SHA256 of `.als`/`.bwproject` bytes. Duplicates detected automatically. |
-| **Audio audit** | Before every snapshot: verify all sample references are present and inside the project folder. No silent missing samples. A Bitwig bundle's own samples count as present, and `collect` keeps the bundle self-contained. |
+| **Audio audit** | Before every snapshot: verify all sample references are present and inside the project folder. No silent missing samples. A Bitwig bundle's own samples count as present, and `collect` keeps the bundle self-contained. A path that has moved is looked up through a map you write, so a renamed drive is not a lost library. |
 | **Cue markers** | Pin timeline comments at bar positions. Filter by Pending / Resolved / Skipped / Deferred / Archived. Each note records who wrote it. |
 | **Relay sync** | Push/pull snapshots over TCP to a collaborator's relay. No cloud. |
 | **Diff** | Walk the chain. See what changed: BPM, track count, sample manifest, message. |
@@ -126,6 +126,10 @@ cargo build --release
 
 # Bring an older Clavus store into this one
 ./clavus import-legacy --store ~/.clavus --projects ~/Clavus/Projects
+
+# Say where a path a set points at has moved to
+./clavus relocate map "/Volumes/Old Disk" "/Volumes/LaCie"
+./clavus relocate list
 
 # Open the TUI
 ./clavus tui --dir ~/Music/Ableton

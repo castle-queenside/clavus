@@ -309,7 +309,7 @@ fn a_collect_rewrites_a_reference_whose_path_has_an_xml_entity() {
 
     // The audit must find the sample: the path is escaped in the XML
     // and has to be decoded to be looked for.
-    let (out, result) = run(|o, e| cmd_audit(&project, false, o, e));
+    let (out, result) = run(|o, e| cmd_audit(&project, false, &ws.root, o, e));
     assert!(result.is_ok(), "audit: {}", out.all());
     assert!(
         out.all().contains("R&B/kick.wav"),
@@ -340,7 +340,7 @@ fn a_collect_rewrites_a_reference_whose_path_has_an_xml_entity() {
     );
 
     // And the audit must be clean afterwards.
-    let (out, result) = run(|o, e| cmd_audit(&project, false, o, e));
+    let (out, result) = run(|o, e| cmd_audit(&project, false, &ws.root, o, e));
     assert!(result.is_ok(), "audit: {}", out.all());
     assert!(
         out.all().contains("accounted for"),
@@ -385,7 +385,7 @@ fn a_bitwig_sample_path_with_an_xml_entity_is_found_and_collected() {
         zip.finish().expect("finish");
     }
 
-    let (out, result) = run(|o, e| cmd_audit(&project, false, o, e));
+    let (out, result) = run(|o, e| cmd_audit(&project, false, &ws.root, o, e));
     assert!(result.is_ok(), "audit: {}", out.all());
     assert!(
         !out.all().contains("missing"),

@@ -115,6 +115,26 @@ whole library. Without it, the standard places are searched, so
 be unique across every place searched: two sets of the same name in
 two folders are two projects, and neither is the one that was asked for.
 
+### When the library moves
+A set writes down the absolute path of every sample it uses. Rename the
+drive, rebuild the machine under a different user name, and every one of
+those paths stops resolving — the set then looks like it has lost its
+audio, and the audit says so.
+
+```bash
+clavus relocate map "/Volumes/Old Disk" "/Volumes/LaCie"
+clavus relocate list
+clavus relocate unmap "/Volumes/Old Disk"
+```
+
+The rules live in `~/.clavus/relocations.json` and are asked about
+after the path the set names has been tried, so a rule that is out of
+date cannot move a sample that was already where the set said it was.
+
+On the real studio drive this took 305 samples that the audit called
+lost back to where they are. The rest — twelve files — were never
+copied to the drive in the first place.
+
 ### Coming from the older Clavus
 The version before this one kept its library in `~/Clavus/Projects` and
 its history in `~/.clavus`. Both are still readable.
@@ -242,6 +262,21 @@ run, and two runs of the same command could disagree. A `.bwproject` is a
 bundle, so its own relative reference points *inside the bundle* — the
 bundle is asked before the disk, because a file of the same name sitting
 next to the bundle is not the sample the project uses.
+
+A reference that no longer resolves is looked up in the **relocation
+map** before it is called missing. A set writes down the absolute path of
+every sample it uses; when a drive is renamed or a library moves, those
+paths stop resolving and the set looks like it has lost its audio. The
+map is the user's own list of "this old path is this new path", kept in
+`~/.clavus/relocations.json` and edited with `clavus relocate`.
+
+The map is asked **last**, after the path the set names has been tried,
+so a rule that is out of date cannot move a sample that was already
+where the set said it was. A rule matches only on a path-component
+boundary, so `/Volumes/Set` never rewrites `/Volumes/Set Two`. Clavus
+does not search the disk for a file with the same name: on a real drive
+151 of the references had more than one match, and a search would
+sometimes pick the wrong copy of the same audio.
 
 ### Sync protocol (TCP framed JSON)
 - 4-byte BE length prefix per message.
@@ -443,7 +478,7 @@ git add -A && git commit && git push
   opens, a drag picks, and the scrollbar is a control
 - Capital-letter shortcuts work, and capital letters can be typed into
   a note or a search box
-- 596 tests passing, clippy clean, CI green
+- 615 tests passing, clippy clean, CI green
 - The `.als` parser reads the real library: 1,242 of 1,245 sets from
   Live 8 to Live 12 report their real track count, tempo, track names
   and devices. The other three are in Live's old binary format and say

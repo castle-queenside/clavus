@@ -247,7 +247,7 @@ fn the_audit_report_is_on_stdout() {
     let als = tmp.path().join("Beta.als");
     write_als(&als, &xml);
 
-    let (out, result) = run(|o, e| cmd_audit(&als, false, o, e));
+    let (out, result) = run(|o, e| cmd_audit(&als, false, tmp.path(), o, e));
     assert!(result.is_ok(), "audit: {}", out.all());
     assert!(
         out.stdout.contains("missing"),

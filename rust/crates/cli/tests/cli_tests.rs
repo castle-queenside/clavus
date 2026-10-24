@@ -113,8 +113,8 @@ fn healthy_workspace() -> (Workspace, PathBuf) {
 
 #[test]
 fn audit_reports_present_samples() {
-    let (_ws, als) = healthy_workspace();
-    let (out, result) = run(|o, e| cmd_audit(&als, false, o, e));
+    let (ws, als) = healthy_workspace();
+    let (out, result) = run(|o, e| cmd_audit(&als, false, &ws.root, o, e));
     assert!(result.is_ok(), "audit should succeed: {:?}", result);
     let text = out.all();
     assert!(text.contains("1 sample"), "should report a count: {}", text);
@@ -125,7 +125,7 @@ fn audit_reports_present_samples() {
 fn audit_reports_missing_samples() {
     let ws = Workspace::new();
     let als = ws.write_als(&als_xml(&["Samples/gone.wav"]));
-    let (out, result) = run(|o, e| cmd_audit(&als, false, o, e));
+    let (out, result) = run(|o, e| cmd_audit(&als, false, &ws.root, o, e));
     assert!(result.is_ok(), "non-strict audit should still succeed");
     let text = out.all();
     assert!(text.contains("gone.wav"), "should name the missing file: {}", text);
@@ -140,7 +140,7 @@ fn audit_reports_missing_samples() {
 fn audit_strict_fails_on_missing_samples() {
     let ws = Workspace::new();
     let als = ws.write_als(&als_xml(&["Samples/gone.wav"]));
-    let (_, result) = run(|o, e| cmd_audit(&als, true, o, e));
+    let (_, result) = run(|o, e| cmd_audit(&als, true, &ws.root, o, e));
     assert!(
         result.is_err(),
         "strict audit must fail when a sample is missing"
@@ -149,8 +149,8 @@ fn audit_strict_fails_on_missing_samples() {
 
 #[test]
 fn audit_strict_passes_when_all_samples_present() {
-    let (_ws, als) = healthy_workspace();
-    let (_, result) = run(|o, e| cmd_audit(&als, true, o, e));
+    let (ws, als) = healthy_workspace();
+    let (_, result) = run(|o, e| cmd_audit(&als, true, &ws.root, o, e));
     assert!(result.is_ok(), "strict audit should pass: {:?}", result);
 }
 
@@ -159,7 +159,7 @@ fn audit_on_a_non_project_file_errors_rather_than_panicking() {
     let ws = Workspace::new();
     let junk = ws.project.join("notes.txt");
     fs::write(&junk, b"not a project").unwrap();
-    let (_, result) = run(|o, e| cmd_audit(&junk, false, o, e));
+    let (_, result) = run(|o, e| cmd_audit(&junk, false, &ws.root, o, e));
     assert!(result.is_err(), "auditing a non-project should fail cleanly");
 }
 
@@ -170,7 +170,7 @@ fn audit_on_a_corrupt_als_file_errors_rather_than_reporting_a_clean_project() {
     let ws = Workspace::new();
     let als = ws.project.join("Broken.als");
     fs::write(&als, b"this is not xml at all").unwrap();
-    let (out, result) = run(|o, e| cmd_audit(&als, false, o, e));
+    let (out, result) = run(|o, e| cmd_audit(&als, false, &ws.root, o, e));
     assert!(
         result.is_err(),
         "a corrupt project must not audit as clean: {}",
@@ -192,7 +192,7 @@ fn audit_on_valid_xml_that_is_not_a_live_set_errors() {
         br#"<?xml version="1.0" encoding="UTF-8"?><SomeOtherApp><Thing/></SomeOtherApp>"#,
     )
     .unwrap();
-    let (_, result) = run(|o, e| cmd_audit(&als, false, o, e));
+    let (_, result) = run(|o, e| cmd_audit(&als, false, &ws.root, o, e));
     assert!(result.is_err(), "valid XML that is not a Live set should fail");
 }
 
@@ -200,7 +200,7 @@ fn audit_on_valid_xml_that_is_not_a_live_set_errors() {
 fn audit_on_a_missing_file_errors_rather_than_panicking() {
     let ws = Workspace::new();
     let missing = ws.project.join("Nope.als");
-    let (_, result) = run(|o, e| cmd_audit(&missing, false, o, e));
+    let (_, result) = run(|o, e| cmd_audit(&missing, false, &ws.root, o, e));
     assert!(result.is_err(), "auditing a missing file should fail cleanly");
 }
 
@@ -505,7 +505,7 @@ fn collect_copies_an_outside_sample_into_the_project() {
     );
 
     // The project should now audit clean.
-    let (_, result) = run(|o, e| cmd_audit(&als, true, o, e));
+    let (_, result) = run(|o, e| cmd_audit(&als, true, &ws.root, o, e));
     assert!(result.is_ok(), "audit should pass after collect");
 }
 
@@ -1252,7 +1252,7 @@ fn audit_does_not_call_an_archived_sample_missing() {
     let proj = tmp.path().join("Test.bwproject");
     bwproject_with_embedded_sample(&proj, "kick.wav", "/Users/other/Library/kick.wav");
 
-    let (out, result) = run(|o, e| cmd_audit(&proj, false, o, e));
+    let (out, result) = run(|o, e| cmd_audit(&proj, false, tmp.path(), o, e));
     assert!(result.is_ok(), "{:?}", result);
     let text = out.all();
     assert!(
@@ -1326,8 +1326,8 @@ impl Rng {
 /// them panics.
 fn chaos_run(path: &Path, root: &Path) {
     // These may fail; they must not panic.
-    let _ = run(|o, e| cmd_audit(path, false, o, e));
-    let _ = run(|o, e| cmd_audit(path, true, o, e));
+    let _ = run(|o, e| cmd_audit(path, false, root, o, e));
+    let _ = run(|o, e| cmd_audit(path, true, root, o, e));
     let _ = run(|o, e| cmd_collect(path, root, o, e));
     let _ = run(|o, e| cmd_log(path, root, o, e));
     let _ = run(|o, e| cmd_status(path, root, o, e));

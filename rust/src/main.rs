@@ -94,7 +94,7 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Audit { project, strict } => {
             let project = resolve_project(&project, cli.dir.as_deref());
-            cmd_audit(&project, strict, &mut stdout, &mut stderr)
+            cmd_audit(&project, strict, &clavus_root, &mut stdout, &mut stderr)
         }
         Commands::Collect { project } => {
             let project = resolve_project(&project, cli.dir.as_deref());
@@ -136,6 +136,9 @@ fn main() -> anyhow::Result<()> {
                 &mut std::io::stdout(),
                 &mut std::io::stderr(),
             )
+        }
+        Commands::Relocate { action } => {
+            clavus_cli::cmd_relocate(&action, &clavus_root, &mut stdout, &mut stderr)
         }
         Commands::Restore { project, hash } => {
             let project = resolve_project(&project, cli.dir.as_deref());
