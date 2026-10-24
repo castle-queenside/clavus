@@ -220,3 +220,115 @@ fn moving_the_cursor_does_not_move_the_text() {
         after
     );
 }
+
+// ─── Contrast ─────────────────────────────────────────────────────────────
+//
+// The user said the keybinding hints and the secondary text were hard
+// to read and blended into the panel behind them. They were right, and
+// it was measurable: the muted grey sat at 3.05:1 against the lightest
+// panel, and the border lines at 1.23:1. Both are below what the
+// WCAG asks of text, and a border at 1.23:1 is not a border at all.
+//
+// These tests are the reason that cannot happen again.
+
+/// The relative luminance of a colour, per WCAG 2.1.
+fn luminance(c: Color) -> f64 {
+    let Color::Rgb(r, g, b) = c else {
+        panic!("the palette only uses true colour");
+    };
+    let channel = |v: u8| {
+        let v = v as f64 / 255.0;
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+}
+
+/// The contrast ratio between two colours, per WCAG 2.1.
+fn contrast(a: Color, b: Color) -> f64 {
+    let (la, lb) = (luminance(a), luminance(b));
+    let (hi, lo) = if la > lb { (la, lb) } else { (lb, la) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// The lightest surface a piece of text can end up on.
+const LIGHTEST_PANEL: Color = Color::Rgb(21, 24, 26);
+
+#[test]
+fn every_text_colour_can_be_read_on_every_panel() {
+    use clavus_tui::theme::*;
+
+    // The colours that carry words. Every one of them has to clear
+    // 4.5:1 — the ratio WCAG asks of ordinary text — against the
+    // lightest panel it can land on.
+    let text_colours: [(&str, Color); 7] = [
+        ("TEXT", TEXT),
+        ("MUTED", MUTED),
+        ("ACCENT", ACCENT),
+        ("GREEN", GREEN),
+        ("WARM", WARM),
+        ("RED", RED),
+        ("CYAN", CYAN),
+    ];
+
+    for (name, colour) in text_colours {
+        let ratio = contrast(colour, LIGHTEST_PANEL);
+        assert!(
+            ratio >= 4.5,
+            "{} is only {ratio:.2}:1 against the lightest panel — it has to be at least 4.5:1",
+            name
+        );
+    }
+}
+
+#[test]
+fn the_primary_and_secondary_text_are_still_different() {
+    use clavus_tui::theme::*;
+
+    // Brightening the muted grey must not have made it the same as
+    // the primary text. There has to be a hierarchy.
+    assert!(
+        contrast(TEXT, MUTED) >= 2.5,
+        "primary and secondary text are only {:.2}:1 apart — they have stopped being different",
+        contrast(TEXT, MUTED)
+    );
+}
+
+#[test]
+fn a_panel_border_can_be_seen() {
+    use clavus_tui::theme::*;
+
+    // A border that blends into the panel is not a border. The panels
+    // have to read as panels.
+    let ratio = contrast(LINE, LIGHTEST_PANEL);
+    assert!(
+        ratio >= 1.8,
+        "the border is only {ratio:.2}:1 against the panel — the panels do not read as panels"
+    );
+    assert!(
+        contrast(LINE, LINE_LO) > 1.0,
+        "the dim variant must still be dimmer than the visible one"
+    );
+}
+
+#[test]
+fn the_history_bars_go_up_in_brightness_and_start_above_the_baseline() {
+    use clavus_tui::theme::*;
+
+    // An empty bucket is drawn with the baseline glyph. A bar that
+    // holds one snapshot has to be brighter than that baseline, or a
+    // project with history looks emptier than one without.
+    let baseline = spark_color(0);
+    let mut previous = luminance(baseline);
+    for height in 1..=8u8 {
+        let now = luminance(spark_color(height));
+        assert!(
+            now > previous,
+            "spark bar {height} is not brighter than the one below it"
+        );
+        previous = now;
+    }
+}

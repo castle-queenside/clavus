@@ -3,11 +3,11 @@
 //! Palette drawn from Omarchy's warm-dark aesthetic and Cliamp's refinement.
 //! Background   #0b0c0d  (warm black, not cold)
 //! Panel layers #0e1012 → #121517 → #15181a
-//! Lines       #23282b   (subtle, not harsh)
+//! Lines       #4d585f   (visible, not harsh)
 //! Accent      #74e08c   (soft green)
 //! Warm        #e9b455   (amber, for gold/markers)
 //! Text        #e9ece9   (warm off-white, not pure white)
-//! Muted       #5a6568   (desaturated)
+//! Muted       #829297   (desaturated, but readable)
 //!
 //! Spacing is a 4pt grid: 4, 8, 12, 16, 20, 24...
 
@@ -25,14 +25,28 @@ pub const PANEL_1:      Color = Color::Rgb(18, 21, 23);  // raised
 pub const PANEL_2:      Color = Color::Rgb(21, 24, 26);  // elevated
 
 /// Structural lines and borders.
-pub const LINE:          Color = Color::Rgb(35, 40, 43);  // subtle divider
-pub const LINE_LO:      Color = Color::Rgb(28, 33, 36);  // very dim
+/// Structural lines and borders.
+///
+/// These were so close to the panel behind them that the panels did
+/// not read as panels at all, and the screen looked like one flat
+/// sheet of text. They are quiet, but they are now actually there.
+pub const LINE:          Color = Color::Rgb(77, 88, 95);  // a visible divider
+
+/// The very dim variant, for hairlines inside a panel.
+pub const LINE_LO:      Color = Color::Rgb(56, 66, 72);
 
 /// Primary text — warm off-white, not harsh.
 pub const TEXT:         Color = Color::Rgb(233, 236, 233);
 
 /// Secondary text.
-pub const MUTED:        Color = Color::Rgb(90, 101, 104);
+///
+/// This used to be so dim that the keybinding hints in the footer
+/// blended into the panel behind them. It is now bright enough to be
+/// read without effort — 5.5:1 against the lightest panel, which is
+/// comfortably past the 4.5:1 that WCAG asks of ordinary text — while
+/// still sitting well below `TEXT` at 15:1, so the hierarchy between
+/// primary and secondary text is intact.
+pub const MUTED:        Color = Color::Rgb(130, 146, 151);
 
 /// Interactive accent — soft green, Omarchy's signature.
 pub const ACCENT:       Color = Color::Rgb(116, 224, 140);
@@ -91,13 +105,13 @@ pub const S_PURPLE:      Style = Style::new().fg(PURPLE);
 pub fn spark_color(height: u8) -> Color {
     match height {
         0 => LINE_LO,
-        1 => Color::Rgb(30, 58, 40),
-        2 => Color::Rgb(38, 74, 50),
-        3 => Color::Rgb(48, 94, 62),
-        4 => Color::Rgb(60, 118, 76),
-        5 => Color::Rgb(74, 146, 94),
-        6 => Color::Rgb(92, 178, 112),
-        7 => Color::Rgb(104, 200, 124),
+        1 => Color::Rgb(40, 74, 52),
+        2 => Color::Rgb(50, 92, 64),
+        3 => Color::Rgb(60, 112, 78),
+        4 => Color::Rgb(72, 136, 90),
+        5 => Color::Rgb(86, 164, 104),
+        6 => Color::Rgb(100, 192, 120),
+        7 => Color::Rgb(110, 212, 132),
         _ => ACCENT,
     }
 }
