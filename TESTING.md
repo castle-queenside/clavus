@@ -9,6 +9,11 @@
 |------|-----------|-------|--------|
 | Parser ALS | `crates/parser-als/tests/als_parser.rs` | 48 | 🟢 |
 | Parser ALS (real sets) | `crates/parser-als/tests/real_world_tests.rs` | 17 | 🟢 |
+| Cue markers (Ableton) | `crates/parser-als/tests/marker_tests.rs` | 6 | 🟢 |
+| Cue locators (Bitwig) | `crates/parser-bw/tests/locator_tests.rs` | 4 | 🟢 |
+| Marker names | `crates/core/tests/marker_tests.rs` | 6 | 🟢 |
+| Project diff | `crates/core/tests/diff_tests.rs` | 17 | 🟢 |
+| Project diff (CLI) | `crates/cli/tests/diff_tests.rs` | 11 | 🟢 |
 | Parser Bitwig | `crates/parser-bw/tests/bw_parser.rs` | 21 | 🟢 |
 | Sample audit + collect | `crates/core/tests/collect_tests.rs` | 26 | 🟢 |
 | Relocation map | `crates/core/tests/relocate_tests.rs` | 18 | 🟢 |
@@ -39,7 +44,7 @@
 | Sync unit tests (blob transfer) | `crates/sync/src/**` | 10 | 🟢 |
 | Two machines, one relay | `scripts/two-machine-relay-test.sh` | 3 machines | 🟢 |
 
-**630 tests passing, 0 failed, 0 ignored**, plus a three-machine relay
+**678 tests passing, 0 failed, 0 ignored**, plus a three-machine relay
 test that runs the real Linux binary over real TCP.
 The palette is Clavus's own, not the terminal's. A panel that sets no
 background of its own shows the *terminal's* background through, and
@@ -814,7 +819,9 @@ jobs:
       - name: Run all tests
         run: cargo test --all
       - name: Clippy
-        run: cargo clippy --all -- -D warnings
+        # `--workspace` matters: `--all-targets` alone lints only the
+        # root package, so the member crates' tests were never checked.
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Build release
         run: cargo build --release
 ```

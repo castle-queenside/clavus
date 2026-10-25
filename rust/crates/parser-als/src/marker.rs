@@ -50,18 +50,22 @@ pub fn inject_markers(
     // Build new marker XML elements
     let mut new_markers = String::new();
     for cue in &unresolved {
-        let marker_name = format!("● {}", &cue.text[..cue.text.len().min(60)]);
+        // The name is cut at a character boundary and escaped, so a
+        // cue with an accent in it does not panic and a cue with a
+        // quote in it does not break the set.
+        let marker_name = clavus_core::marker_name(&cue.text);
+        let position = clavus_core::als_refs::encode_xml_entities(&cue.position);
         if is_live_12 {
             // Live 12: <Locator Time="beats" Name="..."/>
             new_markers.push_str(&format!(
                 r#"<Locator Time="{}" Name="{}"/>"#,
-                cue.position, marker_name
+                position, marker_name
             ));
         } else {
             // Live 10/11: <CuePoint Time="bar.beat.ticks" Name="..."/>
             new_markers.push_str(&format!(
                 r#"<CuePoint><Time Value="{}"/><Name Value="{}"/></CuePoint>"#,
-                cue.position, marker_name
+                position, marker_name
             ));
         }
     }

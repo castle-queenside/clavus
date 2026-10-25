@@ -23,7 +23,17 @@ impl AlsParser {
         let raw_bytes = fs::read(path)
             .map_err(|e| clavus_core::ClavusError::ParseError(format!("read {}: {}", path.display(), e)))?;
 
-        let xml_bytes = clavus_core::sample::decompress_als_bytes(&raw_bytes)
+        Self::from_bytes(path, &raw_bytes)
+    }
+
+    /// Parse an `.als` from bytes that are already in memory.
+    ///
+    /// A snapshot stores the bytes of the set it took. Comparing two
+    /// snapshots means parsing two sets that are not on disk — they
+    /// are in the store — so the parser has to be able to work from
+    /// bytes as well as from a file.
+    pub fn from_bytes(path: &Path, raw_bytes: &[u8]) -> Result<Self, clavus_core::ClavusError> {
+        let xml_bytes = clavus_core::sample::decompress_als_bytes(raw_bytes)
             .map(|(bytes, _gzipped)| bytes)
             .map_err(|e| clavus_core::ClavusError::ParseError(format!("gzip: {}", e)))?;
 

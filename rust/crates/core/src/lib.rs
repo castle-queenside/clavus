@@ -19,6 +19,9 @@ pub mod bitwig_archive;
 
 pub mod als_refs;
 
+pub mod diff;
+pub use diff::{diff_projects, diff_sample_refs, ProjectDiff, SampleDiff, SampleStatus, TrackDiff, TrackStatus};
+
 pub mod project;
 
 pub mod relocate;
@@ -69,4 +72,22 @@ pub fn default_author() -> String {
 /// crash the client with a one-character id. This never panics.
 pub fn short(text: &str, len: usize) -> String {
     text.chars().take(len).collect()
+}
+
+/// The name a cue is given when it is written into a set as a marker.
+///
+/// A cue's text is written by a person, so it can be longer than a
+/// marker has room for, and it can contain anything — including a
+/// quote or a `<`, which would break the XML it is written into.
+///
+/// The text is cut at a *character* boundary, not a byte boundary.
+/// Cutting bytes would cut a multi-byte character in half and panic,
+/// which is what used to happen to any cue with an accent in it.
+///
+/// The result is escaped, so a cue called `say "hi" & go` is written
+/// into the set as XML that parses.
+pub fn marker_name(text: &str) -> String {
+    const MAX_CHARS: usize = 60;
+    let cut: String = text.chars().take(MAX_CHARS).collect();
+    format!("● {}", als_refs::encode_xml_entities(&cut))
 }

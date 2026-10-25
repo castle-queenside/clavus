@@ -507,6 +507,77 @@ bug — report it.
 
 ---
 
+## Part 4b: Seeing What Changed
+
+The diff is how you find out what you have actually done since the last
+snapshot. It never writes to your set.
+
+### 4b.1 Walk The Chain
+
+**Test:**
+```bash
+clavus diff "/path/to/project.als"
+```
+
+**Expected:** Each step of the chain, with what changed at that step:
+```
+2 snapshot(s) in the chain.
+
+  e5f6a7b8  2026-10-20 14:35  Added reverb to vocals
+  a1b2c3d4  2026-10-20 14:30  Initial idea
+    Tracks
+      ~  Vocal                     renamed from Vox
+      ~  Drums                    changed · +Glue Compressor
+      +  Bass                     added
+      -  Scratch                  removed
+```
+
+The signs mean: `+` added, `-` removed, `~` changed. A track that was
+renamed says where the name came from.
+
+**What to watch for:** A track you *deleted* must never be reported as
+renamed. If you deleted "Vox" and added "Vocal", that is a removal and
+an addition, and the diff has to say so.
+
+### 4b.2 What Have I Done Since My Last Snapshot?
+
+**Test:** Change your set — rename a track, add a track, change the
+tempo — and then:
+```bash
+clavus diff --live "/path/to/project.als"
+```
+
+**Expected:** The difference between the set on disk and your last
+snapshot:
+```
+Comparing the set on disk with snapshot e5f6a7b8 (Added reverb to vocals).
+
+    Tempo        128 → 140 BPM
+    Tracks       8 → 9
+    Tracks
+      +  Bass                     added
+      ~  Vocal                     renamed from Vox
+```
+
+**What to watch for:** If it says "Nothing has changed" when you have
+changed something, that is a bug — report it. If the tempo is missing
+when you changed it, that is a bug too.
+
+### 4b.3 Compare Two Snapshots
+
+**Test:** Take the hash of two snapshots from `clavus log`, then:
+```bash
+clavus diff "/path/to/project.als" --from a1b2c3d4 --to e5f6a7b8
+```
+
+**Expected:** The difference between those two snapshots, whichever way
+round you ask for them.
+
+**What to watch for:** Asking the other way round must give the same
+answer, reversed.
+
+---
+
 ## Part 5: Cues
 
 Cues are timeline annotations — things to fix, questions, or notes at specific positions.

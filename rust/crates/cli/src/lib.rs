@@ -151,6 +151,24 @@ pub enum Commands {
         #[arg(default_value = "HEAD")]
         hash: String,
     },
+    /// Show what changed between two versions of a project
+    ///
+    /// With no options, walks the chain and says what changed at each
+    /// step. With --live, compares the set on disk with the last
+    /// snapshot, which answers "what have I done since I last
+    /// snapshotted?"
+    Diff {
+        project: PathBuf,
+        /// Compare the set on disk with the last snapshot
+        #[arg(long)]
+        live: bool,
+        /// The earlier snapshot to compare from (a hash or part of one)
+        #[arg(long)]
+        from: Option<String>,
+        /// The later snapshot to compare to (a hash or part of one)
+        #[arg(long)]
+        to: Option<String>,
+    },
     /// Bring an old Clavus store into this one
     ImportLegacy {
         /// The old `~/.clavus` directory to read from
@@ -679,6 +697,368 @@ fn print_sample_summary(report: &clavus_core::SampleAuditReport, out: &mut dyn W
     }
 }
 
+/// What changed between two versions of a project.
+///
+/// Three ways to ask:
+///
+/// * with no options, walk the chain and say what changed at each
+///   step — the history of the project in one screen;
+/// * with `--live`, compare the set on disk with the last snapshot —
+///   what has changed since the user last snapshotted;
+/// * with `--from` and `--to`, compare any two snapshots.
+///
+/// Nothing here writes to the set. A diff is a way of looking.
+pub fn cmd_diff(
+    project: &Path,
+    live: bool,
+    from: &Option<String>,
+    to: &Option<String>,
+    clavus_root: &Path,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> anyhow::Result<()> {
+    use clavus_core::blob::BlobStore;
+    use clavus_core::snapshot::SnapshotStore;
+
+    ensure_project_exists(project)?;
+    let id = clavus_core::project::ProjectId::new(project);
+
+    let store = BlobStore::open(clavus_root.join("blobs"));
+    // A store that cannot be read is not an empty store. Saying "no
+    // snapshots" when the directory is unreadable tells the user their
+    // history is empty when it is really hidden.
+    if let Err(e) = store.check_readable() {
+        anyhow::bail!("cannot read the Clavus data directory: {}", e);
+    }
+    let snap_store = SnapshotStore::new(store.clone(), &id);
+
+    // A record that exists but cannot be read is a broken history, not
+    // an empty one.
+    let corrupt = snap_store.corrupt_records();
+    if !corrupt.is_empty() {
+        anyhow::bail!(
+            "the snapshot record for {} is corrupt and cannot be read — the history of this project cannot be shown until it is repaired",
+            clavus_core::short(&corrupt[0], 8)
+        );
+    }
+
+    let head = match snap_store.head() {
+        Some(h) => h,
+        None => {
+            outln!(out, "No snapshots yet — run `clavus snapshot <path>` first.");
+            return Ok(());
+        }
+    };
+
+    if live {
+        return diff_live(project, &head, &store, out, err);
+    }
+
+    if from.is_some() || to.is_some() {
+        return diff_two(project, from, to, &snap_store, &store, out);
+    }
+
+    diff_chain(project, &snap_store, &store, out)
+}
+
+/// Compare the set on disk with a snapshot.
+fn diff_live(
+    project: &Path,
+    head: &clavus_core::types::Snapshot,
+    store: &clavus_core::blob::BlobStore,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> anyhow::Result<()> {
+    let live_bytes = std::fs::read(project).map_err(|e| {
+        anyhow::anyhow!("cannot read {}: {}", project.display(), e)
+    })?;
+
+    let Some(snap_bytes) = store.get(&head.hash) else {
+        errln!(
+            err,
+            "✗ the bytes of snapshot {} are not in the store, so it cannot be compared",
+            clavus_core::short(&head.hash, 8)
+        );
+        errln!(
+            err,
+            "  The snapshot record is there, but the set it took is missing."
+        );
+        anyhow::bail!("the bytes of the last snapshot are missing");
+    };
+
+    let live = parse_project_bytes(project, &live_bytes)?;
+    let snap = parse_project_bytes(project, &snap_bytes)?;
+
+    let diff = clavus_core::diff::diff_projects(&snap, &live);
+    let live_refs = clavus_core::sample::sample_paths_from_bytes(project, &live_bytes)?;
+    let snap_refs = clavus_core::sample::sample_paths_from_bytes(project, &snap_bytes)?;
+    let sample_diff = clavus_core::diff::diff_sample_refs(&snap_refs, &live_refs);
+
+    outln!(
+        out,
+        "Comparing the set on disk with snapshot {} ({}).\n",
+        clavus_core::short(&head.hash, 8),
+        one_line(&head.message)
+    );
+
+    if diff.is_empty() && sample_diff.is_empty() {
+        outln!(out, "  Nothing has changed since the last snapshot.");
+        return Ok(());
+    }
+
+    print_diff(&diff, &sample_diff, out);
+    Ok(())
+}
+
+/// Compare two snapshots with each other.
+fn diff_two(
+    project: &Path,
+    from: &Option<String>,
+    to: &Option<String>,
+    snap_store: &clavus_core::snapshot::SnapshotStore,
+    store: &clavus_core::blob::BlobStore,
+    out: &mut dyn Write,
+) -> anyhow::Result<()> {
+    let head = snap_store
+        .head()
+        .ok_or_else(|| anyhow::anyhow!("no snapshots yet for this project"))?;
+
+    let from_ref = from.clone().unwrap_or_else(|| head.parent.clone().unwrap_or_else(|| head.hash.clone()));
+    let to_ref = to.clone().unwrap_or_else(|| head.hash.clone());
+
+    let from_hash = snap_store.resolve(&from_ref)?;
+    let to_hash = snap_store.resolve(&to_ref)?;
+
+    let from_snap = snap_store
+        .load(&from_hash)
+        .ok_or_else(|| anyhow::anyhow!("snapshot {} is not in this project's history", from_ref))?;
+    let to_snap = snap_store
+        .load(&to_hash)
+        .ok_or_else(|| anyhow::anyhow!("snapshot {} is not in this project's history", to_ref))?;
+
+    let from_bytes = store.get(&from_hash).ok_or_else(|| {
+        anyhow::anyhow!(
+            "the bytes of snapshot {} are not in the store, so it cannot be compared",
+            clavus_core::short(&from_hash, 8)
+        )
+    })?;
+    let to_bytes = store.get(&to_hash).ok_or_else(|| {
+        anyhow::anyhow!(
+            "the bytes of snapshot {} are not in the store, so it cannot be compared",
+            clavus_core::short(&to_hash, 8)
+        )
+    })?;
+
+    let before = parse_project_bytes(project, &from_bytes)?;
+    let after = parse_project_bytes(project, &to_bytes)?;
+
+    let diff = clavus_core::diff::diff_projects(&before, &after);
+    let from_refs = clavus_core::sample::sample_paths_from_bytes(project, &from_bytes)?;
+    let to_refs = clavus_core::sample::sample_paths_from_bytes(project, &to_bytes)?;
+    let sample_diff = clavus_core::diff::diff_sample_refs(&from_refs, &to_refs);
+
+    outln!(
+        out,
+        "Comparing {} ({}) with {} ({}).\n",
+        clavus_core::short(&from_hash, 8),
+        one_line(&from_snap.message),
+        clavus_core::short(&to_hash, 8),
+        one_line(&to_snap.message)
+    );
+
+    if diff.is_empty() && sample_diff.is_empty() {
+        outln!(out, "  Nothing changed between these two snapshots.");
+        return Ok(());
+    }
+
+    print_diff(&diff, &sample_diff, out);
+    Ok(())
+}
+
+/// Walk the chain and say what changed at each step.
+fn diff_chain(
+    project: &Path,
+    snap_store: &clavus_core::snapshot::SnapshotStore,
+    store: &clavus_core::blob::BlobStore,
+    out: &mut dyn Write,
+) -> anyhow::Result<()> {
+    let head = snap_store
+        .head()
+        .ok_or_else(|| anyhow::anyhow!("no snapshots yet for this project"))?;
+    let chain = snap_store.walk_chain(Some(&head.hash));
+
+    // The chain comes back newest first. A history reads forwards.
+    let chain: Vec<_> = chain.into_iter().rev().collect();
+
+    outln!(out, "{} snapshot(s) in the chain.\n", chain.len());
+
+    let mut any = false;
+    let mut skipped = 0usize;
+    for (i, snap) in chain.iter().enumerate() {
+        // The first snapshot has nothing to be compared with.
+        if i == 0 {
+            outln!(
+                out,
+                "  {}  {}  {}",
+                clavus_core::short(&snap.hash, 8),
+                format_timestamp(snap.timestamp),
+                one_line(&snap.message)
+            );
+            continue;
+        }
+        let parent = &chain[i - 1];
+
+        let Some(parent_bytes) = store.get(&parent.hash) else {
+            skipped += 1;
+            outln!(
+                out,
+                "  {}  the bytes of {} are missing, so this step cannot be compared",
+                clavus_core::short(&snap.hash, 8),
+                clavus_core::short(&parent.hash, 8)
+            );
+            continue;
+        };
+        let Some(snap_bytes) = store.get(&snap.hash) else {
+            skipped += 1;
+            outln!(
+                out,
+                "  {}  the bytes of this snapshot are missing, so this step cannot be compared",
+                clavus_core::short(&snap.hash, 8)
+            );
+            continue;
+        };
+
+        let before = parse_project_bytes(project, &parent_bytes)?;
+        let after = parse_project_bytes(project, &snap_bytes)?;
+        let diff = clavus_core::diff::diff_projects(&before, &after);
+        let parent_refs = clavus_core::sample::sample_paths_from_bytes(project, &parent_bytes)?;
+        let snap_refs = clavus_core::sample::sample_paths_from_bytes(project, &snap_bytes)?;
+        let sample_diff = clavus_core::diff::diff_sample_refs(&parent_refs, &snap_refs);
+
+        if diff.is_empty() && sample_diff.is_empty() {
+            outln!(
+                out,
+                "  {}  {}  {}  (nothing changed)",
+                clavus_core::short(&snap.hash, 8),
+                format_timestamp(snap.timestamp),
+                one_line(&snap.message)
+            );
+            continue;
+        }
+
+        any = true;
+        outln!(
+            out,
+            "  {}  {}  {}",
+            clavus_core::short(&snap.hash, 8),
+            format_timestamp(snap.timestamp),
+            one_line(&snap.message)
+        );
+        print_diff(&diff, &sample_diff, out);
+    }
+
+    if !any {
+        if skipped > 0 {
+            // Some of the chain could not be compared. Saying "nothing
+            // changed" would be claiming something about the steps
+            // that were never looked at.
+            outln!(
+                out,
+                "\n  {} step(s) could not be compared, so this is not the whole story.",
+                skipped
+            );
+        } else {
+            outln!(out, "\n  Nothing in this chain differs from the step before it.");
+        }
+    }
+    Ok(())
+}
+
+/// Parse a set from bytes, choosing the parser by the file's name.
+fn parse_project_bytes(
+    project: &Path,
+    bytes: &[u8],
+) -> anyhow::Result<clavus_core::types::Project> {
+    let is_bitwig = project
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|e| e.eq_ignore_ascii_case("bwproject"))
+        .unwrap_or(false);
+    if is_bitwig {
+        Ok(clavus_parser_bw::BitwigParser::from_bytes(project, bytes)?.project)
+    } else {
+        Ok(clavus_parser_als::AlsParser::from_bytes(project, bytes)?.project)
+    }
+}
+
+/// Print what changed, in the order a person would say it.
+fn print_diff(
+    diff: &clavus_core::diff::ProjectDiff,
+    samples: &[clavus_core::diff::SampleDiff],
+    out: &mut dyn Write,
+) {
+    if let Some((before, after)) = diff.bpm {
+        outln!(out, "    Tempo        {} → {} BPM", before, after);
+    }
+    if let Some((before, after)) = diff.track_count {
+        outln!(
+            out,
+            "    Tracks       {} → {}",
+            before,
+            after
+        );
+    }
+
+    let changed = diff.changed_tracks();
+    if !changed.is_empty() {
+        outln!(out, "    Tracks");
+        for t in changed {
+            let mark = match t.status {
+                clavus_core::diff::TrackStatus::Added => "+",
+                clavus_core::diff::TrackStatus::Removed => "-",
+                _ => "~",
+            };
+            let mut note = match t.status {
+                clavus_core::diff::TrackStatus::Added => "added".to_string(),
+                clavus_core::diff::TrackStatus::Removed => "removed".to_string(),
+                clavus_core::diff::TrackStatus::Renamed => format!(
+                    "renamed from {}",
+                    one_line(t.previous_name.as_deref().unwrap_or(""))
+                ),
+                clavus_core::diff::TrackStatus::Modified => "changed".to_string(),
+                clavus_core::diff::TrackStatus::Unchanged => String::new(),
+            };
+            if !t.devices_added.is_empty() {
+                note.push_str(&format!(" · +{}", t.devices_added.join(", +")));
+            }
+            if !t.devices_removed.is_empty() {
+                note.push_str(&format!(" · -{}", t.devices_removed.join(", -")));
+            }
+            if !t.details.is_empty() {
+                note.push_str(&format!(" · {}", t.details.join(", ")));
+            }
+            outln!(out, "      {}  {:<28} {}", mark, one_line(&t.name), note);
+        }
+    }
+
+    if !samples.is_empty() {
+        outln!(out, "    Samples");
+        for s in samples {
+            let mark = match s.status {
+                clavus_core::diff::SampleStatus::Added => "+",
+                clavus_core::diff::SampleStatus::Removed => "-",
+                clavus_core::diff::SampleStatus::Moved => "~",
+            };
+            let path = match &s.previous_path {
+                Some(old) => format!("{} → {}", one_line(old), one_line(&s.path)),
+                None => one_line(&s.path),
+            };
+            outln!(out, "      {}  {:<28} {}", mark, path, s.status.as_str());
+        }
+    }
+}
+
+/// Compare the set on disk with the last snapshot.
 pub fn cmd_audit(project: &Path, strict: bool,
     clavus_root: &Path,
     out: &mut dyn Write,

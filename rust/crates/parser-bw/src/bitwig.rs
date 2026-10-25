@@ -19,9 +19,23 @@ pub struct BitwigParser {
 impl BitwigParser {
     /// Parse a `.bwproject` ZIP archive.
     pub fn new(path: &Path) -> Result<Self, clavus_core::ClavusError> {
-        let file = std::fs::File::open(path)
-            .map_err(|e| clavus_core::ClavusError::ParseError(format!("open {}: {}", path.display(), e)))?;
-        let mut archive = ZipArchive::new(file)
+        let raw_bytes = std::fs::read(path).map_err(|e| {
+            clavus_core::ClavusError::ParseError(format!("read {}: {}", path.display(), e))
+        })?;
+        Self::from_bytes(path, &raw_bytes)
+    }
+
+    /// Parse a `.bwproject` from bytes that are already in memory.
+    ///
+    /// A snapshot stores the bytes of the bundle it took. Comparing
+    /// two snapshots means parsing two bundles that are not on disk —
+    /// they are in the store — so the parser has to be able to work
+    /// from bytes as well as from a file.
+    pub fn from_bytes(
+        path: &Path,
+        raw_bytes: &[u8],
+    ) -> Result<Self, clavus_core::ClavusError> {
+        let mut archive = ZipArchive::new(std::io::Cursor::new(raw_bytes))
             .map_err(|e| clavus_core::ClavusError::ParseError(format!("zip open: {}", e)))?;
 
         let mut xml_bytes = Vec::new();

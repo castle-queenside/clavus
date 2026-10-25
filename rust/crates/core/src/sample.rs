@@ -244,11 +244,26 @@ pub fn validate_als_xml(xml: &str) -> Result<(), ClavusError> {
 /// combinations. We extract all attribute values that look like absolute paths
 /// or contain audio file extensions.
 fn extract_bitwig_sample_paths(project_path: &Path) -> Result<Vec<PathBuf>, ClavusError> {
+    let raw_bytes = std::fs::read(project_path).map_err(|e| {
+        ClavusError::ParseError(format!("read {}: {}", project_path.display(), e))
+    })?;
+    extract_bitwig_sample_paths_from_bytes(project_path, &raw_bytes)
+}
+
+/// The sample paths a Bitwig bundle points at, read from the bundle's
+/// bytes.
+///
+/// A snapshot stores the bytes of the set it took. Comparing two
+/// snapshots — or comparing the set on disk with the last snapshot —
+/// means reading the sample references out of bytes that are not a
+/// file on disk.
+pub fn extract_bitwig_sample_paths_from_bytes(
+    project_path: &Path,
+    raw_bytes: &[u8],
+) -> Result<Vec<PathBuf>, ClavusError> {
     use std::io::Read;
 
-    let file = std::fs::File::open(project_path)
-        .map_err(|e| ClavusError::ParseError(format!("open {}: {}", project_path.display(), e)))?;
-    let mut archive = zip::ZipArchive::new(file)
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(raw_bytes))
         .map_err(|e| ClavusError::ParseError(format!("zip open: {}", e)))?;
 
     let mut xml_bytes: Vec<u8> = Vec::new();
@@ -309,6 +324,37 @@ fn extract_bitwig_sample_paths(project_path: &Path) -> Result<Vec<PathBuf>, Clav
 
     debug!("extract_bitwig_sample_paths: {} refs from {}", refs.len(), project_path.display());
     Ok(refs)
+}
+
+/// The sample paths a set points at, read from the set's bytes.
+///
+/// A snapshot stores the bytes of the set it took. Comparing two
+/// snapshots — or comparing the set on disk with the last snapshot —
+/// means reading the sample references out of bytes that are not a
+/// file on disk, so this works from bytes and not only from a path.
+///
+/// The paths returned are the ones the set writes down. They are not
+/// resolved against the disk: a set that points at a sample which has
+/// moved still says where it used to be, and that is exactly what a
+/// diff needs to see.
+pub fn sample_paths_from_bytes(
+    project_path: &Path,
+    raw_bytes: &[u8],
+) -> Result<Vec<PathBuf>, ClavusError> {
+    let is_bitwig = project_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|e| e.eq_ignore_ascii_case("bwproject"))
+        .unwrap_or(false);
+
+    if is_bitwig {
+        return extract_bitwig_sample_paths_from_bytes(project_path, raw_bytes);
+    }
+
+    let (xml_bytes, _gzipped) = decompress_als_bytes(raw_bytes)
+        .map_err(|e| ClavusError::ParseError(format!("gzip: {}", e)))?;
+    let xml = String::from_utf8(xml_bytes).map_err(ClavusError::from)?;
+    Ok(crate::als_refs::extract_sample_refs_from_xml(&xml))
 }
 
 /// The file extensions Clavus treats as audio.

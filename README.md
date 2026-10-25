@@ -64,7 +64,7 @@ Clavus watches your project files and maintains a content-addressed snapshot cha
 | **Your set is yours** | `collect` is the only command that writes to a set, and it rewrites the paths inside it. `clavus collect --dry-run` says what it would do and changes nothing. Everything else — audit, log, status, snapshot, push, pull, restore — leaves the set alone. |
 | **Cue markers** | Pin timeline comments at bar positions. Filter by Pending / Resolved / Skipped / Deferred / Archived. Each note records who wrote it. |
 | **Relay sync** | Push/pull snapshots over TCP to a collaborator's relay. No cloud. |
-| **Diff** | Walk the chain. See what changed: BPM, track count, sample manifest, message. |
+| **Diff** | Walk the chain and see what changed at each step: tempo, track count, every track that was added, removed or renamed, and the sample manifest. `clavus diff --live` compares the set on disk with your last snapshot, so you can see what you have done since. A track is only reported as renamed when the evidence is clear — otherwise it is reported as a removal and an addition, so a lost track is never hidden. |
 | **Restore** | Roll back to any snapshot — restore the raw project bytes from the blob store. A snapshot only ever restores within its own project. |
 | **Project isolation** | Every project keeps its own chain, cues and history. One project's work never lands in another's — not even when two projects share a folder *name*. |
 
@@ -108,6 +108,15 @@ cargo build --release
 
 # List the snapshot chain
 ./clavus log ~/Music/Ableton/MySet.als
+
+# See what changed — the chain, one step at a time
+./clavus diff ~/Music/Ableton/MySet.als
+
+# See what you have changed since your last snapshot
+./clavus diff --live ~/Music/Ableton/MySet.als
+
+# Compare any two snapshots
+./clavus diff ~/Music/Ableton/MySet.als --from a1b2c3d4 --to e5f6a7b8
 
 # Add a cue marker (the position is bars.beats.sixteenths)
 ./clavus cue ~/Music/Ableton/MySet.als -t "drop bass at bar 17" -p 17.1.0 --track "Bass"
@@ -271,7 +280,7 @@ One person runs `clavus relay`. Others run `clavus tui`, press `c` to connect, t
 | Cue markers | ✅ Pending / Resolved / Skipped / Deferred / Archived |
 | Relay sync | ✅ TCP framed JSON, push/pull/connect, isolated per project |
 | TUI | ✅ Ratatui, full keyboard nav |
-| CI | ✅ GitHub Actions, clippy clean, 512 tests |
+| CI | ✅ GitHub Actions, clippy clean, 678 tests |
 | Project isolation | ✅ Two same-named projects never share a chain |
 | Linux | ✅ Static musl builds for x86_64 and arm64, verified on real Linux |
 | Relay | ✅ Verified between three real Linux machines over TCP |

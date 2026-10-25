@@ -513,7 +513,14 @@ git add -A && git commit && git push
   opens, a drag picks, and the scrollbar is a control
 - Capital-letter shortcuts work, and capital letters can be typed into
   a note or a search box
-- 630 tests passing, clippy clean, CI green
+- `clavus diff` says what changed: the tempo, the track count, every
+  track that was added, removed or renamed, and the sample manifest.
+  `clavus diff --live` compares the set on disk with the last
+  snapshot. A rename is only claimed when the evidence is clear, so a
+  track that was really deleted is never reported as renamed
+- A cue's text cannot break a set: it is cut at a character boundary,
+  not a byte one, and it is escaped before it is written into the XML
+- 678 tests passing, clippy clean, CI green
 - The `.als` parser reads the real library: 1,242 of 1,245 sets from
   Live 8 to Live 12 report their real track count, tempo, track names
   and devices. The other three are in Live's old binary format and say

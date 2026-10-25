@@ -4,7 +4,7 @@
 //! be driven directly from tests. This binary only parses arguments and
 //! dispatches.
 
-use clavus_cli::{cmd_audit, cmd_collect_with, cmd_cue, cmd_cues, cmd_log, cmd_projects,
+use clavus_cli::{cmd_audit, cmd_collect_with, cmd_cue, cmd_cues, cmd_diff, cmd_log, cmd_projects,
                  cmd_pull, cmd_push, cmd_relay, cmd_restore, cmd_snapshot, cmd_status,
                  clavus_root, resolve_project, standard_albeton_dirs, Cli, Commands};
 use clap::Parser;
@@ -128,6 +128,23 @@ fn main() -> anyhow::Result<()> {
         Commands::Status { project } => {
             let project = resolve_project(&project, cli.dir.as_deref());
             cmd_status(&project, &clavus_root, &mut stdout, &mut stderr)
+        }
+        Commands::Diff {
+            project,
+            live,
+            from,
+            to,
+        } => {
+            let project = resolve_project(&project, cli.dir.as_deref());
+            cmd_diff(
+                &project,
+                live,
+                &from,
+                &to,
+                &clavus_root,
+                &mut stdout,
+                &mut stderr,
+            )
         }
         Commands::ImportLegacy {
             store,

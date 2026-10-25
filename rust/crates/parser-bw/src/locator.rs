@@ -48,10 +48,13 @@ pub fn inject_locators(
     // Build new locator XML
     let mut new_locators = String::new();
     for cue in &unresolved {
-        let name = format!("● {}", &cue.text[..cue.text.len().min(60)]);
+        // Cut at a character boundary and escaped — the same rules the
+        // Ableton injector uses, so the two cannot drift apart.
+        let name = clavus_core::marker_name(&cue.text);
+        let position = clavus_core::als_refs::encode_xml_entities(&cue.position);
         new_locators.push_str(&format!(
             r#"<Locator Time="{}" Name="{}"/>"#,
-            cue.position, name
+            position, name
         ));
     }
 
