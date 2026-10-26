@@ -61,6 +61,39 @@ jobs:
           cargo build --release --target aarch64-unknown-linux-musl
         working-directory: rust
 
+  macos:
+    # The release ships a macOS binary, so the platform it ships for is
+    # built here too. Without this, a macOS-only compile error is only
+    # found at release time, when a tag has already been pushed.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: rust
+
+      - name: Install Rust
+        run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: 'rust -> rust'
+
+      - name: Generate test fixture
+        run: python3 fixtures/gen_fixture.py
+
+      - name: Test
+        run: cargo test --all
+        working-directory: rust
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+        working-directory: rust
+
+      - name: Build the release binary
+        run: cargo build --release
+        working-directory: rust
+
   two-machine-relay:
     # Three Linux machines in containers and a relay between them: one
     # pushes, one pulls and restores, one pulls audio it never had.
