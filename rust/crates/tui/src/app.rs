@@ -999,14 +999,29 @@ impl App {
     ///
     /// Used when pushing, so a collaborator receives all the notes and
     /// not just the ones currently on screen.
-    pub fn project_cues(&self) -> Vec<clavus_core::types::Cue> {
-        let Some(entry) = self.selected_entry() else {
+    ///
+    /// A store that cannot be read is an error, not an empty list of
+    /// notes: the failure is shown to the user, because "this project
+    /// has no notes" and "the notes could not be read" are not the same
+    /// thing, and only one of them is true.
+    pub fn project_cues(&mut self) -> Vec<clavus_core::types::Cue> {
+        let Some(id) = self.selected_entry().map(|e| e.id()) else {
             return Vec::new();
         };
-        let Ok(store) = clavus_core::CueStore::new(&self.clavus_root, &entry.id()) else {
-            return Vec::new();
+        let store = match clavus_core::CueStore::new(&self.clavus_root, &id) {
+            Ok(s) => s,
+            Err(e) => {
+                self.set_error(format!("CueStore: {}", e));
+                return Vec::new();
+            }
         };
-        store.list(None).unwrap_or_default()
+        match store.list(None) {
+            Ok(cues) => cues,
+            Err(e) => {
+                self.set_error(format!("list cues: {}", e));
+                Vec::new()
+            }
+        }
     }
 
     /// Load the snapshot chain for the selected project.
@@ -1031,19 +1046,25 @@ impl App {
     }
 
     /// The local snapshot chain for the selected project, ready to push.
-    pub fn selected_snapshots(&self) -> Vec<clavus_core::types::Snapshot> {
+    ///
+    /// A store that cannot be opened is an error, not a project with no
+    /// history: the failure is shown to the user rather than hidden
+    /// behind an empty chain.
+    pub fn selected_snapshots(&mut self) -> Vec<clavus_core::types::Snapshot> {
         use clavus_core::blob::BlobStore;
         use clavus_core::snapshot::SnapshotStore;
 
-        let entry = match self.selected_entry() {
-            Some(e) => e,
-            None => return vec![],
+        let Some(id) = self.selected_entry().map(|e| e.id()) else {
+            return vec![];
         };
         let store = match BlobStore::new(self.clavus_root.join("blobs")) {
             Ok(s) => s,
-            Err(_) => return vec![],
+            Err(e) => {
+                self.set_error(format!("BlobStore: {}", e));
+                return vec![];
+            }
         };
-        let snap_store = SnapshotStore::new(store, &entry.id());
+        let snap_store = SnapshotStore::new(store, &id);
         match snap_store.head() {
             Some(head) => snap_store.walk_chain(Some(&head.hash)),
             None => vec![],
@@ -1054,7 +1075,7 @@ impl App {
     ///
     /// A snapshot without its bytes cannot be restored on the other
     /// machine, so the bytes travel with the metadata.
-    pub fn selected_snapshot_bytes(&self) -> Vec<(String, Vec<u8>)> {
+    pub fn selected_snapshot_bytes(&mut self) -> Vec<(String, Vec<u8>)> {
         use clavus_core::blob::BlobStore;
 
         let store = BlobStore::open(self.clavus_root.join("blobs"));
@@ -1068,19 +1089,25 @@ impl App {
 
     /// The snapshot heads we already have, used to ask the relay only for
     /// what we are missing.
-    pub fn known_heads(&self) -> Vec<String> {
+    ///
+    /// A store that cannot be opened is an error, not "we have nothing".
+    /// The failure is shown to the user, so a pull is not started on a
+    /// false picture of what the machine already has.
+    pub fn known_heads(&mut self) -> Vec<String> {
         use clavus_core::blob::BlobStore;
         use clavus_core::snapshot::SnapshotStore;
 
-        let entry = match self.selected_entry() {
-            Some(e) => e,
-            None => return vec![],
+        let Some(id) = self.selected_entry().map(|e| e.id()) else {
+            return vec![];
         };
         let store = match BlobStore::new(self.clavus_root.join("blobs")) {
             Ok(s) => s,
-            Err(_) => return vec![],
+            Err(e) => {
+                self.set_error(format!("BlobStore: {}", e));
+                return vec![];
+            }
         };
-        let snap_store = SnapshotStore::new(store, &entry.id());
+        let snap_store = SnapshotStore::new(store, &id);
         snap_store
             .head()
             .map(|h| vec![h.hash])

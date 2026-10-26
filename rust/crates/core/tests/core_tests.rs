@@ -251,14 +251,14 @@ fn test_index_roundtrip() {
     let mut idx: HashMap<String, serde_json::Value> = HashMap::new();
     idx.insert("key".to_string(), serde_json::json!({"v": 1}));
     store.write_index(&idx).unwrap();
-    let loaded = store.read_index();
+    let loaded = store.read_index().unwrap();
     assert_eq!(loaded.get("key").and_then(|v| v.get("v").and_then(|x| x.as_i64())), Some(1));
 }
 
 #[test]
 fn test_index_empty_when_missing() {
     let (store, _tmp) = temp_store();
-    let idx = store.read_index();
+    let idx = store.read_index().unwrap();
     assert!(idx.is_empty());
 }
 

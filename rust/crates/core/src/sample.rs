@@ -925,8 +925,12 @@ pub fn collect_samples_with(
         .and_then(|s| s.to_str())
         .map(|e| e.eq_ignore_ascii_case("bwproject"))
         .unwrap_or(false);
+    // A bundle that cannot be opened is an error, not an archive with
+    // nothing in it: swallowing the failure here would make the
+    // collect report the user's samples as missing, when they are
+    // simply unreadable.
     let archive_entries = if is_bitwig {
-        crate::bitwig_archive::list_entries(project_path).unwrap_or_default()
+        crate::bitwig_archive::list_entries(project_path)?
     } else {
         Vec::new()
     };

@@ -4,7 +4,7 @@
 //! SHA256 of the content is used as the address. Same content always
 //! maps to the same address (deduplication by construction).
 
-use crate::types::Snapshot;
+use crate::types::{ClavusError, Snapshot};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
@@ -19,8 +19,6 @@ const REFS_DIR: &str = "refs";
 const PROJECTS_DIR: &str = "projects";
 const SNAPSHOTS_DIR: &str = "snapshots";
 const INDEX_FILE: &str = "index.json";
-#[allow(dead_code)]
-const CONFIG_FILE: &str = "config.json"; // TODO: use in config management
 const LOCK_SUFFIX: &str = ".lock";
 
 /// Content-addressed storage engine.
@@ -193,33 +191,6 @@ impl BlobStore {
             return None;
         }
         Some(self.objects_dir.join(&hash[..2]).join(hash))
-    }
-
-    /// List the hashes of every stored snapshot metadata file.
-    ///
-    /// Used to resolve a short hash prefix to a full snapshot hash.
-    #[allow(dead_code)]
-    pub fn list_legacy_meta_hashes(&self) -> Vec<String> {
-        let mut out = Vec::new();
-        if let Ok(dirs) = fs::read_dir(&self.objects_dir) {
-            for dir in dirs.flatten() {
-                if !dir.path().is_dir() {
-                    continue;
-                }
-                if let Ok(entries) = fs::read_dir(dir.path()) {
-                    for entry in entries.flatten() {
-                        let name = entry.file_name().to_string_lossy().to_string();
-                        if let Some(stripped) = name.strip_suffix(".meta") {
-                            if stripped.len() == 64 {
-                                out.push(stripped.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        out.sort();
-        out
     }
 
     /// Path to the metadata file for a snapshot.
@@ -481,15 +452,26 @@ impl BlobStore {
 
     // ─── Index (project registry) ───────────────────────────────────
 
-    /// Read the full index. Returns empty map if missing.
-    pub fn read_index(&self) -> HashMap<String, serde_json::Value> {
-        if !self.index_path.exists() {
-            return HashMap::new();
-        }
-        fs::read_to_string(&self.index_path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+    /// Read the full index.
+    ///
+    /// A store that was never written has no index file, and that is
+    /// an empty index — the result is `Ok` with nothing in it. An
+    /// index file that exists but cannot be read or parsed is a
+    /// *broken* store, and it is reported as an error: an empty map
+    /// would say "this store has no projects", which is a confident
+    /// falsehood about the user's data.
+    pub fn read_index(&self) -> Result<HashMap<String, serde_json::Value>, ClavusError> {
+        // A store that was never written has no index file. That is an
+        // empty index, not a broken one — so the file is read directly
+        // and a missing file is told apart from an unreadable one.
+        let text = match fs::read_to_string(&self.index_path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(HashMap::new()),
+            Err(e) => return Err(ClavusError::Io(e)),
+        };
+        serde_json::from_str(&text).map_err(|e| {
+            ClavusError::IndexCorrupted(format!("{}: {}", self.index_path.display(), e))
+        })
     }
 
     /// Write the full index atomically.
@@ -546,14 +528,6 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
     fs::write(&tmp, data)?;
     fs::rename(&tmp, path)?;
     Ok(())
-}
-
-// Unix flock(2) — called via libc::flock in lock_index()
-#[cfg(unix)]
-#[allow(dead_code)]
-#[link(name = "c")]
-extern "C" {
-    fn flock(fd: libc::c_int, operation: libc::c_int) -> libc::c_int;
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────
