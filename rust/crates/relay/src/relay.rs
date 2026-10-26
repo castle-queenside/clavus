@@ -11,6 +11,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
+/// Lock a mutex, recovering the guard even if the mutex was poisoned.
+///
+/// A panic while the lock was held poisons it, and a poisoned mutex
+/// panics again on every later lock. That would take down the whole
+/// relay — one shared state, every client — because of one client
+/// thread. The data inside is still there, so it is recovered rather
+/// than thrown away.
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// A connected client.
 #[derive(Debug, Clone)]
 pub struct Client {
@@ -43,7 +54,7 @@ impl Client {
         let json = serde_json::to_vec(msg)
             .map_err(std::io::Error::other)?;
         let len = json.len() as u32;
-        let mut stream = self.stream.lock().unwrap();
+        let mut stream = lock(&self.stream);
         stream.write_all(&len.to_be_bytes())?;
         stream.write_all(&json)?;
         stream.flush()
@@ -819,7 +830,7 @@ pub fn run_with_listener(
                     if let Err(e) = handle_client(addr, stream, &state) {
                         warn!("Client {} error: {}", addr, e);
                     }
-                    state.lock().unwrap().remove_client(&addr);
+                    lock(&state).remove_client(&addr);
                 });
             }
             Err(e) => {
@@ -839,7 +850,7 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
         // Read 4-byte length prefix (refresh timeout before each read)
         let mut len_buf = [0u8; 4];
         {
-            let mut s = client.stream.lock().unwrap();
+            let mut s = lock(&client.stream);
             s.set_read_timeout(Some(Duration::from_secs(30))).ok();
             s.read_exact(&mut len_buf)?;
         }
@@ -852,7 +863,7 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
 
         let mut data = vec![0u8; len];
         {
-            let mut s = client.stream.lock().unwrap();
+            let mut s = lock(&client.stream);
             s.set_read_timeout(Some(Duration::from_secs(30))).ok();
             s.read_exact(&mut data)?;
         }
@@ -879,7 +890,7 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
                 client.content_hash = content_hash.clone();
 
                 let resp = {
-                    let s = state.lock().unwrap();
+                    let s = lock(state);
                     // Which project does the client mean? Two projects
                     // can share a file name, and they must not be mixed
                     // up.
@@ -913,8 +924,10 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
                     SyncMsg::Push { snapshots: snaps, cues }
                 };
 
-                state.lock().unwrap().upsert_client(client.clone());
-                let _ = client.send(&resp);
+                lock(state).upsert_client(client.clone());
+                if let Err(e) = client.send(&resp) {
+                    warn!("Failed to send to client {}: {}", addr, e);
+                }
             }
             SyncMsg::BlobPush { chunk } => {
                 debug!(
@@ -924,11 +937,13 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
                     chunk.total,
                     chunk.hash
                 );
-                match state.lock().unwrap().store_blob_chunk(&chunk) {
+                match lock(state).store_blob_chunk(&chunk) {
                     Ok(true) => {
-                        let _ = client.send(&SyncMsg::BlobStored {
+                        if let Err(e) = client.send(&SyncMsg::BlobStored {
                             hash: chunk.hash.clone(),
-                        });
+                        }) {
+                            warn!("Failed to send to client {}: {}", addr, e);
+                        }
                     }
                     Ok(false) => {}
                     Err(e) => {
@@ -937,18 +952,22 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
                         // has the bytes. Silence would leave it hanging
                         // until the timeout; the truth is that the
                         // bytes did not arrive.
-                        let _ = client.send(&SyncMsg::Error {
+                        if let Err(send_err) = client.send(&SyncMsg::Error {
                             message: format!("the relay could not store the project bytes: {}", e),
-                        });
+                        }) {
+                            warn!("Failed to send to client {}: {}", addr, send_err);
+                        }
                     }
                 }
             }
             SyncMsg::BlobEnd { project, hash } => {
                 // The chunks are written as they complete, so the end of
                 // a blob is only a confirmation that nothing is missing.
-                let has = state.lock().unwrap().has_blob(&hash);
+                let has = lock(state).has_blob(&hash);
                 if has {
-                    let _ = client.send(&SyncMsg::BlobStored { hash });
+                    if let Err(e) = client.send(&SyncMsg::BlobStored { hash }) {
+                        warn!("Failed to send to client {}: {}", addr, e);
+                    }
                 } else {
                     warn!(
                         "Client {} said blob {} for {} was finished, but it never arrived",
@@ -957,18 +976,24 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
                 }
             }
             SyncMsg::BlobRequest { project, hash } => {
-                let data = state.lock().unwrap().read_blob(&hash);
+                let data = lock(state).read_blob(&hash);
                 match data {
                     Some(bytes) => {
                         let chunks =
                             clavus_sync::blob_transfer::chunk_blob(&project, &hash, &bytes);
                         for chunk in chunks {
-                            let _ = client.send(&SyncMsg::BlobChunk { chunk });
+                            if let Err(e) = client.send(&SyncMsg::BlobChunk { chunk }) {
+                                warn!("Failed to send to client {}: {}", addr, e);
+                            }
                         }
-                        let _ = client.send(&SyncMsg::BlobDone { project, hash });
+                        if let Err(e) = client.send(&SyncMsg::BlobDone { project, hash }) {
+                            warn!("Failed to send to client {}: {}", addr, e);
+                        }
                     }
                     None => {
-                        let _ = client.send(&SyncMsg::BlobMissing { project, hash });
+                        if let Err(e) = client.send(&SyncMsg::BlobMissing { project, hash }) {
+                            warn!("Failed to send to client {}: {}", addr, e);
+                        }
                     }
                 }
             }
@@ -992,7 +1017,7 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
             SyncMsg::Pull { missing } => {
                 debug!("Client {} requesting {} missing objects", addr, missing.len());
                 let (snapshots, cues) = {
-                    let s = state.lock().unwrap();
+                    let s = lock(state);
                     // Which project does the client mean? The client's
                     // name is the wire name; the folder tells two
                     // projects that share a file name apart.
@@ -1023,7 +1048,9 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
                         None => (Vec::new(), Vec::new()),
                     }
                 };
-                let _ = client.send(&SyncMsg::PullResp { snapshots, cues });
+                if let Err(e) = client.send(&SyncMsg::PullResp { snapshots, cues }) {
+                    warn!("Failed to send to client {}: {}", addr, e);
+                }
             }
             SyncMsg::Push { snapshots, cues } => {
                 debug!("Client {} pushing {} snapshots, {} cues", addr, snapshots.len(), cues.len());
@@ -1031,9 +1058,8 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
                 // client introduced itself with.
                 let identity = (client.name.clone(), client.folder.clone());
                 let (conflicts, persist_error) = {
-                    let mut state = state.lock().unwrap();
-                    let conflicts =
-                        state.store_for_client(snapshots, cues, Some(identity));
+                    let mut state = lock(state);
+                    let conflicts = state.store_for_client(snapshots, cues, Some(identity));
                     let persist_error = state.last_persist_error.clone();
                     (conflicts, persist_error)
                 };
@@ -1043,11 +1069,13 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
                         "HEAD divergence on project '{}': relay head {} vs incoming {}",
                         project, relay_head, push_head
                     );
-                    let _ = client.send(&SyncMsg::Conflict {
+                    if let Err(e) = client.send(&SyncMsg::Conflict {
                         project: project.clone(),
                         relay_head: relay_head.clone(),
                         push_head: push_head.clone(),
-                    });
+                    }) {
+                        warn!("Failed to send to client {}: {}", addr, e);
+                    }
                 }
                 // A relay that could not write the history to disk must
                 // not say the push worked. The client would walk away
@@ -1058,20 +1086,24 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
                         "The relay could not write its state to disk ({}): the push is not saved",
                         reason
                     );
-                    let _ = client.send(&SyncMsg::Error {
+                    if let Err(e) = client.send(&SyncMsg::Error {
                         message: format!(
                             "the relay could not write its state to disk ({}): the push was not saved",
                             reason
                         ),
-                    });
+                    }) {
+                        warn!("Failed to send to client {}: {}", addr, e);
+                    }
                 } else {
-                    let _ = client.send(&SyncMsg::Synced);
+                    if let Err(e) = client.send(&SyncMsg::Synced) {
+                        warn!("Failed to send to client {}: {}", addr, e);
+                    }
                 }
             }
             SyncMsg::PullResp { snapshots, cues } => {
                 debug!("Client {} pushing {} snapshots, {} cues", addr, snapshots.len(), cues.len());
                 let (conflicts, persist_error) = {
-                    let mut state = state.lock().unwrap();
+                    let mut state = lock(state);
                     let conflicts = state.store(snapshots, cues);
                     let persist_error = state.last_persist_error.clone();
                     (conflicts, persist_error)
@@ -1082,25 +1114,31 @@ fn handle_client(addr: SocketAddr, stream: TcpStream, state: &Arc<Mutex<RelaySta
                         "HEAD divergence on project '{}': relay head {} vs incoming {}",
                         project, relay_head, push_head
                     );
-                    let _ = client.send(&SyncMsg::Conflict {
+                    if let Err(e) = client.send(&SyncMsg::Conflict {
                         project: project.clone(),
                         relay_head: relay_head.clone(),
                         push_head: push_head.clone(),
-                    });
+                    }) {
+                        warn!("Failed to send to client {}: {}", addr, e);
+                    }
                 }
                 if let Some(reason) = persist_error {
                     error!(
                         "The relay could not write its state to disk ({}): the push is not saved",
                         reason
                     );
-                    let _ = client.send(&SyncMsg::Error {
+                    if let Err(e) = client.send(&SyncMsg::Error {
                         message: format!(
                             "the relay could not write its state to disk ({}): the push was not saved",
                             reason
                         ),
-                    });
+                    }) {
+                        warn!("Failed to send to client {}: {}", addr, e);
+                    }
                 } else {
-                    let _ = client.send(&SyncMsg::Synced);
+                    if let Err(e) = client.send(&SyncMsg::Synced) {
+                        warn!("Failed to send to client {}: {}", addr, e);
+                    }
                 }
             }
             SyncMsg::Subscribe { project } => {

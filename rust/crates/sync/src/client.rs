@@ -10,6 +10,18 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+/// Lock a mutex, recovering the guard even if the mutex was poisoned.
+///
+/// A panic while the lock was held poisons it, and a poisoned mutex
+/// panics again on every later lock — so one panic would end the
+/// connection instead of one message failing. The data inside is still
+/// there, so it is recovered rather than thrown away.
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Messages in the Clavus sync protocol.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -168,7 +180,7 @@ impl SyncClient {
         thread::spawn(move || {
             let stream = Arc::new(Mutex::new(stream0));
             loop {
-                if *closed0.lock().unwrap() {
+                if *lock(&closed0) {
                     break;
                 }
                 let msg = match recv_msg(&stream, &closed0) {
@@ -354,21 +366,21 @@ impl SyncClient {
 
     /// Send a message to the relay.
     pub fn send(&self, msg: SyncMsg) -> Result<()> {
-        if *self.closed.lock().unwrap() {
+        if *lock(&self.closed) {
             return Err(ClavusError::SyncError("sync client closed".into()));
         }
-        let mut stream = self.stream.lock().unwrap();
+        let mut stream = lock(&self.stream);
         send_msg(&mut stream, &msg)
     }
 
     /// Close the connection.
     pub fn close(&self) {
-        *self.closed.lock().unwrap() = true;
+        *lock(&self.closed) = true;
     }
 
     /// Returns true if the connection is closed.
     pub fn is_closed(&self) -> bool {
-        *self.closed.lock().unwrap()
+        *lock(&self.closed)
     }
 
     /// Relay address this client is connected to.
@@ -403,22 +415,22 @@ fn send_msg(stream: &mut TcpStream, msg: &SyncMsg) -> Result<()> {
 
 /// Receive a framed JSON message. Returns Err if the connection is closed.
 fn recv_msg(stream: &Arc<Mutex<TcpStream>>, closed: &Arc<Mutex<bool>>) -> Result<SyncMsg> {
-    if *closed.lock().unwrap() {
+    if *lock(closed) {
         return Err(ClavusError::SyncError("connection closed".into()));
     }
 
     let mut len_buf = [0u8; 4];
     let n = {
-        let mut s = stream.lock().unwrap();
+        let mut s = lock(stream);
         s.read_exact(&mut len_buf).map_err(|e| {
-            *closed.lock().unwrap() = true;
+            *lock(closed) = true;
             ClavusError::from(e)
         })?;
         u32::from_be_bytes(len_buf) as usize
     };
 
     if n > MAX_PAYLOAD {
-        *closed.lock().unwrap() = true;
+        *lock(closed) = true;
         return Err(ClavusError::SyncError(format!(
             "payload too large: {} bytes (max {})",
             n, MAX_PAYLOAD
@@ -427,9 +439,9 @@ fn recv_msg(stream: &Arc<Mutex<TcpStream>>, closed: &Arc<Mutex<bool>>) -> Result
 
     let mut data = vec![0u8; n];
     {
-        let mut s = stream.lock().unwrap();
+        let mut s = lock(stream);
         s.read_exact(&mut data).map_err(|e| {
-            *closed.lock().unwrap() = true;
+            *lock(closed) = true;
             ClavusError::from(e)
         })?;
     }
