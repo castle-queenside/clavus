@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Clavus CLI command: config."""
 import argparse
+from clavus.config import ClavusConfig, CONFIG_PATH
 
 def cmd_config(args: argparse.Namespace) -> None:
     """View or edit clavus configuration."""

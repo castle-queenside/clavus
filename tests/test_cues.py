@@ -10,7 +10,7 @@ TMP = Path(tempfile.mkdtemp(prefix="clavus_test_"))
 CLAVUS_DIR = TMP / ".clavus"
 os.environ["CLAVUS_DIR"] = str(CLAVUS_DIR)
 
-FIXTURE = Path(__file__).parent / "fixtures" / "test_project.als"
+FIXTURE = Path(__file__).parent.parent / "fixtures" / "test_project.als"
 
 test_dir = TMP / "project"
 test_dir.mkdir(parents=True, exist_ok=True)

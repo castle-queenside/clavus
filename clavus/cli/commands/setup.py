@@ -2,6 +2,9 @@ from __future__ import annotations
 
 """Clavus CLI command: setup — Guided first-run setup."""
 import argparse
+import os
+from pathlib import Path
+from clavus.config import CONFIG_PATH
 
 def cmd_setup(args: argparse.Namespace) -> None:
     """Guided first-run setup — author, role, port, Tailscale, Ableton detection."""

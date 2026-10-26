@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Optional, Callable
 
 from clavus.store import (
-    BlobStore, ClavusProject, Snapshot, DEFAULT_CLAVUS_DIR, StemStore,
+    BlobStore, ClavusProject, Snapshot, StemStore,
 )
 from clavus.helpers import get_desktop_path, get_projects_dir
 from clavus.cues import CueStore, Cue, CueReply as CueReplyData, CueFilter

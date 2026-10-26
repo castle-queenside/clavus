@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Clavus CLI command: watch — Auto-snapshot on file changes."""
 import argparse
+import sys
 from clavus.watch import watch
 from clavus.helpers import get_store_and_project
 

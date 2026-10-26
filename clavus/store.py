@@ -30,7 +30,20 @@ from clavus.parser import Project
 
 # ─── Config ──────────────────────────────────────────────────────────────
 
-DEFAULT_CLAVUS_DIR = Path(os.environ.get("CLAVUS_DIR", str(Path.home() / ".clavus")))
+
+def default_clavus_dir() -> Path:
+    """Where the store lives, worked out when it is asked for.
+
+    The answer used to be worked out once, when this module was first
+    imported. That made the directory impossible to change afterwards:
+    `--clavus-dir` was ignored, and a test that set `CLAVUS_DIR` after
+    the import still wrote to the real store. Reading the environment
+    at the moment the directory is needed is what makes both of those
+    work.
+    """
+    return Path(os.environ.get("CLAVUS_DIR", str(Path.home() / ".clavus")))
+
+
 OBJECTS_DIR = "objects"
 REFS_DIR = "refs"
 INDEX_FILE = "index.json"
@@ -118,8 +131,10 @@ class StemManifest:
 class BlobStore:
     """Content-addressed storage for serialized project snapshots."""
 
-    def __init__(self, clavus_dir: Path = DEFAULT_CLAVUS_DIR):
-        self.root = clavus_dir
+    def __init__(self, clavus_dir: Optional[Path] = None):
+        # No directory means "the default one, as it is right now" — not
+        # the one that was the default when this module was imported.
+        self.root = Path(clavus_dir) if clavus_dir is not None else default_clavus_dir()
         self.objects_dir = self.root / OBJECTS_DIR
         self.refs_dir = self.root / REFS_DIR
         self.index_path = self.root / INDEX_FILE

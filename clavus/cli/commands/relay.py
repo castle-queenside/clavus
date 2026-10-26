@@ -2,6 +2,11 @@ from __future__ import annotations
 
 """Clavus CLI commands: relay, share."""
 import argparse
+import os
+import platform
+import sys
+import time
+from pathlib import Path
 from clavus.config import ClavusConfig
 
 def cmd_relay(args: argparse.Namespace) -> None:
@@ -173,7 +178,7 @@ def cmd_share(args: argparse.Namespace) -> None:
     # ── End Tailscale serve detection ─────────────────────────────────────────
 
     # Check if port is in use — try to kill stale Clavus relay
-    import socket, platform, signal, subprocess as sp, time
+    import socket, platform, signal, subprocess as sp
 
     # Get Tailscale IP to check if Tailscale serve owns the port
     ts_ip = None

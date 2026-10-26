@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Clavus CLI command: p2p — P2P sync over Tailscale."""
 import argparse
+from typing import Optional
 
 def cmd_p2p(args: argparse.Namespace) -> None:
     """Discover and sync with peers on the tailnet via direct TCP connection.

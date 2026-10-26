@@ -37,7 +37,6 @@ from clavus.parser import parse_als, project_summary
 from clavus.config import ClavusConfig, CONFIG_PATH
 from clavus.store import (
     BlobStore, ClavusProject, diff_projects, format_diff,
-    DEFAULT_CLAVUS_DIR,
 )
 from clavus.cues import (
     CueStore, CueFilter, format_cue, format_cue_list,
@@ -390,9 +389,14 @@ def main():
         print(f"clavus {v}")
         return
 
-    # Override clavus directory if specified
+    # Override clavus directory if specified.
+    #
+    # The store asks the environment where it lives every time it is
+    # opened, so setting the variable here is what makes the flag
+    # work. Assigning to a local name here did nothing at all: the
+    # store had already been pointed somewhere else.
     if args.clavus_dir:
-        DEFAULT_CLAVUS_DIR = Path(args.clavus_dir)
+        os.environ["CLAVUS_DIR"] = args.clavus_dir
 
     # Dispatch
     commands = {

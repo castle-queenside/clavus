@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from clavus.store import BlobStore, ClavusProject, DEFAULT_CLAVUS_DIR
+from clavus.store import BlobStore, ClavusProject, default_clavus_dir
 
 
 def get_desktop_path() -> Path:
@@ -62,7 +62,7 @@ def find_als_file(path: str | Path) -> Optional[Path]:
 
 def get_store_and_project(clavus_dir: str = "") -> tuple[BlobStore, ClavusProject]:
     """Get the store and active project from the current directory."""
-    store_dir = Path(clavus_dir) if clavus_dir else DEFAULT_CLAVUS_DIR
+    store_dir = Path(clavus_dir) if clavus_dir else default_clavus_dir()
     store = BlobStore(store_dir)
     projects = store.list_projects()
     if not projects:

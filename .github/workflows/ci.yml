@@ -3,11 +3,11 @@ name: CI
 on:
   push:
     branches: [main, feature/*]
+    paths-ignore:
+      - 'rust/**'
+      - '.github/workflows/rust-ci.yml'
   pull_request:
     branches: [main]
-    paths:
-      - '**/*.py'
-      - '.github/workflows/ci.yml'
     paths-ignore:
       - 'rust/**'
       - '.github/workflows/rust-ci.yml'
@@ -30,17 +30,18 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -e .
+        # The dev extra is where pytest lives. Without it the test
+        # step ran with no pytest at all — and the `|| true` that used
+        # to end that step turned "pytest is not installed" into a
+        # green build.
+        pip install -e ".[dev]"
 
     - name: Generate test fixture
       run: python3 fixtures/gen_fixture.py
 
     - name: Run tests
-      run: |
-        python3 test_parser.py
-        python3 test_snapshot.py
-        python3 test_cues.py
-        python3 test_watch.py
-        python3 test_cli.py
-        python3 test_cli_full.py
-        python3 -m pytest tests/ -v || true
+      # The tests live in tests/ — pytest.ini points there too. The
+      # `|| true` that used to end this step made the job green
+      # whatever pytest said, so a failing suite was reported as a
+      # passing build.
+      run: python3 -m pytest tests/ -v

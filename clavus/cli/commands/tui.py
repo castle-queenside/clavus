@@ -2,6 +2,8 @@ from __future__ import annotations
 
 """Clavus CLI command: tui — Launch the TUI dashboard."""
 import argparse
+import sys
+from clavus.config import ClavusConfig
 
 def cmd_tui(args: argparse.Namespace) -> None:
     """Launch the Textual TUI."""
