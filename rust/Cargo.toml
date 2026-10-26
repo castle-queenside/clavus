@@ -22,11 +22,6 @@ description = "Version control for DAW projects"
 
 [dependencies]
 # Clavus crates
-clavus-core = { path = "crates/core" }
-clavus-parser-als = { path = "crates/parser-als" }
-clavus-parser-bw = { path = "crates/parser-bw" }
-clavus-sync = { path = "crates/sync" }
-clavus-relay = { path = "crates/relay" }
 clavus-tui = { path = "crates/tui" }
 clavus-cli = { path = "crates/cli" }
 
@@ -34,12 +29,9 @@ clavus-cli = { path = "crates/cli" }
 clap = { version = "4", features = ["derive"] }
 ratatui = "0.26"
 crossterm = "0.27"
-dirs = "5"
 
 # Logging
-tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Misc
 anyhow = "1"
-tempfile = "3"

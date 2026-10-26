@@ -11,13 +11,6 @@ clavus-parser-bw = { path = "../parser-bw" }
 clavus-sync = { path = "../sync" }
 ratatui = "0.26"
 crossterm = "0.27"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-anyhow = "1"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-unicode-width = "0.1"
-notify = "6"
 dirs = "5"
 
 [dev-dependencies]

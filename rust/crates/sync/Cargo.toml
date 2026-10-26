@@ -6,11 +6,7 @@ description = "Clavus sync client"
 
 [dependencies]
 clavus-core = { path = "../core" }
-sha2 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-thiserror = "1"
-anyhow = "1"
 tracing = "0.1"
-futures-util = "0.3"
 base64 = "0.22"
