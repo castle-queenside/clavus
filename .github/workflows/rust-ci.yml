@@ -9,7 +9,11 @@ on:
       - 'fixtures/gen_relay_fixture.py'
       - '.github/workflows/rust-ci.yml'
   pull_request:
-    branches: [rust]
+    # `main` as well as `rust`: the rewrite pull request targets main
+    # with `rust` as its head, so without it PR #13 ran no Rust CI at
+    # all — a draft with no checks is a draft nobody watches. The
+    # paths below keep it off pull requests that touch no Rust.
+    branches: [rust, main]
     paths:
       - 'rust/**'
       - 'scripts/two-machine-relay-test.sh'
