@@ -2,8 +2,13 @@ from __future__ import annotations
 
 """Clavus CLI commands: remote, find, push, pull, pull-all, sync."""
 import argparse
+import hashlib
+import sys
+import time
+from pathlib import Path
+from clavus.store import StemStore
 from clavus.helpers import get_store_and_project
-from clavus.sync import load_remotes
+from clavus.sync import load_remotes, save_remotes, Remote, push_to_remote, SyncDaemon
 
 def cmd_remote(args: argparse.Namespace) -> None:
     """Manage remote clavus servers."""

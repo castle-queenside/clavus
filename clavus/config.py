@@ -90,6 +90,8 @@ class ClavusConfig:
         if server := os.environ.get("CLAVUS_SERVER"):
             cfg.default_server = server
             cfg.server_url = server
+        if projects_dir := os.environ.get("CLAVUS_PROJECTS_DIR"):
+            cfg.projects_dir = projects_dir
         # Recompute server URL if host/port changed but CLAVUS_SERVER wasn't set
         if "CLAVUS_SERVER" not in os.environ:
             cfg.server_url = f"http://{cfg.host}:{cfg.port}"

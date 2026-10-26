@@ -2,7 +2,16 @@ from __future__ import annotations
 
 """Clavus CLI commands: init, init_project."""
 import argparse
-from clavus.helpers import get_store_and_project
+import getpass
+import json
+import sys
+import time
+from pathlib import Path
+from typing import Optional
+from clavus.parser import parse_als, project_summary
+from clavus.config import ClavusConfig, CONFIG_PATH
+from clavus.store import BlobStore, ClavusProject
+from clavus.helpers import find_als_file, get_store_and_project
 
 def init_project(path_str: str | None, auto_confirm: bool = False) -> tuple[Optional[str], list[str]]:
     """Core init logic (non-interactive). Returns (project_name, log_lines). 
@@ -152,7 +161,10 @@ def cmd_init(args: argparse.Namespace) -> None:
 
     # ── Config check: prompt for author if not set ──
     config = ClavusConfig.load()
-    if not config.author or config.author == getpass.getuser():
+    # Only ask when there is someone to ask. A script or a test has no
+    # terminal to read from, and the default author is the right answer
+    # for both. Every other prompt below is guarded the same way.
+    if (not config.author or config.author == getpass.getuser()) and sys.stdin.isatty():
         print("👋 First, who's the author for this project?")
         author_input = input(f"   Author [{config.author or getpass.getuser()}]: ").strip()
         if author_input:
@@ -232,9 +244,33 @@ def cmd_init(args: argparse.Namespace) -> None:
 
     print(f"Copying project to {target_dir}...")
     source_dir = als_path.parent
+    base_ignore = shutil.ignore_patterns("Backup*", "Ableton Project Info", ".DS_Store")
+
+    # Both paths are resolved before they are compared: on macOS a
+    # temporary directory is reached through /var, which is a symlink to
+    # /private/var, and an unresolved path would not match the resolved
+    # one. The check would then miss, and the copy would go on forever.
+    resolved_target = target_dir.resolve()
+
+    def _ignore(dir_path, names):
+        """Skip the usual noise, and never the directory being filled.
+
+        The projects directory can sit inside the folder being copied —
+        a set that already lives in ~/Clavus/Projects, or a test that
+        keeps both in one temporary directory. Copying it into itself
+        would never end, so every folder on the way to the target is
+        left out.
+        """
+        skipped = set(base_ignore(dir_path, names))
+        for name in names:
+            candidate = (Path(dir_path) / name).resolve()
+            if candidate == resolved_target or resolved_target.is_relative_to(candidate):
+                skipped.add(name)
+        return skipped
+
     shutil.copytree(
         source_dir, target_dir,
-        ignore=shutil.ignore_patterns("Backup*", "Ableton Project Info", ".DS_Store"),
+        ignore=_ignore,
         dirs_exist_ok=True,
     )
 

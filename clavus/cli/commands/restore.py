@@ -2,7 +2,10 @@ from __future__ import annotations
 
 """Clavus CLI commands: restore, open."""
 import argparse
-from clavus.helpers import get_store_and_project
+import sys
+import time
+from pathlib import Path
+from clavus.helpers import get_store_and_project, resolve_snapshot, get_projects_dir
 
 def cmd_restore(args: argparse.Namespace) -> None:
     """Restore a snapshot's .als file from the stored raw bytes."""

@@ -2,7 +2,11 @@ from __future__ import annotations
 
 """Clavus CLI commands: diff, status."""
 import argparse
-from clavus.helpers import get_store_and_project
+import sys
+from pathlib import Path
+from clavus.parser import parse_als
+from clavus.store import diff_projects, format_diff
+from clavus.helpers import get_store_and_project, resolve_snapshot
 
 def cmd_diff(args: argparse.Namespace) -> None:
     """Show what changed in a snapshot vs its parent."""

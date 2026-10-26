@@ -2,8 +2,15 @@ from __future__ import annotations
 
 """Clavus CLI commands: snapshot, create_snapshot, log, note."""
 import argparse
+import hashlib
+import json
+import sys
+import time
+from pathlib import Path
+from typing import Optional
+from clavus.parser import parse_als
 from clavus.helpers import get_store_and_project
-from clavus.store import BlobStore
+from clavus.store import BlobStore, Snapshot, diff_projects, format_diff
 
 def create_snapshot(message: str, allow_frozen: bool = True) -> tuple[Optional[str], list[str]]:
     """Core snapshot logic (non-interactive). Returns (snap_hash, log_lines). 

@@ -33,7 +33,7 @@ from pydantic import BaseModel
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from clavus.helpers import get_store_and_project, find_als_file
 from clavus.cues import CueStore, CueFilter, format_cue_list, Cue, CueReply as CueReplyData
-from clavus.store import BlobStore, ClavusProject, Snapshot, diff_projects, DEFAULT_CLAVUS_DIR, StemStore
+from clavus.store import BlobStore, ClavusProject, Snapshot, diff_projects, StemStore
 from clavus import parse_als
 
 # ─── Helpers ────────────────────────────────────────────────────────────

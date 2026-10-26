@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Clavus CLI commands: backup, backups, restore-store."""
 import argparse
+from pathlib import Path
 from clavus.helpers import get_store_and_project
 
 def cmd_backup(args: argparse.Namespace) -> None:

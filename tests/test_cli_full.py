@@ -5,7 +5,7 @@ from argparse import Namespace
 from clavus.store import BlobStore, ClavusProject
 
 
-FIXTURE = Path(__file__).parent / "fixtures" / "test_project.als"
+FIXTURE = Path(__file__).parent.parent / "fixtures" / "test_project.als"
 
 pytestmark = pytest.mark.skipif(
     not FIXTURE.exists(),
@@ -21,12 +21,32 @@ def fixture_als():
 
 @pytest.fixture
 def temp_clavus():
+    """A Clavus store in a temporary directory, and nothing else.
+
+    Both the store and the projects directory are redirected, so a test
+    cannot write into the real ~/.clavus or ~/Clavus/Projects. The old
+    fixture only pointed the store at a temporary directory, and
+    `clavus init` copies the set into the projects directory — which
+    was the real one.
+    """
     tmp = Path(tempfile.mkdtemp(prefix="clavus_full_test_"))
     clavus_dir = tmp / ".clavus"
+    projects_dir = tmp / "Projects"
+    old_store = os.environ.get("CLAVUS_DIR")
+    old_projects = os.environ.get("CLAVUS_PROJECTS_DIR")
     os.environ["CLAVUS_DIR"] = str(clavus_dir)
+    os.environ["CLAVUS_PROJECTS_DIR"] = str(projects_dir)
     store = BlobStore(clavus_dir=clavus_dir)
     store.init()
     yield store, tmp
+    if old_store is None:
+        os.environ.pop("CLAVUS_DIR", None)
+    else:
+        os.environ["CLAVUS_DIR"] = old_store
+    if old_projects is None:
+        os.environ.pop("CLAVUS_PROJECTS_DIR", None)
+    else:
+        os.environ["CLAVUS_PROJECTS_DIR"] = old_projects
     shutil.rmtree(tmp, ignore_errors=True)
 
 

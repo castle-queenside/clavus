@@ -30,7 +30,7 @@ from pathlib import Path
 import sys
 from typing import Optional
 
-from clavus.store import BlobStore, DEFAULT_CLAVUS_DIR
+from clavus.store import BlobStore
 
 
 # ─── Data Model ─────────────────────────────────────────────────────────

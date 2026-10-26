@@ -2,6 +2,9 @@ from __future__ import annotations
 
 """Clavus CLI commands: projects, project."""
 import argparse
+import sys
+from pathlib import Path
+from clavus.store import BlobStore
 from clavus.helpers import get_store_and_project
 
 def cmd_projects(args: argparse.Namespace) -> None:

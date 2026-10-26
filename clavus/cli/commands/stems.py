@@ -2,7 +2,10 @@ from __future__ import annotations
 
 """Clavus CLI commands: stem import, list, push, pull."""
 import argparse
-from clavus.store import StemStore
+import time
+from pathlib import Path
+from clavus.store import StemStore, StemManifest
+from clavus.sync import load_remotes
 from clavus.helpers import get_store_and_project
 
 def cmd_stem_import(args: argparse.Namespace) -> None:
